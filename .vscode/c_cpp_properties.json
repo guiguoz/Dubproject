@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "Windows (MSVC)",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/include",
+        "${workspaceFolder}/third_party/JUCE/modules",
+        "${workspaceFolder}/build/_deps/**"
+      ],
+      "defines": [
+        "JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1",
+        "_WIN32",
+        "WIN32"
+      ],
+      "compilerPath": "cl.exe",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "windows-msvc-x64",
+      "configurationProvider": "ms-vscode.cmake-tools"
+    }
+  ],
+  "version": 4
+}

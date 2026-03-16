@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build-windows:
+    name: Build & Test (Windows / MSVC)
+    runs-on: windows-latest
+
+    steps:
+      # ────────────────────────────────────────────────────────────────────────
+      # 1. Checkout avec submodules (JUCE)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 2. Cache du build JUCE (évite de recompiler ~500 MB à chaque push)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Cache JUCE build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps
+            build/CMakeFiles
+          key: juce-msvc-${{ hashFiles('third_party/JUCE/CMakeLists.txt') }}
+          restore-keys: |
+            juce-msvc-
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 3. Configuration CMake (sans ASIO SDK en CI)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Configure CMake
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -G "Visual Studio 17 2022" `
+            -A x64
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 4. Compilation
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 5. Tests unitaires (Catch2 via CTest)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Run tests
+        run: ctest --test-dir build --config Release --output-on-failure
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 6. Analyse statique cppcheck
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Install cppcheck
+        run: choco install cppcheck --yes --no-progress
+
+      - name: Run cppcheck
+        run: |
+          cppcheck `
+            --enable=warning,style,performance `
+            --std=c++17 `
+            --error-exitcode=1 `
+            --suppress=missingInclude `
+            src/
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 7. Upload artefact (exe) pour téléchargement depuis GitHub
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Upload SaxFXLive executable
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: SaxFXLive-windows-x64
+          path: build/SaxFXLive_artefacts/Release/SaxFXLive.exe
+          if-no-files-found: warn
+          retention-days: 30

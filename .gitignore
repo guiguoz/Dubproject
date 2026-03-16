@@ -1,0 +1,68 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+_CPack_Packages/
+install_manifest.txt
+
+# JUCE build artifacts
+JuceLibraryCode/
+
+# Third-party (ASIO SDK is not redistributable)
+third_party/ASIO/
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.aps
+*.ncb
+*.sdf
+*.opensdf
+x64/
+x86/
+Debug/
+Release/
+
+# VSCode
+.vscode/settings.json
+.vscode/*.code-workspace
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.o
+
+# macOS (au cas où)
+.DS_Store
+*.dSYM/
+
+# Linux
+*.so
+*.a
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Logs
+*.log
+
+# Qodo
+.qodo/

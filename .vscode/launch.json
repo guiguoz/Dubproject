@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SaxFX Live (Debug)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/SaxFXLive_artefacts/Debug/SaxFXLive.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: Build Debug",
+      "visualizerFile": "${workspaceFolder}/.vscode/saxfxlive.natvis"
+    },
+    {
+      "name": "SaxFX Live (Release)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/SaxFXLive_artefacts/Release/SaxFXLive.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: Build Release"
+    },
+    {
+      "name": "Tests (CTest)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tests/Debug/SaxFXTests.exe",
+      "args": ["--reporter", "console", "-v", "high"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: Build Debug"
+    }
+  ]
+}

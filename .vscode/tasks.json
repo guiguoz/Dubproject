@@ -1,0 +1,98 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CMake: Configure",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-B", "build",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64"
+      ],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Configure (ASIO)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-B", "build",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64",
+        "-DJUCE_ASIO_SDK_PATH=third_party/ASIO"
+      ],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Build Debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "--config", "Debug", "--parallel"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": ["$msCompile"],
+      "dependsOn": "CMake: Configure"
+    },
+    {
+      "label": "CMake: Build Release",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "--config", "Release", "--parallel"],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Run: SaxFX Live",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/SaxFXLive_artefacts/Debug/SaxFXLive.exe",
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "new" },
+      "problemMatcher": [],
+      "dependsOn": "CMake: Build Debug"
+    },
+    {
+      "label": "Test: Run CTest",
+      "type": "shell",
+      "command": "ctest",
+      "args": ["--test-dir", "build", "--config", "Debug", "--output-on-failure", "-V"],
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Latency (Python)",
+      "type": "shell",
+      "command": "python",
+      "args": ["scripts/latency_test.py", "--list-devices"],
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Setup: Check Prerequisites",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/setup.ps1"],
+      "group": "none",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Git: Init submodules",
+      "type": "shell",
+      "command": "git",
+      "args": ["submodule", "update", "--init", "--recursive"],
+      "group": "none",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    }
+  ]
+}
