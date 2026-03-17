@@ -44,15 +44,18 @@ MainComponent::MainComponent()
     // ── Effect controls ───────────────────────────────────────────────────────
     setupHarmonizerControls();
     setupFlangerControls();
+    setupSamplerControls();
 
-    setSize(820, 680);
+    setSize(820, 900);
     setAudioChannels(1, 2);
+    midiManager_.start(deviceManager);
     startTimerHz(30);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+    midiManager_.stop();
     shutdownAudio();
 }
 
@@ -152,6 +155,123 @@ void MainComponent::setupFlangerControls()
         dspPipeline_.getFlanger().setMix(static_cast<float>(flangerMixSlider_.getValue()));
     };
     addAndMakeVisible(flangerMixSlider_);
+}
+
+void MainComponent::setupSamplerControls()
+{
+    samplerLabel_.setText("SAMPLER", juce::dontSendNotification);
+    samplerLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(12.0f).withStyle("Bold")));
+    samplerLabel_.setColour(juce::Label::textColourId, juce::Colours::violet);
+    addAndMakeVisible(samplerLabel_);
+
+    loadProjectButton_.setButtonText("Load Project (.saxfx)");
+    loadProjectButton_.onClick = [this]
+    {
+        auto chooser = std::make_shared<juce::FileChooser>(
+            "Open SaxFX Project", juce::File{}, "*.saxfx");
+
+        chooser->launchAsync(juce::FileBrowserComponent::openMode
+                           | juce::FileBrowserComponent::canSelectFiles,
+            [this, chooser](const juce::FileChooser& fc)
+            {
+                const auto results = fc.getResults();
+                if (results.isEmpty()) return;
+
+                auto data = project::ProjectLoader::load(
+                    results[0].getFullPathName().toStdString());
+                if (data.has_value())
+                    applyProjectData(*data);
+                else
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::MessageBoxIconType::WarningIcon,
+                        "Load failed", "Could not parse the .saxfx file.");
+            });
+    };
+    addAndMakeVisible(loadProjectButton_);
+
+    for (int i = 0; i < 8; ++i)
+    {
+        slotButtons_[static_cast<std::size_t>(i)].setButtonText("S" + juce::String(i + 1));
+        slotButtons_[static_cast<std::size_t>(i)].onClick = [this, i]
+        {
+            dspPipeline_.getSampler().trigger(i);
+        };
+        addAndMakeVisible(slotButtons_[static_cast<std::size_t>(i)]);
+
+        slotLabels_[static_cast<std::size_t>(i)].setText("--", juce::dontSendNotification);
+        slotLabels_[static_cast<std::size_t>(i)].setFont(
+            juce::Font(juce::FontOptions{}.withHeight(10.0f)));
+        slotLabels_[static_cast<std::size_t>(i)].setColour(
+            juce::Label::textColourId, juce::Colours::lightgrey);
+        slotLabels_[static_cast<std::size_t>(i)].setJustificationType(
+            juce::Justification::centred);
+        addAndMakeVisible(slotLabels_[static_cast<std::size_t>(i)]);
+    }
+}
+
+void MainComponent::applyProjectData(const project::ProjectData& data)
+{
+    // Load WAV samples into slots
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+
+    for (int i = 0; i < 8; ++i)
+    {
+        const auto& sc = data.samples[static_cast<std::size_t>(i)];
+        if (sc.filePath.empty()) continue;
+
+        juce::File file(juce::String(sc.filePath));
+        if (!file.existsAsFile()) continue;
+
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            formatManager.createReaderFor(file));
+        if (!reader) continue;
+
+        const int numSamples = static_cast<int>(reader->lengthInSamples);
+        juce::AudioBuffer<float> buf(1, numSamples);
+        reader->read(&buf, 0, numSamples, 0, true, false);
+
+        dspPipeline_.getSampler().loadSample(
+            i, buf.getReadPointer(0), numSamples,
+            static_cast<double>(reader->sampleRate));
+
+        dspPipeline_.getSampler().setSlotGain(i, sc.gain);
+        dspPipeline_.getSampler().setSlotLoop(i, sc.loop);
+        dspPipeline_.getSampler().setSlotOneShot(i, sc.oneShot);
+
+        // Update slot label with filename
+        slotLabels_[static_cast<std::size_t>(i)].setText(
+            file.getFileName(), juce::dontSendNotification);
+    }
+
+    // Apply MIDI mappings
+    midiManager_.clearMappings();
+    for (const auto& m : data.midiMappings)
+        midiManager_.setNoteMapping(m.midiNote, m.slotIndex);
+
+    // Apply effect params
+    const auto& ep = data.effects;
+    dspPipeline_.setHarmonizerEnabled(ep.harmonizerEnabled);
+    harmonizerToggle_.setToggleState(ep.harmonizerEnabled, juce::dontSendNotification);
+    dspPipeline_.getHarmonizer().setVoiceInterval(0, ep.harmVoice0Interval);
+    dspPipeline_.getHarmonizer().setVoiceInterval(1, ep.harmVoice1Interval);
+    dspPipeline_.getHarmonizer().setMix(ep.harmMix);
+    harmVoice1Slider_.setValue(ep.harmVoice0Interval, juce::dontSendNotification);
+    harmVoice2Slider_.setValue(ep.harmVoice1Interval, juce::dontSendNotification);
+    harmMixSlider_.setValue(ep.harmMix, juce::dontSendNotification);
+
+    dspPipeline_.setFlangerEnabled(ep.flangerEnabled);
+    flangerToggle_.setToggleState(ep.flangerEnabled, juce::dontSendNotification);
+    dspPipeline_.getFlanger().setRate(ep.flangerRate);
+    dspPipeline_.getFlanger().setDepth(ep.flangerDepth);
+    dspPipeline_.getFlanger().setFeedback(ep.flangerFeedback);
+    dspPipeline_.getFlanger().setMix(ep.flangerMix);
+    flangerRateSlider_.setValue(ep.flangerRate, juce::dontSendNotification);
+    flangerDepthSlider_.setValue(ep.flangerDepth, juce::dontSendNotification);
+    flangerFeedbackSlider_.setValue(ep.flangerFeedback, juce::dontSendNotification);
+    flangerMixSlider_.setValue(ep.flangerMix, juce::dontSendNotification);
+
+    juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 }
 
 //==============================================================================
@@ -254,6 +374,7 @@ void MainComponent::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff2a2a4e));
     g.fillRect(40, 290, getWidth() - 80, 1);
     g.fillRect(40, 460, getWidth() - 80, 1);
+    g.fillRect(40, 630, getWidth() - 80, 1);
 
     // Parameter labels
     g.setColour(juce::Colours::grey);
@@ -265,6 +386,19 @@ void MainComponent::paint(juce::Graphics& g)
     g.drawText("Depth",        40, 528, 90, 20, juce::Justification::left, false);
     g.drawText("Feedback",     40, 556, 90, 20, juce::Justification::left, false);
     g.drawText("Mix",          40, 584, 90, 20, juce::Justification::left, false);
+
+    // Sampler slot status indicators
+    const int slotW = (getWidth() - 80) / 8;
+    for (int i = 0; i < 8; ++i)
+    {
+        const bool playing = dspPipeline_.getSampler().isPlaying(i);
+        const bool loaded  = dspPipeline_.getSampler().isLoaded(i);
+        g.setColour(playing ? juce::Colours::violet
+                  : loaded  ? juce::Colour(0xff3a1a5e)
+                            : juce::Colour(0xff2a2a2a));
+        g.fillRoundedRectangle(static_cast<float>(40 + i * slotW), 730.0f,
+                               static_cast<float>(slotW - 4), 6.0f, 2.0f);
+    }
 }
 
 void MainComponent::resized()
@@ -292,6 +426,19 @@ void MainComponent::resized()
     flangerDepthSlider_     .setBounds(lx, 526, sw, 22);
     flangerFeedbackSlider_  .setBounds(lx, 554, sw, 22);
     flangerMixSlider_       .setBounds(lx, 582, sw, 22);
+
+    // Sampler section
+    samplerLabel_       .setBounds(40, 640, 120, 20);
+    loadProjectButton_  .setBounds(W / 2 - 100, 636, 200, 26);
+
+    const int slotW = (W - 80) / 8;
+    for (int i = 0; i < 8; ++i)
+    {
+        slotButtons_[static_cast<std::size_t>(i)]
+            .setBounds(40 + i * slotW, 670, slotW - 4, 42);
+        slotLabels_[static_cast<std::size_t>(i)]
+            .setBounds(40 + i * slotW, 714, slotW - 4, 14);
+    }
 }
 
 void MainComponent::timerCallback()

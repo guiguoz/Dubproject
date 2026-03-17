@@ -24,10 +24,13 @@ add_executable(SaxFXTests
     test_flanger.cpp
     test_harmonizer.cpp
     test_pipeline.cpp
+    test_sampler.cpp
+    test_midi_mapper.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/YinPitchTracker.cpp
     ../src/dsp/Flanger.cpp
     ../src/dsp/Harmonizer.cpp
+    ../src/dsp/Sampler.cpp
     ../src/dsp/DspPipeline.cpp
 )
 

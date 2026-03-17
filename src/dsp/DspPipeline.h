@@ -3,6 +3,8 @@
 #include "YinPitchTracker.h"
 #include "Harmonizer.h"
 #include "Flanger.h"
+#include "Sampler.h"
+#include "LockFreeQueue.h"
 
 #include <atomic>
 #include <vector>
@@ -12,11 +14,12 @@ namespace dsp {
 // ─────────────────────────────────────────────────────────────────────────────
 // DspPipeline
 //
-// Orchestrates: YIN pitch track → harmonizer → flanger → clip.
+// Orchestrates: YIN pitch track → harmonizer → flanger → sampler mix → clip.
 //
 // Thread safety:
 //   - enable/disable flags: atomic<bool> with acquire/release
 //   - float parameters:     forwarded directly to sub-modules (atomic<float>)
+//   - MIDI events:          consumed from midiEventQueue_ (lock-free SPSC)
 //   - process() is called from the audio thread only
 //   - set*() methods are called from the GUI thread only
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,15 +36,24 @@ public:
 
     // ── Enable / disable (GUI thread) ───────────────────────────────────────
     void setHarmonizerEnabled(bool enabled) noexcept;
-    void setFlangerEnabled(bool enabled) noexcept;
+    void setFlangerEnabled(bool enabled)    noexcept;
+    void setSamplerEnabled(bool enabled)    noexcept;
 
     bool isHarmonizerEnabled() const noexcept;
     bool isFlangerEnabled()    const noexcept;
+    bool isSamplerEnabled()    const noexcept;
 
     // ── Parameter access (delegates to sub-modules) ─────────────────────────
-    Harmonizer&      getHarmonizer() noexcept { return harmonizer_; }
-    Flanger&         getFlanger()    noexcept { return flanger_;    }
+    Harmonizer&      getHarmonizer()   noexcept { return harmonizer_;   }
+    Flanger&         getFlanger()      noexcept { return flanger_;      }
     YinPitchTracker& getPitchTracker() noexcept { return pitchTracker_; }
+    Sampler&         getSampler()      noexcept { return sampler_;      }
+
+    /// Queue used by MidiManager to push SamplerEvents (lock-free).
+    LockFreeQueue<SamplerEvent, 64>& getMidiEventQueue() noexcept
+    {
+        return midiEventQueue_;
+    }
 
     /// Latest pitch result (safe to read from GUI thread — atomic copy)
     PitchResult getLastPitch() const noexcept;
@@ -50,9 +62,13 @@ private:
     YinPitchTracker pitchTracker_;
     Harmonizer      harmonizer_;
     Flanger         flanger_;
+    Sampler         sampler_;
+
+    LockFreeQueue<SamplerEvent, 64> midiEventQueue_;
 
     std::atomic<bool> harmonizerEnabled_ { false };
     std::atomic<bool> flangerEnabled_    { false };
+    std::atomic<bool> samplerEnabled_    { true  };
 
     // Latest pitch (written by audio thread, read by GUI thread)
     std::atomic<float> lastPitchHz_    { 0.0f };

@@ -11,6 +11,7 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     pitchTracker_.prepare(sampleRate, maxBlockSize);
     harmonizer_.prepare(sampleRate, maxBlockSize);
     flanger_.prepare(sampleRate, maxBlockSize);
+    sampler_.prepare(sampleRate, maxBlockSize);
     scratchBuffer_.assign(static_cast<std::size_t>(maxBlockSize), 0.0f);
 }
 
@@ -19,6 +20,7 @@ void DspPipeline::reset() noexcept
     pitchTracker_.reset();
     harmonizer_.reset();
     flanger_.reset();
+    sampler_.reset();
     lastPitchHz_.store(0.0f, std::memory_order_relaxed);
     lastConfidence_.store(0.0f, std::memory_order_relaxed);
 }
@@ -45,7 +47,19 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
     if (flangerEnabled_.load(std::memory_order_acquire))
         flanger_.process(buffer, numSamples);
 
-    // 4. Final clip (safety net)
+    // 4. Sampler: drain MIDI queue, then mix into buffer
+    if (samplerEnabled_.load(std::memory_order_acquire))
+    {
+        SamplerEvent evt;
+        while (midiEventQueue_.tryPop(evt))
+        {
+            if (evt.noteOn)  sampler_.trigger(evt.slotIndex);
+            else             sampler_.stop(evt.slotIndex);
+        }
+        sampler_.process(buffer, numSamples);
+    }
+
+    // 5. Final clip (safety net)
     for (int i = 0; i < numSamples; ++i)
         buffer[i] = clipSample(buffer[i]);
 }
@@ -63,6 +77,11 @@ void DspPipeline::setFlangerEnabled(bool enabled) noexcept
     flangerEnabled_.store(enabled, std::memory_order_release);
 }
 
+void DspPipeline::setSamplerEnabled(bool enabled) noexcept
+{
+    samplerEnabled_.store(enabled, std::memory_order_release);
+}
+
 bool DspPipeline::isHarmonizerEnabled() const noexcept
 {
     return harmonizerEnabled_.load(std::memory_order_acquire);
@@ -71,6 +90,11 @@ bool DspPipeline::isHarmonizerEnabled() const noexcept
 bool DspPipeline::isFlangerEnabled() const noexcept
 {
     return flangerEnabled_.load(std::memory_order_acquire);
+}
+
+bool DspPipeline::isSamplerEnabled() const noexcept
+{
+    return samplerEnabled_.load(std::memory_order_acquire);
 }
 
 PitchResult DspPipeline::getLastPitch() const noexcept

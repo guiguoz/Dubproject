@@ -55,7 +55,10 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/YinPitchTracker.cpp
     src/dsp/Flanger.cpp
     src/dsp/Harmonizer.cpp
+    src/dsp/Sampler.cpp
     src/dsp/DspPipeline.cpp
+    src/midi/MidiManager.cpp
+    src/project/ProjectLoader.cpp
 )
 
 target_include_directories(SaxFXLive PRIVATE src)
@@ -64,6 +67,7 @@ target_include_directories(SaxFXLive PRIVATE src)
 target_link_libraries(SaxFXLive PRIVATE
     juce::juce_audio_basics
     juce::juce_audio_devices
+    juce::juce_audio_formats
     juce::juce_audio_processors
     juce::juce_audio_utils
     juce::juce_core
