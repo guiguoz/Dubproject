@@ -1,14 +1,14 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "dsp/DspPipeline.h"
 
 //==============================================================================
 /**
- * MainComponent — composant principal de SaxFX Live (Sprint 1)
+ * MainComponent — composant principal de SaxFX Live
  *
- * Hérite de AudioAppComponent pour gérer la boucle audio JUCE.
- * Sprint 1 : pass-through pur (entrée Scarlett → sortie casque), zéro effet.
- * Les modules DSP (réverb, harmoniseur, sampler) seront ajoutés aux sprints suivants.
+ * Sprint 1 : pass-through pur (entrée Scarlett → sortie casque)
+ * Sprint 2 : pipeline DSP (YIN pitch tracking, harmoniseur OLA, flanger)
  */
 class MainComponent : public juce::AudioAppComponent,
                       private juce::Timer
@@ -18,43 +18,65 @@ public:
     ~MainComponent() override;
 
     //==========================================================================
-    // AudioAppComponent overrides — boucle audio temps réel
+    // AudioAppComponent — boucle audio temps réel
     //==========================================================================
-
-    /** Appelé avant le démarrage du flux audio. Préparer les buffers ici. */
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
-
-    /** Callback audio temps réel — REALTIME-SAFE : zéro allocation, zéro lock. */
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
-
-    /** Appelé à l'arrêt du flux audio. Libérer les ressources DSP. */
     void releaseResources() override;
 
     //==========================================================================
-    // Component overrides — rendu GUI
+    // Component — rendu GUI
     //==========================================================================
     void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
     //==========================================================================
-    // Timer — mise à jour du VU-mètre (~30 fps)
+    // Timer — mise à jour du VU-mètre et affichage pitch (~30 fps)
     //==========================================================================
     void timerCallback() override;
 
     //==========================================================================
-    // GUI
+    // DSP
     //==========================================================================
-    juce::TextButton audioSettingsButton;
-    juce::Label      statusLabel;
-    juce::Label      infoLabel;
+    ::dsp::DspPipeline dspPipeline_;
 
-    // VU-mètre : niveau RMS courant (mis à jour dans le timer, pas dans le callback audio)
-    std::atomic<float> currentRmsLevel { 0.0f };
+    //==========================================================================
+    // GUI — contrôles audio
+    //==========================================================================
+    juce::TextButton audioSettingsButton_;
+    juce::Label      statusLabel_;
+    juce::Label      infoLabel_;
+    juce::Label      pitchLabel_;
 
-    // Paramètres audio courants (lecture seule en dehors de prepareToPlay)
-    double currentSampleRate  { 0.0 };
-    int    currentBufferSize  { 0 };
+    // ── Harmoniseur ───────────────────────────────────────────────────────────
+    juce::ToggleButton harmonizerToggle_;
+    juce::Slider       harmVoice1Slider_;   // interval voice 0 (demi-tons)
+    juce::Slider       harmVoice2Slider_;   // interval voice 1 (demi-tons)
+    juce::Slider       harmMixSlider_;
+    juce::Label        harmLabel_;
+
+    // ── Flanger ───────────────────────────────────────────────────────────────
+    juce::ToggleButton flangerToggle_;
+    juce::Slider       flangerRateSlider_;
+    juce::Slider       flangerDepthSlider_;
+    juce::Slider       flangerFeedbackSlider_;
+    juce::Slider       flangerMixSlider_;
+    juce::Label        flangerLabel_;
+
+    //==========================================================================
+    // State (shared between audio and GUI threads via atomics)
+    //==========================================================================
+    std::atomic<float> currentRmsLevel_  { 0.0f };
+    double currentSampleRate_  { 0.0 };
+    int    currentBufferSize_  { 0 };
+
+    //==========================================================================
+    // Helpers
+    //==========================================================================
+    void setupHarmonizerControls();
+    void setupFlangerControls();
+    static juce::String frequencyToNoteName(float hz);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

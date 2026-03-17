@@ -52,7 +52,13 @@ juce_add_gui_app(SaxFXLive
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
+    src/dsp/YinPitchTracker.cpp
+    src/dsp/Flanger.cpp
+    src/dsp/Harmonizer.cpp
+    src/dsp/DspPipeline.cpp
 )
+
+target_include_directories(SaxFXLive PRIVATE src)
 
 # Modules JUCE requis
 target_link_libraries(SaxFXLive PRIVATE
@@ -82,6 +88,9 @@ target_compile_definitions(SaxFXLive PRIVATE
 if(JUCE_ASIO)
     target_include_directories(SaxFXLive PRIVATE "${JUCE_ASIO_SDK_PATH}")
 endif()
+
+# Génère JuceHeader.h (inclut tous les modules JUCE liés)
+juce_generate_juce_header(SaxFXLive)
 
 # Warnings
 if(MSVC)
