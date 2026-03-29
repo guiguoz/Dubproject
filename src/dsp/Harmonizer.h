@@ -1,54 +1,10 @@
 #pragma once
 
-#include "DspCommon.h"
+#include "WsolaShifter.h"  // defines WsolaShifter + using OlaShifter = WsolaShifter
 #include <array>
 #include <atomic>
-#include <vector>
 
 namespace dsp {
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OlaShifter
-//
-// Single-voice pitch shifter using OLA (Overlap-Add) with linear resampling.
-// Quality is sufficient for ±7 semitones on monophonic saxophone.
-// ─────────────────────────────────────────────────────────────────────────────
-class OlaShifter
-{
-public:
-    void prepare(double sampleRate, int maxBlockSize) noexcept;
-    void setShiftSemitones(float semitones) noexcept;
-
-    /// Process one block: read from `input`, write shifted audio to `output`.
-    /// `inputPitchHz` guides the window size (period-synchronous OLA).
-    void process(const float* input, float* output,
-                 int numSamples, float inputPitchHz) noexcept;
-
-    void reset() noexcept;
-
-private:
-    double sampleRate_    { 44100.0 };
-    float  shiftSemitones_{ 0.0f };
-    float  shiftRatio_    { 1.0f };
-
-    // Analysis ring buffer (max 2 periods of kMinFrequencyHz)
-    static constexpr int kAnalysisBufSize = 4096;
-    std::array<float, kAnalysisBufSize> analysisBuffer_{};
-    int  analysisWritePos_  { 0 };
-
-    // Fractional read position into the analysis buffer
-    float readPos_          { 0.0f };
-
-    // Overlap-Add state
-    static constexpr int kMaxOverlap = 512;
-    std::array<float, kMaxOverlap> overlapBuffer_{};
-    std::array<float, kMaxOverlap> hannWindow_{};
-    int  overlapLength_     { 256 };
-    int  overlapPos_        { 0 };
-
-    void buildHannWindow(int length) noexcept;
-    int  computeWindowLength(float pitchHz) const noexcept;
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Harmonizer
@@ -78,6 +34,10 @@ public:
                  int numSamples, float inputPitchHz) noexcept;
 
     void reset() noexcept;
+
+    // Read-back (GUI thread only)
+    float getVoiceInterval(int voiceIndex) const noexcept;
+    float getMix() const noexcept { return mix_.load(std::memory_order_relaxed); }
 
 private:
     std::array<OlaShifter, kNumVoices> voices_;

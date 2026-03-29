@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(h|cpp\\)$\")",
+      "Bash(ctest -C Debug --output-on-failure)",
+      "Bash(cmake --build build --config Debug --target SaxFXTests --parallel)"
+    ]
+  }
+}

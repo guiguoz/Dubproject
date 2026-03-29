@@ -33,6 +33,12 @@ public:
 
     void reset() noexcept;
 
+    // Read-back (GUI thread only — relaxed loads)
+    float getRate()     const noexcept { return rate_.load(std::memory_order_relaxed);     }
+    float getDepth()    const noexcept { return depth_.load(std::memory_order_relaxed);    }
+    float getFeedback() const noexcept { return feedback_.load(std::memory_order_relaxed); }
+    float getMix()      const noexcept { return mix_.load(std::memory_order_relaxed);      }
+
 private:
     double sampleRate_ { 44100.0 };
 

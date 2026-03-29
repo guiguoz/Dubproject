@@ -64,5 +64,16 @@ __pycache__/
 # Logs
 *.log
 
+# Images (reference / inspiration — keep in docs/ if needed)
+*.jpg
+*.webp
+*.png
+
 # Qodo
 .qodo/
+
+# Windows NUL device artifact
+nul
+
+# Dataset WAV files (too large for git — use Git LFS or external storage)
+data/dataset/

@@ -1,15 +1,18 @@
 #pragma once
 
-#include "YinPitchTracker.h"
-#include "Harmonizer.h"
-#include "Flanger.h"
-#include "Sampler.h"
+#include "BpmDetector.h"
+#include "EffectChain.h"
+#include "ExpressionMapper.h"
 #include "LockFreeQueue.h"
+#include "Sampler.h"
+#include "YinPitchTracker.h"
 
 #include <atomic>
+#include <cmath>
 #include <vector>
 
-namespace dsp {
+namespace dsp
+{
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DspPipeline
@@ -25,7 +28,7 @@ namespace dsp {
 // ─────────────────────────────────────────────────────────────────────────────
 class DspPipeline
 {
-public:
+  public:
     /// Call from prepareToPlay(). Pre-allocates all internal memory.
     void prepare(double sampleRate, int maxBlockSize) noexcept;
 
@@ -35,19 +38,23 @@ public:
     void reset() noexcept;
 
     // ── Enable / disable (GUI thread) ───────────────────────────────────────
-    void setHarmonizerEnabled(bool enabled) noexcept;
-    void setFlangerEnabled(bool enabled)    noexcept;
-    void setSamplerEnabled(bool enabled)    noexcept;
+    void setSamplerEnabled(bool enabled) noexcept;
+    bool isSamplerEnabled() const noexcept;
 
-    bool isHarmonizerEnabled() const noexcept;
-    bool isFlangerEnabled()    const noexcept;
-    bool isSamplerEnabled()    const noexcept;
+    // ── Beat clock (GUI thread) ─────────────────────────────────────────────
+    // Forward the master BPM to sampler + tempo-synced effects (Delay).
+    void setBpm(float bpm) noexcept
+    {
+        sampler_.setBpm(bpm);
+        effectChain_.setBpm(bpm);
+    }
 
-    // ── Parameter access (delegates to sub-modules) ─────────────────────────
-    Harmonizer&      getHarmonizer()   noexcept { return harmonizer_;   }
-    Flanger&         getFlanger()      noexcept { return flanger_;      }
+    // ── Effect Chain and other sub-modules ──────────────────────────────────
+    EffectChain& getEffectChain() noexcept { return effectChain_; }
     YinPitchTracker& getPitchTracker() noexcept { return pitchTracker_; }
-    Sampler&         getSampler()      noexcept { return sampler_;      }
+    Sampler& getSampler() noexcept { return sampler_; }
+    BpmDetector& getBpmDetector() noexcept { return bpmDetector_; }
+    ExpressionMapper& getExpressionMapper() noexcept { return expressionMapper_; }
 
     /// Queue used by MidiManager to push SamplerEvents (lock-free).
     LockFreeQueue<SamplerEvent, 64>& getMidiEventQueue() noexcept
@@ -58,24 +65,46 @@ public:
     /// Latest pitch result (safe to read from GUI thread — atomic copy)
     PitchResult getLastPitch() const noexcept;
 
-private:
-    YinPitchTracker pitchTracker_;
-    Harmonizer      harmonizer_;
-    Flanger         flanger_;
-    Sampler         sampler_;
+    /// Smoothed input RMS level (safe to read from GUI thread).
+    float getLastRms() const noexcept
+    {
+        return rmsLevel_.load(std::memory_order_relaxed);
+    }
+
+    // ── Keyboard forced pitch (GUI thread) ──────────────────────────────────
+    // When > 0, the piano keyboard panel overrides the YIN-detected pitch for
+    // the effect chain (SynthEffect follows it).  0 = use live YIN pitch.
+    void setForcedPitch(float hz) noexcept
+    {
+        forcedPitchHz_.store(hz, std::memory_order_relaxed);
+    }
+    void clearForcedPitch() noexcept
+    {
+        forcedPitchHz_.store(0.f, std::memory_order_relaxed);
+    }
+
+  private:
+    YinPitchTracker  pitchTracker_;
+    EffectChain      effectChain_;
+    Sampler          sampler_;
+    BpmDetector      bpmDetector_;
+    ExpressionMapper expressionMapper_;
 
     LockFreeQueue<SamplerEvent, 64> midiEventQueue_;
 
-    std::atomic<bool> harmonizerEnabled_ { false };
-    std::atomic<bool> flangerEnabled_    { false };
-    std::atomic<bool> samplerEnabled_    { true  };
+    std::atomic<bool> samplerEnabled_{true};
 
     // Latest pitch (written by audio thread, read by GUI thread)
-    std::atomic<float> lastPitchHz_    { 0.0f };
-    std::atomic<float> lastConfidence_ { 0.0f };
+    std::atomic<float> lastPitchHz_{0.0f};
+    std::atomic<float> lastConfidence_{0.0f};
 
-    // Scratch buffer for harmonizer output (pre-allocated in prepare)
-    std::vector<float> scratchBuffer_;
+    // Smoothed RMS: updated per-block on the audio thread, read by GUI
+    float              rmsRunning_{ 0.0f };       // audio thread only
+    std::atomic<float> rmsLevel_{   0.0f };       // GUI read via getLastRms()
+    static constexpr float kRmsAlpha = 0.9995f;  // ~100ms at 44100 Hz
+
+    // Forced pitch from piano keyboard (0 = off)
+    std::atomic<float> forcedPitchHz_{ 0.f };
 };
 
 } // namespace dsp

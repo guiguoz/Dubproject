@@ -7,6 +7,7 @@ namespace dsp {
 void Sampler::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
 {
     sampleRate_ = sampleRate;
+    beatClock_.prepare(sampleRate);
 }
 
 void Sampler::loadSample(int slot, const float* data, int numSamples,
@@ -15,12 +16,23 @@ void Sampler::loadSample(int slot, const float* data, int numSamples,
     if (slot < 0 || slot >= kMaxSlots) return;
     if (!data || numSamples <= 0)      return;
 
-    auto& s = slots_[static_cast<std::size_t>(slot)];
+    auto& s  = slots_[static_cast<std::size_t>(slot)];
+    auto& ps = playStates_[static_cast<std::size_t>(slot)];
+
+    // Stop playback first so the audio thread no longer reads s.data.
+    ps.playing.store(false, std::memory_order_release);
+    ps.triggerPending.store(false, std::memory_order_release);
+    ps.stopPending.store(false, std::memory_order_release);
+    ps.readPos = 0;
 
     // Mark as unloaded while we modify data (audio thread checks loaded flag).
     s.loaded.store(false, std::memory_order_release);
 
-    s.data.assign(data, data + numSamples);
+    // Swap into a new vector to avoid the audio thread reading a
+    // partially-reallocated buffer.  The old vector is freed here on the
+    // GUI thread, which is safe because playback was stopped above.
+    std::vector<float> newData(data, data + numSamples);
+    s.data.swap(newData);
     s.sampleCount = numSamples;
 
     // Make data visible to the audio thread before setting the loaded flag.
@@ -42,11 +54,75 @@ void Sampler::trigger(int slot) noexcept
         .triggerPending.store(true, std::memory_order_release);
 }
 
+void Sampler::triggerQuantized(int slot, GridDiv div) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    auto& ps = playStates_[static_cast<std::size_t>(slot)];
+    ps.quantDiv.store(static_cast<int>(div), std::memory_order_relaxed);
+    if (!beatClock_.isRunning())
+    {
+        // No BPM set: fall back to immediate trigger.
+        ps.triggerPending.store(true, std::memory_order_release);
+    }
+    else
+    {
+        ps.quantTrigPending.store(true, std::memory_order_release);
+    }
+}
+
+void Sampler::setSlotGrid(int slot, GridDiv div) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    playStates_[static_cast<std::size_t>(slot)]
+        .quantDiv.store(static_cast<int>(div), std::memory_order_relaxed);
+}
+
+GridDiv Sampler::getSlotGrid(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return GridDiv::Quarter;
+    return static_cast<GridDiv>(
+        playStates_[static_cast<std::size_t>(slot)]
+            .quantDiv.load(std::memory_order_relaxed));
+}
+
+bool Sampler::isPendingTrigger(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return false;
+    return playStates_[static_cast<std::size_t>(slot)]
+        .quantTrigPending.load(std::memory_order_acquire);
+}
+
 void Sampler::stop(int slot) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
     playStates_[static_cast<std::size_t>(slot)]
         .stopPending.store(true, std::memory_order_release);
+}
+
+void Sampler::stopAllSlots() noexcept
+{
+    for (int i = 0; i < kMaxSlots; ++i)
+        stop(i);
+}
+
+void Sampler::setSidechainPair(int sourceSlot, int targetSlot) noexcept
+{
+    if (sourceSlot < 0 || sourceSlot >= kMaxSlots) return;
+    if (targetSlot < 0 || targetSlot >= kMaxSlots) return;
+    for (int i = 0; i < numSidechains_; ++i)
+        if (sidechains_[static_cast<std::size_t>(i)].source == sourceSlot &&
+            sidechains_[static_cast<std::size_t>(i)].target == targetSlot)
+            return;
+    if (numSidechains_ >= kMaxSidechainPairs) return;
+    sidechains_[static_cast<std::size_t>(numSidechains_++)] = { sourceSlot, targetSlot, 0.f };
+}
+
+void Sampler::clearSidechain() noexcept
+{
+    sidechains_     = {};
+    numSidechains_  = 0;
+    for (auto& g : sidechainGains_) g = 1.f;
+    for (auto& p : slotPeaks_)      p = 0.f;
 }
 
 void Sampler::setSlotGain(int slot, float gain) noexcept
@@ -67,6 +143,12 @@ void Sampler::setSlotOneShot(int slot, bool oneShot) noexcept
     slots_[static_cast<std::size_t>(slot)].oneShot.store(oneShot, std::memory_order_relaxed);
 }
 
+void Sampler::setSlotMuted(int slot, bool muted) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    slots_[static_cast<std::size_t>(slot)].muted.store(muted, std::memory_order_relaxed);
+}
+
 bool Sampler::isLoaded(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return false;
@@ -79,17 +161,102 @@ bool Sampler::isPlaying(int slot) const noexcept
     return playStates_[static_cast<std::size_t>(slot)].playing.load(std::memory_order_acquire);
 }
 
+bool Sampler::isSlotMuted(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return false;
+    return slots_[static_cast<std::size_t>(slot)].muted.load(std::memory_order_relaxed);
+}
+
+float Sampler::getSlotOutputPeak(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    return outputPeaks_[static_cast<std::size_t>(slot)].load(std::memory_order_relaxed);
+}
+
+float Sampler::getSlotPeakLevel(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    const auto& s = slots_[static_cast<std::size_t>(slot)];
+    if (!s.loaded.load(std::memory_order_acquire)) return 0.f;
+    float peak = 0.f;
+    for (const float v : s.data)
+        peak = std::max(peak, std::abs(v));
+    return peak;
+}
+
+int Sampler::getSlotSampleCount(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0;
+    return slots_[static_cast<std::size_t>(slot)].sampleCount;
+}
+
+void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    auto& s  = slots_[static_cast<std::size_t>(slot)];
+    auto& ps = playStates_[static_cast<std::size_t>(slot)];
+
+    ps.playing.store(false, std::memory_order_release);
+    ps.triggerPending.store(false, std::memory_order_release);
+    ps.stopPending.store(false, std::memory_order_release);
+    ps.readPos = 0;
+
+    s.loaded.store(false, std::memory_order_release);
+    s.data.swap(newData);
+    s.sampleCount = static_cast<int>(s.data.size());
+    s.loaded.store(true, std::memory_order_release);
+}
+
 void Sampler::process(float* buffer, int numSamples) noexcept
 {
+    // ── Sidechain: update gain multipliers from previous block's peaks ────────
+    // Uses 1-block lookahead (imperceptible at typical block sizes).
+    // Compressor model: 4:1 ratio, threshold = 0.25 linear.
+    static constexpr float kSCAttack  = 0.5f;    // fast attack (1 block)
+    static constexpr float kSCRelease = 0.985f;  // ~300 ms @ 44100/512
+    static constexpr float kSCThresh  = 0.25f;
+    for (int k = 0; k < numSidechains_; ++k)
+    {
+        auto& sc = sidechains_[static_cast<std::size_t>(k)];
+        if (sc.source < 0 || sc.target < 0) continue;
+        const float src = slotPeaks_[static_cast<std::size_t>(sc.source)];
+        sc.envelope = (src > sc.envelope)
+            ? sc.envelope + kSCAttack * (src - sc.envelope)
+            : sc.envelope * kSCRelease;
+        sidechainGains_[static_cast<std::size_t>(sc.target)] =
+            (sc.envelope > kSCThresh)
+                ? std::pow(kSCThresh / sc.envelope, 0.75f)  // 4:1 ratio: (T/L)^(1-1/R)
+                : 1.f;
+    }
+    // Reset per-slot peaks for this block
+    for (auto& p : slotPeaks_) p = 0.f;
+
+    // Advance the beat clock and check for quantized trigger boundaries.
+    const double phaseBefore = beatClock_.advance(numSamples);
+    const double phaseAfter  = beatClock_.getPhase();
+
     for (int v = 0; v < kMaxSlots; ++v)
     {
         auto& ps  = playStates_[static_cast<std::size_t>(v)];
         auto& sl  = slots_[static_cast<std::size_t>(v)];
 
+        // Resolve quantized trigger when a beat boundary is crossed.
+        if (ps.quantTrigPending.load(std::memory_order_acquire))
+        {
+            const GridDiv div = static_cast<GridDiv>(
+                ps.quantDiv.load(std::memory_order_relaxed));
+            if (BeatClock::crossedBoundary(phaseBefore, phaseAfter, div))
+            {
+                ps.quantTrigPending.store(false, std::memory_order_relaxed);
+                ps.triggerPending.store(true, std::memory_order_release);
+            }
+        }
+
         // Handle stop request first.
         if (ps.stopPending.load(std::memory_order_acquire))
         {
             ps.stopPending.store(false, std::memory_order_relaxed);
+            ps.quantTrigPending.store(false, std::memory_order_relaxed);
             ps.playing.store(false, std::memory_order_relaxed);
             ps.readPos = 0;
         }
@@ -106,18 +273,24 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         }
 
         if (!ps.playing.load(std::memory_order_relaxed))
+        {
+            outputPeaks_[static_cast<std::size_t>(v)].store(0.f, std::memory_order_relaxed);
             continue;
+        }
 
         if (!sl.loaded.load(std::memory_order_acquire))
         {
             ps.playing.store(false, std::memory_order_relaxed);
+            outputPeaks_[static_cast<std::size_t>(v)].store(0.f, std::memory_order_relaxed);
             continue;
         }
 
         const float gain      = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
+        const bool  muted     = sl.muted.load(std::memory_order_relaxed);
         const int   totalSamp = sl.sampleCount;
 
+        float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
             if (ps.readPos >= totalSamp)
@@ -131,9 +304,18 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                 }
             }
 
-            buffer[i] += gain * sl.data[static_cast<std::size_t>(ps.readPos)];
+            if (!muted)
+            {
+                const float s = gain * sl.data[static_cast<std::size_t>(ps.readPos)];
+                buffer[i] += sidechainGains_[static_cast<std::size_t>(v)] * s;
+                // Track peak for sidechain source envelope
+                slotPeaks_[static_cast<std::size_t>(v)] =
+                    std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s));
+                blockPeak = std::max(blockPeak, std::abs(s));
+            }
             ++ps.readPos;
         }
+        outputPeaks_[static_cast<std::size_t>(v)].store(blockPeak, std::memory_order_relaxed);
     }
 }
 
@@ -144,9 +326,11 @@ void Sampler::reset() noexcept
         auto& ps = playStates_[static_cast<std::size_t>(v)];
         ps.playing.store(false, std::memory_order_relaxed);
         ps.triggerPending.store(false, std::memory_order_relaxed);
+        ps.quantTrigPending.store(false, std::memory_order_relaxed);
         ps.stopPending.store(false, std::memory_order_relaxed);
         ps.readPos = 0;
     }
+    clearSidechain();
 }
 
 } // namespace dsp

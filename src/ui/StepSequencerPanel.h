@@ -1,0 +1,773 @@
+#pragma once
+
+#include "Colours.h"
+#include "dsp/StepSequencer.h"
+#include "dsp/Sampler.h"
+
+#include <JuceHeader.h>
+#include <array>
+#include <functional>
+#include <memory>
+#include <string>
+
+namespace ui
+{
+
+// ─────────────────────────────────────────────────────────────────────────────
+// StepSequencerPanel
+//
+// Grid UI : 8 tracks × 16 step buttons.
+// Left zone per row: [S#] [LOAD] [●] [LCD name] [MUTE]
+// Right zone: volume slider
+// Top bar: ▶/■ | TAP | BPM | ⚡
+// Playhead + per-track VU bars drawn via paintOverChildren at 30 Hz.
+// ─────────────────────────────────────────────────────────────────────────────
+class StepSequencerPanel : public juce::Component,
+                           private juce::Timer
+{
+public:
+    // ── Callbacks ─────────────────────────────────────────────────────────────
+    std::function<void(int track, int step, bool active)> onStepChanged;
+    std::function<void(int slot, std::string path)>       onSlotFileLoaded;
+    std::function<void(int slot)>                         onSlotCleared;
+    std::function<void(float bpm)>                        onBpmChanged;
+    std::function<void(bool playing)>                     onPlayChanged;
+    std::function<void(int slot, float gain)>             onVolumeChanged;
+    std::function<void(int slot, bool muted)>             onMutedChanged;
+    std::function<void()>                                 onMagicButtonPressed;
+    std::function<bool(int slot)>                         isSlotPlaying;  // for VU (legacy)
+    std::function<float(int slot)>                        getSlotLevel;   // real output peak 0..1+
+    std::function<void(int track, int count)>             onStepCountChanged;
+    /// Called when user right-clicks a slot indicator and picks a type override.
+    /// typeIndex = 0-7 (maps to ContentType enum), or -1 = clear override.
+    std::function<void(int slot, int typeIndex)>          onTypeOverrideChanged;
+
+    // ── Constructor ───────────────────────────────────────────────────────────
+    explicit StepSequencerPanel(::dsp::StepSequencer& seq)
+        : seq_(seq)
+    {
+        // Play/stop
+        playBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
+        playBtn_.onClick = [this] { togglePlay(); };
+        addAndMakeVisible(playBtn_);
+
+        // Tap tempo
+        tapBtn_.setButtonText("TAP");
+        tapBtn_.onClick = [this] { onTap(); };
+        addAndMakeVisible(tapBtn_);
+
+        // BPM label (double-click to edit)
+        bpmLabel_.setText("120 BPM", juce::dontSendNotification);
+        bpmLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(14.f).withStyle("Bold")));
+        bpmLabel_.setColour(juce::Label::textColourId, SaxFXColours::textPrimary);
+        bpmLabel_.setEditable(false, true, false);
+        bpmLabel_.onEditorHide = [this]
+        {
+            const juce::String raw = bpmLabel_.getText()
+                                         .retainCharacters("0123456789.");
+            const float bpm = raw.getFloatValue();
+            if (bpm >= kMinBpm && bpm <= kMaxBpm)
+            {
+                currentBpm_ = bpm;
+                bpmLabel_.setText(juce::String(juce::roundToInt(bpm)) + " BPM",
+                                  juce::dontSendNotification);
+                if (onBpmChanged) onBpmChanged(currentBpm_);
+            }
+            else
+            {
+                bpmLabel_.setText(juce::String(juce::roundToInt(currentBpm_)) + " BPM",
+                                  juce::dontSendNotification);
+            }
+        };
+        addAndMakeVisible(bpmLabel_);
+
+        // Magic Mix ⚡ — logic kept here but button hidden (moved to sidebar in MainComponent)
+        magicBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x9a\xa1"));
+        magicBtn_.setClickingTogglesState(true);
+        magicBtn_.onClick = [this] { if (onMagicButtonPressed) onMagicButtonPressed(); };
+        magicBtn_.setVisible(false);
+        // Play/Stop and TAP also hidden — driven from MainComponent sidebar
+        playBtn_.setVisible(false);
+        tapBtn_ .setVisible(false);
+
+        // Per-track controls
+        for (int t = 0; t < 8; ++t)
+        {
+            // Slot label — large bold track number for visibility
+            slotLabels_[t].setText(juce::String(t + 1),
+                                   juce::dontSendNotification);
+            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(16.f).withStyle("Bold")));
+            slotLabels_[t].setColour(juce::Label::textColourId,
+                                     trackColour(t));
+            slotLabels_[t].setJustificationType(juce::Justification::centred);
+            addAndMakeVisible(slotLabels_[t]);
+
+            // Load button (right-click → context menu)
+            loadBtns_[t].setButtonText("LOAD");
+            loadBtns_[t].setColour(juce::TextButton::buttonColourId,
+                                   SaxFXColours::cardBody);
+            loadBtns_[t].setColour(juce::TextButton::textColourOffId,
+                                   SaxFXColours::textSecondary);
+            loadBtns_[t].onClick = [this, t] { openFileDialog(t); };
+            loadBtns_[t].addMouseListener(this, false);
+            addAndMakeVisible(loadBtns_[t]);
+
+            // Loaded indicator (● / ○ or type tag when magic is active)
+            loadedIndicators_[t].setText(juce::CharPointer_UTF8("\xe2\x97\x8b"),
+                                         juce::dontSendNotification);
+            loadedIndicators_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+            loadedIndicators_[t].setColour(juce::Label::textColourId,
+                                           SaxFXColours::textSecondary);
+            loadedIndicators_[t].setJustificationType(juce::Justification::centred);
+            loadedIndicators_[t].addMouseListener(this, false);  // right-click override
+            addAndMakeVisible(loadedIndicators_[t]);
+
+            // Retro LCD sample name
+            sampleNameLabels_[t].setText("--------", juce::dontSendNotification);
+            sampleNameLabels_[t].setFont(
+                juce::Font(juce::FontOptions{}.withName("Courier New").withHeight(9.5f)));
+            sampleNameLabels_[t].setColour(juce::Label::backgroundColourId,
+                                           juce::Colour(0xFF050E05));
+            sampleNameLabels_[t].setColour(juce::Label::textColourId,
+                                           juce::Colour(0xFF226622));
+            sampleNameLabels_[t].setColour(juce::Label::outlineColourId,
+                                           juce::Colour(0xFF1A4A1A));
+            sampleNameLabels_[t].setJustificationType(juce::Justification::centredLeft);
+            addAndMakeVisible(sampleNameLabels_[t]);
+
+            // Mute button (toggle)
+            muteBtns_[t].setButtonText("M");
+            muteBtns_[t].setClickingTogglesState(true);
+            muteBtns_[t].setColour(juce::TextButton::buttonColourId,
+                                   SaxFXColours::cardBody);
+            muteBtns_[t].setColour(juce::TextButton::buttonOnColourId,
+                                   juce::Colour(0xFFCC2222));
+            muteBtns_[t].setColour(juce::TextButton::textColourOffId,
+                                   SaxFXColours::textSecondary);
+            muteBtns_[t].setColour(juce::TextButton::textColourOnId,
+                                   juce::Colours::white);
+            muteBtns_[t].onClick = [this, t]
+            {
+                const bool muted = muteBtns_[t].getToggleState();
+                if (onMutedChanged) onMutedChanged(t, muted);
+            };
+            addAndMakeVisible(muteBtns_[t]);
+
+            // Volume slider
+            volSliders_[t].setSliderStyle(juce::Slider::LinearVertical);
+            volSliders_[t].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+            volSliders_[t].setRange(0.0, 1.0, 0.01);
+            volSliders_[t].setValue(1.0, juce::dontSendNotification);
+            volSliders_[t].setColour(juce::Slider::trackColourId,
+                                     trackColour(t).withAlpha(0.5f));
+            volSliders_[t].onValueChange = [this, t]
+            {
+                if (onVolumeChanged)
+                    onVolumeChanged(t, static_cast<float>(volSliders_[t].getValue()));
+            };
+            addAndMakeVisible(volSliders_[t]);
+
+            // Step count button (shows "1b▾" = 1 bar, click → popup)
+            stepCountBtns_[t].setButtonText("1b\xe2\x96\xbe");
+            stepCountBtns_[t].setColour(juce::TextButton::buttonColourId,  SaxFXColours::cardBody);
+            stepCountBtns_[t].setColour(juce::TextButton::textColourOffId, SaxFXColours::textSecondary);
+            stepCountBtns_[t].onClick = [this, t] { showStepCountMenu(t); };
+            addAndMakeVisible(stepCountBtns_[t]);
+
+            // Step buttons (32 visible at a time; page navigation scrolls through the full pattern)
+            for (int s = 0; s < 32; ++s)
+            {
+                stepBtns_[t][s].setClickingTogglesState(true);
+                stepBtns_[t][s].setColour(juce::TextButton::buttonColourId,
+                                          SaxFXColours::cardBorder.darker(0.4f));
+                stepBtns_[t][s].setColour(juce::TextButton::buttonOnColourId,
+                                          trackColour(t));
+                stepBtns_[t][s].onClick = [this, t, s]
+                {
+                    const int  actualStep = viewOffsetSteps_ + s;
+                    const bool active     = stepBtns_[t][s].getToggleState();
+                    seq_.setStep(t, actualStep, active);
+                    if (onStepChanged) onStepChanged(t, actualStep, active);
+                };
+                addAndMakeVisible(stepBtns_[t][s]);
+            }
+        }
+
+        // Page navigation buttons (◀ / ▶)
+        prevPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x97\x80"));  // ◀
+        prevPageBtn_.onClick = [this] { navigatePage(-1); };
+        addAndMakeVisible(prevPageBtn_);
+
+        nextPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
+        nextPageBtn_.onClick = [this] { navigatePage(+1); };
+        addAndMakeVisible(nextPageBtn_);
+
+        pageLabel_.setText("Bar 1-2", juce::dontSendNotification);
+        pageLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f)));
+        pageLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
+        pageLabel_.setJustificationType(juce::Justification::centred);
+        addAndMakeVisible(pageLabel_);
+
+        startTimerHz(30);
+    }
+
+    ~StepSequencerPanel() override { stopTimer(); }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /// Called by MainComponent sidebar play/stop button.
+    void triggerPlay() { togglePlay(); }
+
+    /// Called by MainComponent sidebar TAP button.
+    void triggerTap()  { onTap(); }
+
+    float getBpm() const noexcept { return currentBpm_; }
+
+    void setStepState(int track, int step, bool active)
+    {
+        if (track < 0 || track >= 8) return;
+        // Only update the button if this step is in the current visible page
+        const int visIdx = step - viewOffsetSteps_;
+        if (visIdx >= 0 && visIdx < 32)
+            stepBtns_[track][visIdx].setToggleState(active, juce::dontSendNotification);
+    }
+
+    void setTrackStepCount(int track, int count)
+    {
+        if (track < 0 || track >= 8) return;
+        trackStepCounts_[track] = juce::jlimit(1, ::dsp::StepSequencer::kMaxSteps, count);
+        const int bars = trackStepCounts_[track] / ::dsp::StepSequencer::kStepsPerBar;
+        stepCountBtns_[track].setButtonText(juce::String(bars) + "b\xe2\x96\xbe");
+        refreshStepButtons();
+        resized();
+    }
+
+    void setBpm(float bpm)
+    {
+        currentBpm_ = juce::jlimit(kMinBpm, kMaxBpm, bpm);
+        bpmLabel_.setText(juce::String(juce::roundToInt(currentBpm_)) + " BPM",
+                          juce::dontSendNotification);
+    }
+
+    void setSlotMuted(int slot, bool muted)
+    {
+        if (slot >= 0 && slot < 8)
+            muteBtns_[slot].setToggleState(muted, juce::dontSendNotification);
+    }
+
+    const std::string& getSlotFilePath(int slot) const
+    {
+        static const std::string empty;
+        if (slot < 0 || slot >= 8) return empty;
+        return slotFilePaths_[static_cast<std::size_t>(slot)];
+    }
+
+    void setSlotFilePath(int slot, const std::string& path)
+    {
+        if (slot >= 0 && slot < 8)
+        {
+            slotFilePaths_[static_cast<std::size_t>(slot)] = path;
+            setSlotSampleName(slot, path);
+        }
+    }
+
+    /// Set the content-type tag shown in the loaded indicator (e.g. "KICK", "BASS").
+    /// Pass empty string to restore the normal ●/○ indicator.
+    void setSlotContentType(int slot, const std::string& typeName)
+    {
+        if (slot < 0 || slot >= 8) return;
+        if (typeName.empty())
+        {
+            // Restore normal indicator — check if loaded
+            const bool loaded = !slotFilePaths_[static_cast<std::size_t>(slot)].empty();
+            loadedIndicators_[slot].setFont(
+                juce::Font(juce::FontOptions{}.withHeight(9.f)));
+            loadedIndicators_[slot].setText(
+                loaded ? juce::CharPointer_UTF8("\xe2\x97\x8f")
+                       : juce::CharPointer_UTF8("\xe2\x97\x8b"),
+                juce::dontSendNotification);
+            loadedIndicators_[slot].setColour(
+                juce::Label::textColourId,
+                loaded ? trackColour(slot) : SaxFXColours::textSecondary);
+        }
+        else
+        {
+            loadedIndicators_[slot].setFont(
+                juce::Font(juce::FontOptions{}.withHeight(8.f).withStyle("Bold")));
+            loadedIndicators_[slot].setText(typeName, juce::dontSendNotification);
+            loadedIndicators_[slot].setColour(
+                juce::Label::textColourId, juce::Colour(0xFFFFCC44));  // amber
+        }
+    }
+
+    /// Sync the ⚡ button toggle state to match the actual magic-active state.
+    void setMagicActive(bool active)
+    {
+        magicBtn_.setToggleState(active, juce::dontSendNotification);
+    }
+
+    void setSlotLoaded(int slot, bool loaded)
+    {
+        if (slot >= 0 && slot < 8)
+        {
+            loadedIndicators_[slot].setText(
+                loaded ? juce::CharPointer_UTF8("\xe2\x97\x8f")
+                       : juce::CharPointer_UTF8("\xe2\x97\x8b"),
+                juce::dontSendNotification);
+            loadedIndicators_[slot].setColour(
+                juce::Label::textColourId,
+                loaded ? trackColour(slot) : SaxFXColours::textSecondary);
+            if (!loaded)
+                setSlotSampleName(slot, "");
+        }
+    }
+
+    void setSlotSampleName(int slot, const std::string& path)
+    {
+        if (slot < 0 || slot >= 8) return;
+        if (path.empty())
+        {
+            sampleNameLabels_[slot].setText("--------", juce::dontSendNotification);
+            sampleNameLabels_[slot].setColour(juce::Label::textColourId,
+                                              juce::Colour(0xFF226622));
+        }
+        else
+        {
+            const juce::File f { juce::String(path) };
+            juce::String name = f.getFileNameWithoutExtension().toUpperCase();
+            if (name.length() > 11) name = name.substring(0, 11);
+            sampleNameLabels_[slot].setText(name, juce::dontSendNotification);
+            sampleNameLabels_[slot].setColour(juce::Label::textColourId,
+                                              juce::Colour(0xFF44EE44));
+        }
+    }
+
+    // ── Layout ────────────────────────────────────────────────────────────────
+
+    void resized() override
+    {
+        const int W = getWidth();
+        const int H = getHeight();
+
+        static constexpr int kTopH       = 18;  // page nav bar
+        static constexpr int kLeftW      = 222;
+        static constexpr int kRightW     = 36;
+        static constexpr int kPad        = 3;
+        static constexpr int kViewSteps  = 32;  // always 32 steps visible
+
+        // Page navigation row
+        prevPageBtn_.setBounds(kLeftW + kPad,            1, 20, kTopH - 2);
+        pageLabel_  .setBounds(kLeftW + kPad + 22,       1, 80, kTopH - 2);
+        nextPageBtn_.setBounds(kLeftW + kPad + 104,      1, 20, kTopH - 2);
+
+        const int rowAreaY = kTopH + kPad;
+        const int rowAreaH = H - rowAreaY - kPad;
+        const int rowH     = rowAreaH / 8;
+        const int gridW    = W - kLeftW - kRightW - 2 * kPad;
+        const int stepW    = gridW / kViewSteps;
+
+        for (int t = 0; t < 8; ++t)
+        {
+            const int ry     = rowAreaY + t * rowH;
+            const int nSteps = trackStepCounts_[t];
+
+            slotLabels_[t]      .setBounds(kPad,           ry,      22, rowH);
+            loadBtns_[t]        .setBounds(kPad + 24,      ry + 2,  36, rowH - 4);
+            loadedIndicators_[t].setBounds(kPad + 62,      ry,      12, rowH);
+            sampleNameLabels_[t].setBounds(kPad + 76,      ry + 2,  76, rowH - 4);
+            muteBtns_[t]        .setBounds(kPad + 154,     ry + 2,  24, rowH - 4);
+            stepCountBtns_[t]   .setBounds(kPad + 180,     ry + 2,  28, rowH - 4);
+
+            for (int s = 0; s < kViewSteps; ++s)
+            {
+                const int actualStep = viewOffsetSteps_ + s;
+                if (actualStep < nSteps)
+                {
+                    stepBtns_[t][s].setBounds(kLeftW + s * stepW, ry + 1, stepW - 1, rowH - 2);
+                    stepBtns_[t][s].setVisible(true);
+                }
+                else
+                {
+                    stepBtns_[t][s].setVisible(false);
+                    stepBtns_[t][s].setBounds(0, 0, 0, 0);
+                }
+            }
+
+            volSliders_[t].setBounds(W - kRightW - kPad + 14, ry, 22, rowH);
+        }
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(SaxFXColours::cardBody);
+        g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.f);
+        g.setColour(SaxFXColours::cardBorder);
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 4.f, 1.f);
+    }
+
+    void paintOverChildren(juce::Graphics& g) override
+    {
+        static constexpr int kLeftW  = 222;  // matches resized()
+        static constexpr int kRightW = 36;
+        static constexpr int kPad    = 3;
+        static constexpr int kTopH   = 18;
+        static constexpr int kViewSteps = 32;
+
+        const int W     = getWidth();
+        const int H     = getHeight();
+        const int gridW = W - kLeftW - kRightW - 2 * kPad;
+        const int rowH  = (H - kTopH - kPad - kPad) / 8;
+        const int gridY = kTopH + kPad;
+        // ── Per-track VU bars ──────────────────────────────────────────────
+        for (int t = 0; t < 8; ++t)
+        {
+            const int ry    = gridY + t * rowH + 1;
+            const int barH  = rowH - 2;
+
+            if (vuLevels_[t] >= 0.01f)
+            {
+                // Glowing bar in track colour, at left edge of grid
+                g.setColour(trackColour(t).withAlpha(vuLevels_[t] * 0.90f));
+                g.fillRect(kLeftW + 2, ry, 4, barH);
+                // Softer halo
+                g.setColour(trackColour(t).withAlpha(vuLevels_[t] * 0.25f));
+                g.fillRect(kLeftW, ry, 8, barH);
+            }
+
+            // Real VU meter on the right side next to volume slider
+            const int vuX = W - kRightW - kPad + 2;
+            const int vuW = 8;
+            const int vuH = barH - 4;
+            const int vyy = ry + 2;
+
+            g.setColour(juce::Colour(0xff111122));
+            g.fillRoundedRectangle(static_cast<float>(vuX), static_cast<float>(vyy),
+                                   static_cast<float>(vuW), static_cast<float>(vuH), 2.f);
+
+            const float filled = vuLevels_[t] * static_cast<float>(vuH);
+            if (filled > 0.0f)
+            {
+                const float h1 = juce::jmin(filled, static_cast<float>(vuH) * 0.6f);
+                g.setColour(ui::SaxFXColours::vuLow.withAlpha(0.85f));
+                g.fillRoundedRectangle(static_cast<float>(vuX), static_cast<float>(vyy + vuH) - h1,
+                                       static_cast<float>(vuW), h1, 2.f);
+
+                if (filled > static_cast<float>(vuH) * 0.6f)
+                {
+                    const float h2 = juce::jmin(filled - static_cast<float>(vuH) * 0.6f, static_cast<float>(vuH) * 0.25f);
+                    g.setColour(ui::SaxFXColours::vuMid.withAlpha(0.9f));
+                    g.fillRoundedRectangle(static_cast<float>(vuX), static_cast<float>(vyy + vuH) - static_cast<float>(vuH) * 0.6f - h2,
+                                           static_cast<float>(vuW), h2, 2.f);
+                }
+                if (filled > static_cast<float>(vuH) * 0.85f)
+                {
+                    const float h3 = filled - static_cast<float>(vuH) * 0.85f;
+                    g.setColour(ui::SaxFXColours::vuHigh.withAlpha(0.95f));
+                    g.fillRoundedRectangle(static_cast<float>(vuX), static_cast<float>(vyy + vuH) - static_cast<float>(vuH) * 0.85f - h3,
+                                           static_cast<float>(vuW), h3, 2.f);
+                }
+            }
+        }
+
+        if (!seq_.isPlaying()) return;
+
+        const int globalStep = seq_.getCurrentStep();
+        const juce::Colour playheadCol(0xFF4CDFA8);  // primary green
+
+        // Per-track playhead (each track has its own step count)
+        const int tStepW = gridW / kViewSteps;  // fixed 32-step window
+        for (int t = 0; t < 8; ++t)
+        {
+            const int nSteps    = trackStepCounts_[t];
+            const int trackStep = globalStep % nSteps;
+            // Only draw if the current step is in the visible page
+            const int visStep   = trackStep - viewOffsetSteps_;
+            if (visStep < 0 || visStep >= kViewSteps) continue;
+            const int colX      = kLeftW + visStep * tStepW;
+            const int ry        = gridY + t * rowH;
+
+            // Neon wash over column for this row
+            g.setColour(playheadCol.withAlpha(0.12f));
+            g.fillRect(colX, ry + 1, tStepW - 1, rowH - 2);
+
+            // Bright border
+            g.setColour(playheadCol.withAlpha(0.70f));
+            g.drawRect(colX, ry + 1, tStepW - 1, rowH - 2, 2);
+        }
+
+        // Beat group dots above grid (8 groups of 4 for the 32-step window)
+        const int tStepW0    = gridW / kViewSteps;
+        const int nSteps0    = trackStepCounts_[0];
+        const int trackStep0 = globalStep % nSteps0;
+        const int visStep0   = trackStep0 - viewOffsetSteps_;
+        for (int b = 0; b < 8; ++b)
+        {
+            const int beatStep      = b * 4;  // visual step index within page
+            const int actualBeat    = viewOffsetSteps_ + beatStep;
+            if (actualBeat >= nSteps0) break;
+            const int dotX     = kLeftW + beatStep * tStepW0 + tStepW0 / 2 - 3;
+            const bool isCurr  = (visStep0 >= beatStep && visStep0 < beatStep + 4);
+            g.setColour(isCurr ? playheadCol.withAlpha(0.90f)
+                               : juce::Colour(0xFF1C3A2A).withAlpha(0.70f));
+            g.fillEllipse(static_cast<float>(dotX),
+                          static_cast<float>(gridY - 7),
+                          6.f, 6.f);
+        }
+    }
+
+    // Right-click on LOAD or loaded indicator → context menu
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (!e.mods.isRightButtonDown()) return;
+        for (int t = 0; t < 8; ++t)
+        {
+            if (e.eventComponent == &loadBtns_[t])
+            {
+                showSlotContextMenu(t);
+                return;
+            }
+            if (e.eventComponent == &loadedIndicators_[t])
+            {
+                showTypeMenu(t);
+                return;
+            }
+        }
+    }
+
+private:
+    void timerCallback() override
+    {
+        // Update VU: use real output peak when available, fallback to bool playing flag.
+        if (getSlotLevel)
+        {
+            for (int t = 0; t < 8; ++t)
+            {
+                const float level = juce::jlimit(0.f, 1.f, getSlotLevel(t));
+                if (level > vuLevels_[t])
+                    vuLevels_[t] = level;
+                else
+                    vuLevels_[t] *= 0.82f;
+            }
+        }
+        else if (isSlotPlaying)
+        {
+            for (int t = 0; t < 8; ++t)
+            {
+                const bool playing = isSlotPlaying(t);
+                vuLevels_[t] = playing ? 1.0f : vuLevels_[t] * 0.82f;
+            }
+        }
+        repaint();
+    }
+
+    void togglePlay()
+    {
+        const bool nowPlaying = !seq_.isPlaying();
+        seq_.setPlaying(nowPlaying);
+        playBtn_.setButtonText(nowPlaying
+                               ? juce::CharPointer_UTF8("\xe2\x96\xa0")
+                               : juce::CharPointer_UTF8("\xe2\x96\xb6"));
+        if (onPlayChanged) onPlayChanged(nowPlaying);
+    }
+
+    void onTap()
+    {
+        const juce::int64 now = juce::Time::currentTimeMillis();
+        if (tapTimes_.size() >= 1 && now - tapTimes_.back() > 2000)
+            tapTimes_.clear();
+        tapTimes_.push_back(now);
+        if (tapTimes_.size() >= 2)
+        {
+            while (tapTimes_.size() > 5)
+                tapTimes_.erase(tapTimes_.begin());
+            double totalMs = 0.0;
+            for (std::size_t i = 1; i < tapTimes_.size(); ++i)
+                totalMs += static_cast<double>(tapTimes_[i] - tapTimes_[i - 1]);
+            const double avgMs = totalMs / static_cast<double>(tapTimes_.size() - 1);
+            const float bpm = juce::jlimit(kMinBpm, kMaxBpm,
+                                           static_cast<float>(60000.0 / avgMs));
+            currentBpm_ = bpm;
+            bpmLabel_.setText(juce::String(juce::roundToInt(bpm)) + " BPM",
+                              juce::dontSendNotification);
+            seq_.setBpm(bpm);
+            if (onBpmChanged) onBpmChanged(bpm);
+        }
+    }
+
+    void openFileDialog(int slot)
+    {
+        fileChooser_ = std::make_unique<juce::FileChooser>(
+            "Load sample for S" + juce::String(slot + 1),
+            juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+            "*.wav;*.aif;*.aiff;*.mp3;*.flac;*.ogg");
+        fileChooser_->launchAsync(
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+            [this, slot](const juce::FileChooser& fc)
+            {
+                const auto result = fc.getResult();
+                if (!result.existsAsFile()) return;
+                setSlotLoaded(slot, true);
+                loadFileIntoSampler(slot, result);
+            });
+    }
+
+    void loadFileIntoSampler(int slot, const juce::File& file)
+    {
+        if (!file.existsAsFile()) return;
+        slotFilePaths_[slot] = file.getFullPathName().toStdString();
+        setSlotSampleName(slot, slotFilePaths_[slot]);
+        if (onSlotFileLoaded)
+            onSlotFileLoaded(slot, slotFilePaths_[slot]);
+    }
+
+    void showSlotContextMenu(int slot)
+    {
+        juce::PopupMenu menu;
+        menu.addItem(1, "Load file...");
+        if (!slotFilePaths_[static_cast<std::size_t>(slot)].empty())
+            menu.addItem(2, "Clear slot");
+        menu.showMenuAsync(juce::PopupMenu::Options{},
+            [this, slot](int result)
+            {
+                if (result == 1) openFileDialog(slot);
+                else if (result == 2) clearSlot(slot);
+            });
+    }
+
+    void clearSlot(int slot)
+    {
+        slotFilePaths_[static_cast<std::size_t>(slot)] = {};
+        setSlotLoaded(slot, false);
+        if (onSlotCleared) onSlotCleared(slot);
+    }
+
+    void navigatePage(int delta)
+    {
+        int maxSteps = 16;
+        for (int t = 0; t < 8; ++t)
+            maxSteps = std::max(maxSteps, trackStepCounts_[t]);
+        const int maxOffset = ((maxSteps - 1) / 32) * 32;
+        viewOffsetSteps_ = juce::jlimit(0, maxOffset, viewOffsetSteps_ + delta * 32);
+        refreshStepButtons();
+        updatePageLabel();
+        resized();
+    }
+
+    void refreshStepButtons()
+    {
+        for (int t = 0; t < 8; ++t)
+            for (int s = 0; s < 32; ++s)
+            {
+                const int actualStep = viewOffsetSteps_ + s;
+                if (actualStep < trackStepCounts_[t])
+                    stepBtns_[t][s].setToggleState(
+                        seq_.getStep(t, actualStep), juce::dontSendNotification);
+            }
+    }
+
+    void updatePageLabel()
+    {
+        const int firstBar = viewOffsetSteps_ / ::dsp::StepSequencer::kStepsPerBar + 1;
+        const int lastBar  = firstBar + 1;  // 32 steps = 2 bars visible
+        pageLabel_.setText("Bar " + juce::String(firstBar) + "-" + juce::String(lastBar),
+                           juce::dontSendNotification);
+    }
+
+    void showStepCountMenu(int track)
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Mesures (S" + juce::String(track + 1) + ")");
+        for (int bars : { 1, 2, 4, 8, 16, 32 })
+        {
+            const int steps   = bars * ::dsp::StepSequencer::kStepsPerBar;
+            const bool isCurr = (trackStepCounts_[track] == steps);
+            menu.addItem(steps, juce::String(bars) + (bars == 1 ? " mesure" : " mesures")
+                         + "  (" + juce::String(steps) + " pas)"
+                         + (isCurr ? "  \xe2\x9c\x93" : ""));
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options{},
+            [this, track](int result)
+            {
+                if (result <= 0) return;
+                setTrackStepCount(track, result);
+                if (onStepCountChanged) onStepCountChanged(track, result);
+            });
+    }
+
+    void showTypeMenu(int slot)
+    {
+        static const std::array<const char*, 8> kNames {
+            "KICK", "SNR (Snare)", "HAT (Hi-hat)", "BASS",
+            "SYN (Synth)", "PAD", "PRC (Perc)", "??? (Other)"
+        };
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Forcer le type (slot S" + juce::String(slot + 1) + ")");
+        for (int i = 0; i < 8; ++i)
+            menu.addItem(i + 1, kNames[static_cast<std::size_t>(i)]);
+        menu.addSeparator();
+        menu.addItem(9, "Auto-detect (annuler l'override)");
+        menu.showMenuAsync(juce::PopupMenu::Options{},
+            [this, slot](int result)
+            {
+                if (result == 0) return;
+                if (onTypeOverrideChanged)
+                    onTypeOverrideChanged(slot, result == 9 ? -1 : result - 1);
+            });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    static constexpr float kMinBpm = 40.f;
+    static constexpr float kMaxBpm = 240.f;
+
+    static juce::Colour trackColour(int t) noexcept
+    {
+        static const juce::Colour kColours[8] = {
+            juce::Colour { 0xFF4CDFA8 }, // primary green (kick)
+            juce::Colour { 0xFF06B6D4 }, // cyan-500 (snare)
+            juce::Colour { 0xFFC8C7C7 }, // tertiary (hat)
+            juce::Colour { 0xFF8B5CF6 }, // violet-500 (synth)
+            juce::Colour { 0xFFF97316 }, // orange-500
+            juce::Colour { 0xFFF43F5E }, // rose-500
+            juce::Colour { 0xFFEAB308 }, // yellow-500
+            juce::Colour { 0xFF38BDF8 }, // sky-400
+        };
+        return kColours[t % 8];
+    }
+
+    // ── Members ───────────────────────────────────────────────────────────────
+
+    ::dsp::StepSequencer& seq_;
+
+    juce::TextButton playBtn_;
+    juce::TextButton tapBtn_;
+    juce::Label      bpmLabel_;
+    juce::TextButton magicBtn_;
+    float            currentBpm_ = 120.f;
+
+    std::array<juce::Label,      8> slotLabels_;
+    std::array<juce::TextButton, 8> loadBtns_;
+    std::array<juce::Label,      8> loadedIndicators_;
+    std::array<juce::Label,      8> sampleNameLabels_;
+    std::array<juce::TextButton, 8> muteBtns_;
+    std::array<juce::Slider,     8> volSliders_;
+    std::array<juce::TextButton, 8> stepCountBtns_;  // shows "Xb▾", click → popup
+    int trackStepCounts_[8] = { 16,16,16,16,16,16,16,16 };
+    juce::TextButton stepBtns_[8][32];
+
+    // Page navigation
+    juce::TextButton prevPageBtn_;
+    juce::TextButton nextPageBtn_;
+    juce::Label      pageLabel_;
+    int              viewOffsetSteps_ = 0;
+
+    std::array<std::string, 8>  slotFilePaths_;
+    std::vector<juce::int64>    tapTimes_;
+    float                       vuLevels_[8] = {};
+    std::unique_ptr<juce::FileChooser> fileChooser_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
+};
+
+} // namespace ui

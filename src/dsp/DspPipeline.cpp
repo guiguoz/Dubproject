@@ -1,28 +1,28 @@
 #include "DspPipeline.h"
+
 #include "DspCommon.h"
 
-#include <cstring>
-#include <algorithm>
-
-namespace dsp {
+namespace dsp
+{
 
 void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
 {
     pitchTracker_.prepare(sampleRate, maxBlockSize);
-    harmonizer_.prepare(sampleRate, maxBlockSize);
-    flanger_.prepare(sampleRate, maxBlockSize);
+    effectChain_.prepare(sampleRate, maxBlockSize);
     sampler_.prepare(sampleRate, maxBlockSize);
-    scratchBuffer_.assign(static_cast<std::size_t>(maxBlockSize), 0.0f);
+    bpmDetector_.prepare(sampleRate);
 }
 
 void DspPipeline::reset() noexcept
 {
     pitchTracker_.reset();
-    harmonizer_.reset();
-    flanger_.reset();
+    effectChain_.reset();
     sampler_.reset();
+    bpmDetector_.reset();
+    rmsRunning_ = 0.0f;
     lastPitchHz_.store(0.0f, std::memory_order_relaxed);
     lastConfidence_.store(0.0f, std::memory_order_relaxed);
+    rmsLevel_.store(0.0f, std::memory_order_relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,31 +35,44 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
     lastPitchHz_.store(pitch.frequencyHz, std::memory_order_relaxed);
     lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
 
-    // 2. Harmonizer (reads buffer, writes to scratch, then copies back)
-    if (harmonizerEnabled_.load(std::memory_order_acquire))
+    // 2. BPM detection (analysis only)
+    bpmDetector_.process(buffer, numSamples);
+
+    // 3. Smoothed RMS (exponential moving average over samples)
+    for (int i = 0; i < numSamples; ++i)
+        rmsRunning_ = kRmsAlpha * rmsRunning_ + (1.0f - kRmsAlpha) * std::abs(buffer[i]);
+    rmsLevel_.store(rmsRunning_, std::memory_order_relaxed);
+
+    // 4. Effect Chain (processes in-place)
+    // If piano keyboard is active, use the forced pitch instead of YIN output.
+    const float forced = forcedPitchHz_.load(std::memory_order_relaxed);
+    const float effectPitch = (forced > 0.f) ? forced : pitch.frequencyHz;
+    effectChain_.process(buffer, numSamples, effectPitch);
+
+    // 5. Expression Mapper — apply RMS→param mapping to the target effect
+    if (expressionMapper_.isActive())
     {
-        harmonizer_.process(buffer, scratchBuffer_.data(), numSamples, pitch.frequencyHz);
-        std::memcpy(buffer, scratchBuffer_.data(),
-                    static_cast<std::size_t>(numSamples) * sizeof(float));
+        const float mapped = expressionMapper_.mapValue(rmsRunning_);
+        IEffect* fx = effectChain_.getActiveEffect(expressionMapper_.getEffectIndex());
+        if (fx != nullptr)
+            fx->setParam(expressionMapper_.getParamIndex(), mapped);
     }
 
-    // 3. Flanger (in-place)
-    if (flangerEnabled_.load(std::memory_order_acquire))
-        flanger_.process(buffer, numSamples);
-
-    // 4. Sampler: drain MIDI queue, then mix into buffer
+    // 3. Sampler: drain MIDI queue, then mix into buffer
     if (samplerEnabled_.load(std::memory_order_acquire))
     {
         SamplerEvent evt;
         while (midiEventQueue_.tryPop(evt))
         {
-            if (evt.noteOn)  sampler_.trigger(evt.slotIndex);
-            else             sampler_.stop(evt.slotIndex);
+            if (evt.noteOn)
+                sampler_.trigger(evt.slotIndex);
+            else
+                sampler_.stop(evt.slotIndex);
         }
         sampler_.process(buffer, numSamples);
     }
 
-    // 5. Final clip (safety net)
+    // 4. Final clip (safety net)
     for (int i = 0; i < numSamples; ++i)
         buffer[i] = clipSample(buffer[i]);
 }
@@ -67,29 +80,9 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
 // ─────────────────────────────────────────────────────────────────────────────
 // Enable / disable — GUI thread
 // ─────────────────────────────────────────────────────────────────────────────
-void DspPipeline::setHarmonizerEnabled(bool enabled) noexcept
-{
-    harmonizerEnabled_.store(enabled, std::memory_order_release);
-}
-
-void DspPipeline::setFlangerEnabled(bool enabled) noexcept
-{
-    flangerEnabled_.store(enabled, std::memory_order_release);
-}
-
 void DspPipeline::setSamplerEnabled(bool enabled) noexcept
 {
     samplerEnabled_.store(enabled, std::memory_order_release);
-}
-
-bool DspPipeline::isHarmonizerEnabled() const noexcept
-{
-    return harmonizerEnabled_.load(std::memory_order_acquire);
-}
-
-bool DspPipeline::isFlangerEnabled() const noexcept
-{
-    return flangerEnabled_.load(std::memory_order_acquire);
 }
 
 bool DspPipeline::isSamplerEnabled() const noexcept
@@ -99,8 +92,8 @@ bool DspPipeline::isSamplerEnabled() const noexcept
 
 PitchResult DspPipeline::getLastPitch() const noexcept
 {
-    return { lastPitchHz_.load(std::memory_order_relaxed),
-             lastConfidence_.load(std::memory_order_relaxed) };
+    return {lastPitchHz_.load(std::memory_order_relaxed),
+            lastConfidence_.load(std::memory_order_relaxed)};
 }
 
 } // namespace dsp

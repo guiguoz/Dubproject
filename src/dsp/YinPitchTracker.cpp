@@ -15,8 +15,8 @@ void YinPitchTracker::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
     sampleRate_ = sampleRate;
 
     // Window size = 2 × longest period to detect.
-    // kMinFrequencyHz = 120 Hz → period = 44100/120 = 367 samples
-    // → windowSize = 734, rounded up to next power of 2 for simplicity.
+    // kMinFrequencyHz = 60 Hz (baritone sax) → period ≈ 800 samples @ 48 kHz
+    // → windowSize ≈ 1600 samples (auto-sized from kMinFrequencyHz).
     const int minPeriod = static_cast<int>(sampleRate / kMinFrequencyHz) + 1;
     windowSize_         = minPeriod * 2;
 
@@ -96,8 +96,10 @@ PitchResult YinPitchTracker::process(const float* input, int numSamples) noexcep
 
 // ─────────────────────────────────────────────────────────────────────────────
 // YIN Step 2 — Difference function
-// d(tau) = sum_{j=0}^{W/2-1} (x[j] - x[j+tau])^2
+// d(tau) = sum_{j=0}^{W/2-1} (x[W/2+j] - x[W/2+j - tau])^2
 // Reads from inputAccumulator_ (circular, oldest at accWritePos_).
+// Anchors on the newest samples (W/2 to W-1) and looks backwards by tau.
+// This reduces detection latency by W/2 compared to looking forwards.
 // Writes result into yinBuffer_.
 // ─────────────────────────────────────────────────────────────────────────────
 void YinPitchTracker::differenceFunction(int windowSize) noexcept
@@ -115,7 +117,7 @@ void YinPitchTracker::differenceFunction(int windowSize) noexcept
         float sum = 0.0f;
         for (int j = 0; j < half; ++j)
         {
-            const float delta = circRead(j) - circRead(j + tau);
+            const float delta = circRead(half + j) - circRead(half + j - tau);
             sum += delta * delta;
         }
         yinBuffer_[static_cast<std::size_t>(tau)] = sum;
@@ -151,7 +153,7 @@ void YinPitchTracker::cumulativeMeanNormalize(int windowSize) noexcept
 int YinPitchTracker::absoluteThreshold(int windowSize) const noexcept
 {
     const int half     = windowSize / 2;
-    const int minTau   = static_cast<int>(static_cast<double>(44100.0) / kMaxFrequencyHz);
+    const int minTau   = static_cast<int>(sampleRate_ / kMaxFrequencyHz);
     const int maxTau   = static_cast<int>(static_cast<double>(sampleRate_) / kMinFrequencyHz) + 1;
     const int clampMax = std::min(half - 1, maxTau);
 

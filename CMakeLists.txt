@@ -23,9 +23,19 @@ endif()
 add_subdirectory(third_party/JUCE)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ONNX Runtime (optionnel — inference IA, CPU pré-compilé)
+# ─────────────────────────────────────────────────────────────────────────────
+option(SAXFX_ENABLE_ONNX "Enable ONNX Runtime for AI inference" ON)
+
+if(SAXFX_ENABLE_ONNX)
+    include(cmake/FindOnnxRuntime.cmake)
+    message(STATUS "ONNX Runtime ${ORT_VERSION} enabled")
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ASIO SDK (optionnel — WASAPI en fallback si absent)
 # ─────────────────────────────────────────────────────────────────────────────
-option(JUCE_ASIO_SDK_PATH "" "Path to Steinberg ASIO SDK")
+set(JUCE_ASIO_SDK_PATH "" CACHE PATH "Path to Steinberg ASIO SDK")
 
 if(JUCE_ASIO_SDK_PATH AND EXISTS "${JUCE_ASIO_SDK_PATH}/common/asio.h")
     message(STATUS "ASIO SDK found at: ${JUCE_ASIO_SDK_PATH}")
@@ -53,12 +63,38 @@ target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
     src/dsp/YinPitchTracker.cpp
+    src/dsp/WsolaShifter.cpp
     src/dsp/Flanger.cpp
     src/dsp/Harmonizer.cpp
     src/dsp/Sampler.cpp
     src/dsp/DspPipeline.cpp
+    src/dsp/FlangerEffect.cpp
+    src/dsp/HarmonizerEffect.cpp
+    src/dsp/PitchForkEffect.cpp
+    src/dsp/EnvelopeFilterEffect.cpp
+    src/dsp/DelayEffect.cpp
+    src/dsp/WhammyEffect.cpp
+    src/dsp/OctaverEffect.cpp
+    src/dsp/TunerEffect.cpp
+    src/dsp/SlicerEffect.cpp
+    src/dsp/ReverbEffect.cpp
+    src/dsp/EffectChain.cpp
+    src/dsp/BpmDetector.cpp
+    src/dsp/ExpressionMapper.cpp
+    src/dsp/ScaleHarmonizer.cpp
+    src/dsp/AutoPitchCorrect.cpp
+    src/dsp/KeyDetector.cpp
+    src/dsp/EffectChainOptimizer.cpp
+    src/dsp/EffectFactory.cpp
+    src/dsp/SynthEffect.cpp
+    src/dsp/AiContentClassifier.cpp
+    src/dsp/AiMixEngine.cpp
+    src/dsp/FeatureExtractor.cpp
     src/midi/MidiManager.cpp
     src/project/ProjectLoader.cpp
+    src/ui/SaxFXLookAndFeel.cpp
+    src/ui/SaxOsLookAndFeel.cpp
+    src/ui/RotaryKnob.cpp
 )
 
 target_include_directories(SaxFXLive PRIVATE src)
@@ -86,11 +122,18 @@ target_compile_definitions(SaxFXLive PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_VERSION>"
     $<$<BOOL:${JUCE_ASIO}>:JUCE_ASIO=1>
+    $<$<BOOL:${SAXFX_ENABLE_ONNX}>:SAXFX_HAS_ONNX=1>
 )
 
 # ASIO include path
 if(JUCE_ASIO)
     target_include_directories(SaxFXLive PRIVATE "${JUCE_ASIO_SDK_PATH}")
+endif()
+
+# ONNX Runtime link
+if(SAXFX_ENABLE_ONNX)
+    target_link_libraries(SaxFXLive PRIVATE OnnxRuntime::OnnxRuntime)
+    ort_copy_dll(SaxFXLive)
 endif()
 
 # Génère JuceHeader.h (inclut tous les modules JUCE liés)

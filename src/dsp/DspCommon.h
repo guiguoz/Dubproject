@@ -9,8 +9,10 @@ namespace dsp {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lowest frequency to detect (Bb2 on alto sax ≈ 116 Hz, rounded up for safety)
-constexpr float kMinFrequencyHz   = 120.0f;
+/// Lowest frequency to detect.
+/// Baritone sax low note Db2 ≈ 69 Hz; 60 Hz gives comfortable headroom.
+/// Tenor sax low note Bb2 ≈ 117 Hz — also covered.
+constexpr float kMinFrequencyHz   = 60.0f;
 
 /// Highest frequency to detect (above soprano sax high range)
 constexpr float kMaxFrequencyHz   = 1400.0f;
