@@ -4,6 +4,7 @@
 #include "EffectChain.h"
 #include "ExpressionMapper.h"
 #include "LockFreeQueue.h"
+#include "MasterLimiter.h"
 #include "Sampler.h"
 #include "YinPitchTracker.h"
 
@@ -83,16 +84,34 @@ class DspPipeline
         forcedPitchHz_.store(0.f, std::memory_order_relaxed);
     }
 
+    // ── Anti-masking (Ducking) ───────────────────────────────────────────────
+    // Toggle whether the sampler ducks when the saxophone plays loud.
+    void setDuckingEnabled(bool enabled) noexcept
+    {
+        duckingEnabled_.store(enabled, std::memory_order_relaxed);
+    }
+    bool isDuckingEnabled() const noexcept { return duckingEnabled_.load(std::memory_order_relaxed); }
+    float getCurrentDuckingGain() const noexcept { return currentDuckingGain_.load(std::memory_order_relaxed); }
+
+    // ── Master Limiter (GUI thread) ──────────────────────────────────────────
+    void setMasterLimiterEnabled(bool enabled) noexcept { masterLimiter_.setEnabled(enabled); }
+    bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }
+
   private:
     YinPitchTracker  pitchTracker_;
     EffectChain      effectChain_;
     Sampler          sampler_;
     BpmDetector      bpmDetector_;
     ExpressionMapper expressionMapper_;
+    MasterLimiter    masterLimiter_;
 
     LockFreeQueue<SamplerEvent, 64> midiEventQueue_;
 
     std::atomic<bool> samplerEnabled_{true};
+    std::atomic<bool> duckingEnabled_{true};
+    std::atomic<float> currentDuckingGain_{1.0f};
+
+    std::vector<float> tempBuffer_; // Used for sampler ducking
 
     // Latest pitch (written by audio thread, read by GUI thread)
     std::atomic<float> lastPitchHz_{0.0f};

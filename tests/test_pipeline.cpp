@@ -17,6 +17,7 @@ TEST_CASE("DspPipeline -- all effects disabled -> pass-through", "[pipeline]")
 {
     DspPipeline pipeline;
     pipeline.prepare(kSampleRate, kBlockSize);
+    pipeline.setMasterLimiterEnabled(false); // disable limiter for true pass-through testing
     // Both effects disabled by default
 
     auto signal   = test_helpers::generateSine(440.0f, kSampleRate, kBlockSize);

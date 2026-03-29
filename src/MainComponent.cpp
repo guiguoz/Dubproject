@@ -334,6 +334,12 @@ MainComponent::MainComponent()
         stepSequencer_.setTrackStepCount(track, count);
     };
 
+    // Provide the ducking gain to the UI (1.0 = normal, 0.5 = -6dB)
+    stepSeqPanel_.getDuckingGain = [this]() -> float
+    {
+        return dspPipeline_.getCurrentDuckingGain();
+    };
+
     addAndMakeVisible(stepSeqPanel_);
 
     // ── Master key selector (sidebar) ─────────────────────────────────────────

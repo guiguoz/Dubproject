@@ -11,6 +11,8 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     effectChain_.prepare(sampleRate, maxBlockSize);
     sampler_.prepare(sampleRate, maxBlockSize);
     bpmDetector_.prepare(sampleRate);
+
+    tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
 }
 
 void DspPipeline::reset() noexcept
@@ -58,7 +60,7 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
             fx->setParam(expressionMapper_.getParamIndex(), mapped);
     }
 
-    // 3. Sampler: drain MIDI queue, then mix into buffer
+    // 6. Sampler: drain MIDI queue, mix into buffer with optional Ducking (Anti-masking)
     if (samplerEnabled_.load(std::memory_order_acquire))
     {
         SamplerEvent evt;
@@ -69,12 +71,47 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
             else
                 sampler_.stop(evt.slotIndex);
         }
-        sampler_.process(buffer, numSamples);
+
+        if (duckingEnabled_.load(std::memory_order_relaxed))
+        {
+            // Ducking: if sax RMS > 0.05, reduce sampler volume (up to -6 dB at RMS=0.3)
+            float duckGain = 1.0f;
+            if (rmsRunning_ > 0.05f)
+            {
+                // Map [0.05 ... 0.3] -> [1.0 ... 0.5]
+                float ratio = (rmsRunning_ - 0.05f) / 0.25f;
+                ratio = std::min(1.0f, ratio);
+                duckGain = 1.0f - (ratio * 0.5f); // Drops to 0.5 at max
+            }
+
+            // Smooth the duck gain slightly if needed, but per-block is fine
+            // Render sampler to a temp buffer, then mix with ducking
+            if (numSamples > static_cast<int>(tempBuffer_.size()))
+                tempBuffer_.resize(numSamples, 0.0f);
+            else
+                std::fill(tempBuffer_.begin(), tempBuffer_.begin() + numSamples, 0.0f);
+
+            sampler_.process(tempBuffer_.data(), numSamples);
+
+            for (int i = 0; i < numSamples; ++i)
+                buffer[i] += tempBuffer_[i] * duckGain;
+
+            currentDuckingGain_.store(duckGain, std::memory_order_relaxed);
+        }
+        else
+        {
+            // No ducking: sampler mixes directly into the buffer
+            sampler_.process(buffer, numSamples);
+            currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
     }
 
-    // 4. Final clip (safety net)
-    for (int i = 0; i < numSamples; ++i)
-        buffer[i] = clipSample(buffer[i]);
+    // 7. Final Master Limiter (Soft-Clipper safety net)
+    masterLimiter_.process(buffer, numSamples);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

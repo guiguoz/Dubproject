@@ -38,6 +38,7 @@ public:
     std::function<void()>                                 onMagicButtonPressed;
     std::function<bool(int slot)>                         isSlotPlaying;  // for VU (legacy)
     std::function<float(int slot)>                        getSlotLevel;   // real output peak 0..1+
+    std::function<float()>                                getDuckingGain; // 1.0 = no duck, 0.5 = -6dB
     std::function<void(int track, int count)>             onStepCountChanged;
     /// Called when user right-clicks a slot indicator and picks a type override.
     /// typeIndex = 0-7 (maps to ContentType enum), or -1 = clear override.
@@ -194,19 +195,20 @@ public:
             }
         }
 
-        // Bar count arrows (◀ / ▶) — change the number of bars for all tracks
+        // Page navigation buttons (◀ / ▶)
         prevPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x97\x80"));  // ◀
-        prevPageBtn_.onClick = [this] { changeGlobalBarCount(-1); };
+        prevPageBtn_.onClick = [this] { navigatePage(-1); };
         addAndMakeVisible(prevPageBtn_);
 
         nextPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
-        nextPageBtn_.onClick = [this] { changeGlobalBarCount(+1); };
+        nextPageBtn_.onClick = [this] { navigatePage(+1); };
         addAndMakeVisible(nextPageBtn_);
 
-        pageLabel_.setText("1 MESURE", juce::dontSendNotification);
+        pageLabel_.setText("1 MESURE \xe2\x96\xbe", juce::dontSendNotification);
         pageLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f)));
         pageLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
         pageLabel_.setJustificationType(juce::Justification::centred);
+        pageLabel_.addMouseListener(this, false);
         addAndMakeVisible(pageLabel_);
 
         startTimerHz(30);
@@ -536,6 +538,24 @@ public:
                           static_cast<float>(gridY - 7),
                           6.f, 6.f);
         }
+
+        // ── Ducking Gain Reduction Meter ─────────────────────────────────────
+        if (duckingLevel_ < 0.99f)
+        {
+            const float reduction = 1.0f - duckingLevel_; // 0.0 to 0.5 (max reduction)
+            const float barWidth = 40.0f * (reduction * 2.0f); // Scale to 40px max width
+            const int meterX = W - kRightW - kPad - 45; // Just left of the volume sliders
+            const int meterY = 5;
+            const int meterH = 8;
+
+            g.setColour(juce::Colour(0xFFEAB308).withAlpha(0.8f)); // Yellow/Orange warning color
+            g.fillRoundedRectangle(static_cast<float>(meterX + 40) - barWidth, static_cast<float>(meterY),
+                                   barWidth, static_cast<float>(meterH), 2.0f);
+
+            g.setColour(SaxFXColours::textSecondary);
+            g.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+            g.drawText("DUCK", meterX - 25, meterY, 25, meterH, juce::Justification::centredRight);
+        }
     }
 
     // ── FileDragAndDropTarget — drag samples from Sononym / Explorer ────────────
@@ -606,6 +626,12 @@ public:
     // Right-click on LOAD or loaded indicator → context menu
     void mouseDown(const juce::MouseEvent& e) override
     {
+        if (e.eventComponent == &pageLabel_)
+        {
+            showGlobalStepCountMenu();
+            return;
+        }
+
         if (!e.mods.isRightButtonDown()) return;
         for (int t = 0; t < 8; ++t)
         {
@@ -619,6 +645,22 @@ public:
                 showTypeMenu(t);
                 return;
             }
+        }
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
+    {
+        (void)e;
+        wheelAccumulator_ += wheel.deltaX - wheel.deltaY;
+        if (wheelAccumulator_ > 0.1f)
+        {
+            navigatePage(-1);
+            wheelAccumulator_ = 0.f;
+        }
+        else if (wheelAccumulator_ < -0.1f)
+        {
+            navigatePage(1);
+            wheelAccumulator_ = 0.f;
         }
     }
 
@@ -645,6 +687,17 @@ private:
                 vuLevels_[t] = playing ? 1.0f : vuLevels_[t] * 0.82f;
             }
         }
+        // Update Ducking Gain Reduction
+        if (getDuckingGain)
+        {
+            float targetGain = getDuckingGain();
+            // Fast attack, slower release for visual
+            if (targetGain < duckingLevel_)
+                duckingLevel_ = duckingLevel_ * 0.5f + targetGain * 0.5f;
+            else
+                duckingLevel_ = duckingLevel_ * 0.85f + targetGain * 0.15f;
+        }
+
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
         if (seq_.isPlaying())
         {
@@ -746,23 +799,9 @@ private:
         if (onSlotCleared) onSlotCleared(slot);
     }
 
-    void changeGlobalBarCount(int delta)
+    void setGlobalStepCount(int newSteps)
     {
-        // Compute current global bar count (use track 0 as reference)
-        const int curBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
-        // Allowed bar counts: 1, 2, 4, 8, 16, 32
-        static constexpr int kAllowed[] = { 1, 2, 4, 8, 16, 32 };
-        static constexpr int kCount = 6;
-
-        // Find current index in allowed list
-        int idx = 0;
-        for (int i = 0; i < kCount; ++i)
-            if (kAllowed[i] == curBars) { idx = i; break; }
-
-        // Move to next/prev allowed value
-        idx = juce::jlimit(0, kCount - 1, idx + delta);
-        const int newBars  = kAllowed[idx];
-        const int newSteps = newBars * ::dsp::StepSequencer::kStepsPerBar;
+        const int newBars = newSteps / ::dsp::StepSequencer::kStepsPerBar;
 
         // Apply to ALL tracks
         for (int t = 0; t < 8; ++t)
@@ -808,11 +847,36 @@ private:
 
     void updatePageLabel()
     {
-        const int bars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
-        if (bars <= 1)
-            pageLabel_.setText("1 MESURE", juce::dontSendNotification);
+        const int firstBar  = viewOffsetSteps_ / ::dsp::StepSequencer::kStepsPerBar + 1;
+        const int lastBar   = firstBar + 1; // 32 steps visible = 2 bars
+        const int totalBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+
+        if (totalBars <= 1)
+            pageLabel_.setText("Mesure 1 / 1 \xe2\x96\xbe", juce::dontSendNotification);
         else
-            pageLabel_.setText(juce::String(bars) + " MESURES", juce::dontSendNotification);
+            pageLabel_.setText("Mesures " + juce::String(firstBar) + "-" + juce::String(std::min(lastBar, totalBars)) + " / " + juce::String(totalBars) + " \xe2\x96\xbe", juce::dontSendNotification);
+    }
+
+    void showGlobalStepCountMenu()
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Longueur globale");
+        const int curBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+
+        for (int bars : { 1, 2, 4, 8, 16, 32 })
+        {
+            const int steps = bars * ::dsp::StepSequencer::kStepsPerBar;
+            const bool isCurr = (curBars == bars);
+            menu.addItem(steps, juce::String(bars) + (bars == 1 ? " mesure" : " mesures")
+                         + "  (" + juce::String(steps) + " pas)"
+                         + (isCurr ? "  \xe2\x9c\x93" : ""));
+        }
+        menu.showMenuAsync(juce::PopupMenu::Options{},
+            [this](int result)
+            {
+                if (result > 0)
+                    setGlobalStepCount(result);
+            });
     }
 
     void showStepCountMenu(int track)
@@ -923,6 +987,8 @@ private:
     std::vector<juce::int64>    tapTimes_;
     float                       vuLevels_[8] = {};
     int                         dragHighlightTrack_ = -1;  // -1 = no drag active
+    float                       wheelAccumulator_ = 0.f;
+    float                       duckingLevel_ = 1.0f; // Smoothed for display
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
