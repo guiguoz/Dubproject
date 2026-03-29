@@ -23,6 +23,7 @@ namespace ui
 // Playhead + per-track VU bars drawn via paintOverChildren at 30 Hz.
 // ─────────────────────────────────────────────────────────────────────────────
 class StepSequencerPanel : public juce::Component,
+                           public juce::FileDragAndDropTarget,
                            private juce::Timer
 {
 public:
@@ -469,6 +470,28 @@ public:
             }
         }
 
+        // ── Drag-and-drop highlight overlay ──────────────────────────────────
+        if (dragHighlightTrack_ >= 0 && dragHighlightTrack_ < 8)
+        {
+            const int ry   = gridY + dragHighlightTrack_ * rowH;
+            const juce::Colour dropCol = trackColour(dragHighlightTrack_);
+
+            // Glowing row background
+            g.setColour(dropCol.withAlpha(0.15f));
+            g.fillRoundedRectangle(2.f, static_cast<float>(ry),
+                                   static_cast<float>(W - 4), static_cast<float>(rowH), 3.f);
+
+            // Bright border
+            g.setColour(dropCol.withAlpha(0.70f));
+            g.drawRoundedRectangle(2.f, static_cast<float>(ry),
+                                   static_cast<float>(W - 4), static_cast<float>(rowH), 3.f, 2.f);
+
+            // "DROP" label centred on the row
+            g.setColour(dropCol.withAlpha(0.90f));
+            g.setFont(juce::Font(juce::FontOptions{}.withHeight(12.f).withStyle("Bold")));
+            g.drawText("DROP", kLeftW, ry, gridW, rowH, juce::Justification::centred);
+        }
+
         if (!seq_.isPlaying()) return;
 
         const int globalStep = seq_.getCurrentStep();
@@ -512,6 +535,71 @@ public:
             g.fillEllipse(static_cast<float>(dotX),
                           static_cast<float>(gridY - 7),
                           6.f, 6.f);
+        }
+    }
+
+    // ── FileDragAndDropTarget — drag samples from Sononym / Explorer ────────────
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override
+    {
+        // Accept audio files only
+        for (const auto& f : files)
+        {
+            const juce::File file(f);
+            const auto ext = file.getFileExtension().toLowerCase();
+            if (ext == ".wav" || ext == ".aif" || ext == ".aiff" ||
+                ext == ".mp3" || ext == ".flac" || ext == ".ogg")
+                return true;
+        }
+        return false;
+    }
+
+    void fileDragEnter(const juce::StringArray& /*files*/, int /*x*/, int y) override
+    {
+        dragHighlightTrack_ = trackIndexAtY(y);
+        repaint();
+    }
+
+    void fileDragMove(const juce::StringArray& /*files*/, int /*x*/, int y) override
+    {
+        const int newTrack = trackIndexAtY(y);
+        if (newTrack != dragHighlightTrack_)
+        {
+            dragHighlightTrack_ = newTrack;
+            repaint();
+        }
+    }
+
+    void fileDragExit(const juce::StringArray& /*files*/) override
+    {
+        dragHighlightTrack_ = -1;
+        repaint();
+    }
+
+    void filesDropped(const juce::StringArray& files, int /*x*/, int y) override
+    {
+        const int track = trackIndexAtY(y);
+        dragHighlightTrack_ = -1;
+        repaint();
+
+        if (track < 0 || track >= 8) return;
+
+        // Take the first valid audio file from the drop
+        for (const auto& f : files)
+        {
+            const juce::File file(f);
+            const auto ext = file.getFileExtension().toLowerCase();
+            if (ext == ".wav" || ext == ".aif" || ext == ".aiff" ||
+                ext == ".mp3" || ext == ".flac" || ext == ".ogg")
+            {
+                const std::string path = file.getFullPathName().toStdString();
+                slotFilePaths_[static_cast<std::size_t>(track)] = path;
+                setSlotLoaded(track, true);
+                setSlotSampleName(track, path);
+                if (onSlotFileLoaded)
+                    onSlotFileLoaded(track, path);
+                return;  // one file per drop
+            }
         }
     }
 
@@ -771,6 +859,22 @@ private:
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /// Convert a Y coordinate to a track index (0-7), or -1 if outside rows.
+    int trackIndexAtY(int y) const noexcept
+    {
+        static constexpr int kTopH = 18;
+        static constexpr int kPad  = 3;
+        const int rowAreaY = kTopH + kPad;
+        const int rowAreaH = getHeight() - rowAreaY - kPad;
+        if (rowAreaH <= 0) return -1;
+        const int rowH = rowAreaH / 8;
+        if (rowH <= 0) return -1;
+        const int rel = y - rowAreaY;
+        if (rel < 0) return -1;
+        const int track = rel / rowH;
+        return (track >= 0 && track < 8) ? track : -1;
+    }
+
     static constexpr float kMinBpm = 40.f;
     static constexpr float kMaxBpm = 240.f;
 
@@ -818,6 +922,7 @@ private:
     std::array<std::string, 8>  slotFilePaths_;
     std::vector<juce::int64>    tapTimes_;
     float                       vuLevels_[8] = {};
+    int                         dragHighlightTrack_ = -1;  // -1 = no drag active
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
