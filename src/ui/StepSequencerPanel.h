@@ -193,16 +193,16 @@ public:
             }
         }
 
-        // Page navigation buttons (◀ / ▶)
+        // Bar count arrows (◀ / ▶) — change the number of bars for all tracks
         prevPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x97\x80"));  // ◀
-        prevPageBtn_.onClick = [this] { navigatePage(-1); };
+        prevPageBtn_.onClick = [this] { changeGlobalBarCount(-1); };
         addAndMakeVisible(prevPageBtn_);
 
         nextPageBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
-        nextPageBtn_.onClick = [this] { navigatePage(+1); };
+        nextPageBtn_.onClick = [this] { changeGlobalBarCount(+1); };
         addAndMakeVisible(nextPageBtn_);
 
-        pageLabel_.setText("Bar 1-2", juce::dontSendNotification);
+        pageLabel_.setText("1 MESURE", juce::dontSendNotification);
         pageLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f)));
         pageLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
         pageLabel_.setJustificationType(juce::Justification::centred);
@@ -557,6 +557,22 @@ private:
                 vuLevels_[t] = playing ? 1.0f : vuLevels_[t] * 0.82f;
             }
         }
+        // Auto-scroll view to follow playhead when pattern is longer than 32 steps
+        if (seq_.isPlaying())
+        {
+            const int globalStep = seq_.getCurrentStep();
+            const int maxSteps   = trackStepCounts_[0];  // all tracks same length
+            const int trackStep  = globalStep % maxSteps;
+
+            // If playhead is outside the visible 32-step window, scroll to it
+            if (trackStep < viewOffsetSteps_ || trackStep >= viewOffsetSteps_ + 32)
+            {
+                viewOffsetSteps_ = (trackStep / 32) * 32;
+                refreshStepButtons();
+                resized();
+            }
+        }
+
         repaint();
     }
 
@@ -642,6 +658,42 @@ private:
         if (onSlotCleared) onSlotCleared(slot);
     }
 
+    void changeGlobalBarCount(int delta)
+    {
+        // Compute current global bar count (use track 0 as reference)
+        const int curBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+        // Allowed bar counts: 1, 2, 4, 8, 16, 32
+        static constexpr int kAllowed[] = { 1, 2, 4, 8, 16, 32 };
+        static constexpr int kCount = 6;
+
+        // Find current index in allowed list
+        int idx = 0;
+        for (int i = 0; i < kCount; ++i)
+            if (kAllowed[i] == curBars) { idx = i; break; }
+
+        // Move to next/prev allowed value
+        idx = juce::jlimit(0, kCount - 1, idx + delta);
+        const int newBars  = kAllowed[idx];
+        const int newSteps = newBars * ::dsp::StepSequencer::kStepsPerBar;
+
+        // Apply to ALL tracks
+        for (int t = 0; t < 8; ++t)
+        {
+            trackStepCounts_[t] = newSteps;
+            seq_.setTrackStepCount(t, newSteps);
+            stepCountBtns_[t].setButtonText(juce::String(newBars) + "b\xe2\x96\xbe");
+            if (onStepCountChanged) onStepCountChanged(t, newSteps);
+        }
+
+        // Reset view to start if shrinking
+        if (viewOffsetSteps_ >= newSteps)
+            viewOffsetSteps_ = 0;
+
+        updatePageLabel();
+        refreshStepButtons();
+        resized();
+    }
+
     void navigatePage(int delta)
     {
         int maxSteps = 16;
@@ -668,10 +720,11 @@ private:
 
     void updatePageLabel()
     {
-        const int firstBar = viewOffsetSteps_ / ::dsp::StepSequencer::kStepsPerBar + 1;
-        const int lastBar  = firstBar + 1;  // 32 steps = 2 bars visible
-        pageLabel_.setText("Bar " + juce::String(firstBar) + "-" + juce::String(lastBar),
-                           juce::dontSendNotification);
+        const int bars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+        if (bars <= 1)
+            pageLabel_.setText("1 MESURE", juce::dontSendNotification);
+        else
+            pageLabel_.setText(juce::String(bars) + " MESURES", juce::dontSendNotification);
     }
 
     void showStepCountMenu(int track)
