@@ -1,10 +1,11 @@
 #pragma once
 
 #include "Colours.h"
-#include "PianoKeyboardPanel.h"  // for ScaleType enum
+#include "PianoKeyboardPanel.h"
 
 #include <JuceHeader.h>
 #include <array>
+#include <vector>
 #include <cmath>
 
 namespace ui {
@@ -12,37 +13,43 @@ namespace ui {
 // ─────────────────────────────────────────────────────────────────────────────
 // SaxStaffPanel
 //
-// Displays a treble-clef musical staff showing the notes playable on tenor
-// saxophone for the current master key.
-//
-// Tenor sax transposition: written pitch = concert pitch + 2 semitones (1 tone).
-// If master key = C major, the sax reads / the panel displays D major.
-//
-// Scale notes are shown as filled note-heads on the staff over 1 octave.
+// Displays a beautifully engraved treble-clef musical staff showing the notes 
+// playable on the selected saxophone for the current master key.
+// Includes true diatonic spelling and key signature handling to prevent note overlap.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class SaxStaffPanel : public juce::Component
 {
 public:
+    enum class Transposition { TenorBb = 0, AltoEb, ConcertC };
+
     SaxStaffPanel()
     {
-        // Scale selector (mirrors PianoKeyboardPanel)
-        scaleCombo_.addItem("Major",            1);
-        scaleCombo_.addItem("Minor",            2);
+        // Scale selector
+        scaleCombo_.addItem("Majeur",            1);
+        scaleCombo_.addItem("Mineur",            2);
         scaleCombo_.addItem("Pentatonique Maj", 3);
         scaleCombo_.addItem("Pentatonique Min", 4);
         scaleCombo_.addItem("Blues",            5);
-        scaleCombo_.addItem("Dorian",           6);
+        scaleCombo_.addItem("Dorien",           6);
         scaleCombo_.setSelectedId(1, juce::dontSendNotification);
         scaleCombo_.onChange = [this] {
-            scaleType_ = static_cast<PianoKeyboardPanel::ScaleType>(
-                             scaleCombo_.getSelectedId() - 1);
+            scaleType_ = static_cast<PianoKeyboardPanel::ScaleType>(scaleCombo_.getSelectedId() - 1);
             repaint();
         };
         addAndMakeVisible(scaleCombo_);
-    }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+        // Transposition selector
+        transCombo_.addItem(juce::String::fromUTF8("T\xc3\xa9nor/Sopr (Si\xe2\x99\xad)"), 1);
+        transCombo_.addItem(juce::String::fromUTF8("Alto/Bari (Mi\xe2\x99\xad)"), 2);
+        transCombo_.addItem(juce::String::fromUTF8("Concert (Ut)"), 3);
+        transCombo_.setSelectedId(1, juce::dontSendNotification);
+        transCombo_.onChange = [this] {
+            trans_ = static_cast<Transposition>(transCombo_.getSelectedId() - 1);
+            repaint();
+        };
+        addAndMakeVisible(transCombo_);
+    }
 
     void setMasterKey(int keyRoot, bool isMajor) noexcept
     {
@@ -58,11 +65,10 @@ public:
         repaint();
     }
 
-    // ── Layout ────────────────────────────────────────────────────────────────
-
     void resized() override
     {
-        scaleCombo_.setBounds(8, 4, 180, 24);
+        scaleCombo_.setBounds(8, 6, 160, 24);
+        transCombo_.setBounds(176, 6, 160, 24);
     }
 
     void paint(juce::Graphics& g) override
@@ -76,285 +82,242 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        // Sax key = master key + 2 semitones (tenor Bb transposition)
-        const int saxKey = (masterKey_ + 2) % 12;
+        // Transposition math
+        int transOffset = 0;
+        juce::String transName = "";
+        if (trans_ == Transposition::TenorBb) { transOffset = 2; transName = juce::String::fromUTF8("T\xc3\xa9nor/Soprano"); }
+        else if (trans_ == Transposition::AltoEb) { transOffset = 9; transName = "Alto/Baryton"; }
+        else { transOffset = 0; transName = "Concert"; }
+
+        const int transposedKey = (masterKey_ + transOffset) % 12;
 
         // Info banner
         g.setColour(SaxFXColours::textSecondary);
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f)));
-        const juce::String info = "Sax Tenor Si\xe2\x99\xad  \xe2\x80\x94  "
-                                  "Concert : " + noteNameStr(masterKey_) +
-                                  (masterMajor_ ? " Maj" : " min") +
-                                  "  \xe2\x86\x92  Lecture sax : " +
-                                  noteNameStr(saxKey) +
-                                  (masterMajor_ ? " Maj" : " min");
-        g.drawText(info, 8, 32, W - 16, 16, juce::Justification::centredLeft, true);
+        const juce::String info = "Instrument : " + transName +
+                                  "  \xe2\x80\x94  Grille concert : " + noteNameStr(masterKey_) + (masterMajor_ ? " Maj" : " min") +
+                                  "  \xe2\x86\x92  Lecture : " + noteNameStr(transposedKey) + " " + scaleTypeName();
+        g.drawText(info, 8, 36, W - 16, 16, juce::Justification::centredLeft, true);
 
-        // Get scale notes (in sax-transposed key)
-        auto scaleNotes = buildScaleNotes(saxKey);
+        // Get notes to draw based on correct diatonic spelling
+        auto notes = spellScaleNotes(transposedKey);
 
-        drawStaff(g, saxKey, scaleNotes, W, H);
+        drawStaff(g, transposedKey, notes, W, H);
     }
 
 private:
-    // ── Scale tables ─────────────────────────────────────────────────────────
+    struct SpelledNote {
+        int absStep;
+        int accidental;    // -1 (flat), 0 (natural), 1 (sharp)
+        juce::String name; // Formatted note name for UI
+    };
 
-    static constexpr int kMajorScale[7]        = { 0, 2, 4, 5, 7, 9, 11 };
-    static constexpr int kMinorScale[7]        = { 0, 2, 3, 5, 7, 8, 10 };
-    static constexpr int kPentatonicMajor[5]   = { 0, 2, 4, 7, 9 };
-    static constexpr int kPentatonicMinor[5]   = { 0, 3, 5, 7, 10 };
-    static constexpr int kBlues[6]             = { 0, 3, 5, 6, 7, 10 };
-    static constexpr int kDorian[7]            = { 0, 2, 3, 5, 7, 9, 10 };
+    struct ScaleDef { int interval; int degreeOffset; };
 
-    // Treble clef staff: diatonic steps from bottom line (E4=0)
-    // C=−1 (ledger below), D=0.5, E=1, F=1.5, G=2, A=2.5, B=3, C=3.5, D=4, E=4.5, F=5
-    // Mapping: MIDI semitone within octave → diatonic step offset from E4
-    // We'll use absolute MIDI note numbers for precise placement.
-
-    // Semitone → diatonic step from E4 (E4 = MIDI 64 = step 0 on bottom line)
-    // Steps: 0=E4, 0.5=F4, 1=G4, 1.5=A4, 2=B4, 2.5=C5, 3=D5, 3.5=E5, 4=F5, 4.5=G5, 5=A5...
-    static float midiToDiatonicStep(int midi) noexcept
+    std::vector<ScaleDef> getScaleDef() const
     {
-        // C4=60, D4=62, E4=64, F4=65, G4=67, A4=69, B4=71, C5=72...
-        // Diatonic step offset from E4 (step 0), each white key = 0.5 steps
-        static constexpr int kDiatonicFromC[12] = {
-        //  C   C#  D   D#  E   F   F#  G   G#  A   A#  B
-            -3, -3, -2, -2, -1,  0,  0,  1,  1,  2,  2,  3
-        };  // offset in half-steps (diatonic) from E4 when in same octave
-
-        // Base: E4 = MIDI 64
-        const int diffFromE4 = midi - 64;
-        const int octave     = (int)std::floor(diffFromE4 / 12.f);
-        const int semInOct   = ((midi % 12) + 12) % 12;  // 0=C
-        // Diatonic position of E = 0 (in C major: C=0,D=1,E=2 → relative to E: E=0)
-        // semitone class within octave, diatonic half-steps above C of that octave
-        const float diatonicAboveC = kDiatonicFromC[semInOct] + 2.f; // E = index 2 above C
-        return static_cast<float>(octave) * 7.f + diatonicAboveC;
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    std::array<bool, 12> buildScaleNotes(int root) const
-    {
-        std::array<bool, 12> out {};
-        const int* ptr = nullptr;
-        int len = 0;
         switch (scaleType_)
         {
-            case PianoKeyboardPanel::ScaleType::Major:
-                ptr = kMajorScale; len = 7; break;
-            case PianoKeyboardPanel::ScaleType::Minor:
-                ptr = kMinorScale; len = 7; break;
-            case PianoKeyboardPanel::ScaleType::PentatonicMaj:
-                ptr = kPentatonicMajor; len = 5; break;
-            case PianoKeyboardPanel::ScaleType::PentatonicMin:
-                ptr = kPentatonicMinor; len = 5; break;
-            case PianoKeyboardPanel::ScaleType::Blues:
-                ptr = kBlues; len = 6; break;
-            case PianoKeyboardPanel::ScaleType::Dorian:
-                ptr = kDorian; len = 7; break;
+            case PianoKeyboardPanel::ScaleType::Major:         return {{0,0},{2,1},{4,2},{5,3},{7,4},{9,5},{11,6}};
+            case PianoKeyboardPanel::ScaleType::Minor:         return {{0,0},{2,1},{3,2},{5,3},{7,4},{8,5},{10,6}};
+            case PianoKeyboardPanel::ScaleType::PentatonicMaj: return {{0,0},{2,1},{4,2},{7,4},{9,5}};
+            case PianoKeyboardPanel::ScaleType::PentatonicMin: return {{0,0},{3,2},{5,3},{7,4},{10,6}};
+            case PianoKeyboardPanel::ScaleType::Blues:         return {{0,0},{3,2},{5,3},{6,3},{7,4},{10,6}}; // Degree 3 used twice intentionally (e.g., F and F#)
+            case PianoKeyboardPanel::ScaleType::Dorian:        return {{0,0},{2,1},{3,2},{5,3},{7,4},{9,5},{10,6}};
         }
-        for (int i = 0; i < len; ++i)
-            out[(root + ptr[i]) % 12] = true;
-        return out;
+        return {};
+    }
+
+    std::vector<SpelledNote> spellScaleNotes(int rootPitch) const
+    {
+        std::vector<SpelledNote> result;
+        
+        // 1. Determine key signature of the scale's relative major
+        int majorRoot = rootPitch;
+        if (scaleType_ == PianoKeyboardPanel::ScaleType::Minor ||
+            scaleType_ == PianoKeyboardPanel::ScaleType::PentatonicMin ||
+            scaleType_ == PianoKeyboardPanel::ScaleType::Blues) {
+            majorRoot = (rootPitch + 3) % 12;
+        } else if (scaleType_ == PianoKeyboardPanel::ScaleType::Dorian) {
+            majorRoot = (rootPitch - 2 + 12) % 12;
+        }
+
+        static const int majorPitchToK[12] = {0, -5, 2, -3, 4, -1, -6, 1, -4, 3, -2, 5};
+        int K = majorPitchToK[majorRoot];
+
+        // 2. Determine root diatonic step (0=C .. 6=B)
+        int rootStep = 0;
+        int nat[12] = {0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6};
+        if (nat[rootPitch] != -1) rootStep = nat[rootPitch];
+        else {
+            if (rootPitch == 1) rootStep = (K > 0) ? 0 : 1;
+            if (rootPitch == 3) rootStep = (K > 0) ? 1 : 2;
+            if (rootPitch == 6) rootStep = (K > 0) ? 3 : 4;
+            if (rootPitch == 8) rootStep = (K > 0) ? 4 : 5;
+            if (rootPitch == 10) rootStep = (K > 0) ? 5 : 6;
+        }
+
+        // 3. Anchor in a comfortable saxophone reading octave (C4 = step 28. D4 = step 29)
+        int rootAbsStep = 4 * 7 + rootStep; 
+        if (rootAbsStep < 29) rootAbsStep += 7; // Push up to D4-C5 range
+
+        // 4. Spell notes
+        auto def = getScaleDef();
+        for (size_t i = 0; i <= def.size(); ++i) {
+            bool isOctave = (i == def.size());
+            auto d = def[isOctave ? 0 : i];
+            
+            int interval = d.interval + (isOctave ? 12 : 0);
+            int degOffset = d.degreeOffset + (isOctave ? 7 : 0);
+
+            int absStep = rootAbsStep + degOffset;
+            int stepName = absStep % 7;
+            int targetPitchClass = (rootPitch + interval) % 12;
+            static const int kNat[7] = {0, 2, 4, 5, 7, 9, 11};
+            int naturalPitchClass = kNat[stepName];
+
+            int acc = targetPitchClass - naturalPitchClass;
+            if (acc > 6) acc -= 12;
+            if (acc < -5) acc += 12;
+
+            static const char* kNames[7] = {"C", "D", "E", "F", "G", "A", "B"};
+            juce::String name = kNames[stepName];
+            if (acc == 1) name += juce::String::fromUTF8("\xe2\x99\xaf"); // Sharp
+            else if (acc == -1) name += juce::String::fromUTF8("\xe2\x99\xad"); // Flat
+
+            result.push_back({absStep, acc, name});
+        }
+
+        return result;
+    }
+
+    void drawStaff(juce::Graphics& g, int rootPitch, const std::vector<SpelledNote>& notes, int W, int H) const
+    {
+        const float staffX = 70.f;
+        const float staffRight = W - 30.f;
+        const float staffMidY = H * 0.55f; // Centred slightly lower
+        const float lineSpacing = 10.f;
+        const float staffBot = staffMidY + 2.f * lineSpacing; // E4
+        const float staffTop = staffMidY - 2.f * lineSpacing; // F5
+
+        // 1. Draw 5 staff lines
+        g.setColour(SaxFXColours::textPrimary.withAlpha(0.6f));
+        for (int i = 0; i < 5; ++i) {
+            float ly = staffTop + i * lineSpacing;
+            g.drawLine(staffX - 10.f, ly, staffRight, ly, 1.2f);
+        }
+
+        // 2. Draw treble clef
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 7.0f)));
+        g.setColour(SaxFXColours::textPrimary);
+        g.drawText(juce::String::fromUTF8("\xf0\x9d\x84\x9e"), // G Clef Unicode
+                   juce::Rectangle<float>(staffX - 5.f, staffTop - lineSpacing * 1.3f, 30.f, lineSpacing * 8.f),
+                   juce::Justification::centred, false);
+
+        // 3. Determine Key Signature
+        int majorRoot = rootPitch;
+        if (scaleType_ == PianoKeyboardPanel::ScaleType::Minor ||
+            scaleType_ == PianoKeyboardPanel::ScaleType::PentatonicMin ||
+            scaleType_ == PianoKeyboardPanel::ScaleType::Blues) majorRoot = (rootPitch + 3) % 12;
+        else if (scaleType_ == PianoKeyboardPanel::ScaleType::Dorian) majorRoot = (rootPitch - 2 + 12) % 12;
+
+        static const int majorPitchToK[12] = {0, -5, 2, -3, 4, -1, -6, 1, -4, 3, -2, 5};
+        int K = majorPitchToK[majorRoot];
+
+        int keySig[7] = {0}; // Array tracking accidental for C, D, E, F, G, A, B
+        float kx = staffX + 30.f;
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 2.2f)));
+        
+        if (K > 0) {
+            int sharpsOrder[7] = {3, 0, 4, 1, 5, 2, 6}; // F C G D A E B
+            int sSteps[7] = {38, 35, 39, 36, 33, 37, 34}; // Treble positions for sharps
+            for (int i = 0; i < K; ++i) {
+                keySig[sharpsOrder[i]] = 1;
+                float sy = staffBot - (sSteps[i] - 30) * (lineSpacing / 2.0f);
+                g.drawText(juce::String::fromUTF8("\xe2\x99\xaf"), juce::Rectangle<float>(kx, sy - lineSpacing, 12.f, lineSpacing * 2.f), juce::Justification::centred, false);
+                kx += 10.f;
+            }
+        } else if (K < 0) {
+            int flatsOrder[7] = {6, 2, 5, 1, 4, 0, 3}; // B E A D G C F
+            int fSteps[7] = {34, 37, 33, 36, 32, 35, 31}; // Treble positions for flats
+            for (int i = 0; i < -K; ++i) {
+                keySig[flatsOrder[i]] = -1;
+                float sy = staffBot - (fSteps[i] - 30) * (lineSpacing / 2.0f);
+                g.drawText(juce::String::fromUTF8("\xe2\x99\xad"), juce::Rectangle<float>(kx, sy - lineSpacing, 12.f, lineSpacing * 2.f), juce::Justification::centred, false);
+                kx += 10.f;
+            }
+        }
+
+        kx += 15.f; // Spacing before first note
+
+        // 4. Draw Scale Notes
+        if (notes.empty()) return;
+        float stepX = (staffRight - kx - 20.f) / notes.size();
+        float noteHeadR = lineSpacing * 0.48f;
+
+        int barAccidentals[7]; // Track overrides within the bar
+        for(int i=0; i<7; ++i) barAccidentals[i] = keySig[i];
+
+        for (size_t i = 0; i < notes.size(); ++i) {
+            auto& n = notes[i];
+            float nx = kx + i * stepX;
+            float ny = staffBot - (n.absStep - 30) * (lineSpacing / 2.0f);
+
+            // Ledger lines
+            g.setColour(SaxFXColours::textPrimary.withAlpha(0.6f));
+            if (n.absStep <= 29) { // D4 and below
+                for (int s = 28; s >= n.absStep; s -= 2) {
+                    float ly = staffBot - (s - 30) * (lineSpacing / 2.f);
+                    g.drawLine(nx - noteHeadR*2.2f, ly, nx + noteHeadR*2.2f, ly, 1.2f);
+                }
+            } else if (n.absStep >= 39) { // G5 and above
+                for (int s = 40; s <= n.absStep; s += 2) {
+                    float ly = staffBot - (s - 30) * (lineSpacing / 2.f);
+                    g.drawLine(nx - noteHeadR*2.2f, ly, nx + noteHeadR*2.2f, ly, 1.2f);
+                }
+            }
+
+            // Accidental (Draw only if it differs from the current bar's key signature state)
+            int stepClass = n.absStep % 7;
+            if (n.accidental != barAccidentals[stepClass]) {
+                juce::String accStr;
+                if (n.accidental == 1) accStr = juce::String::fromUTF8("\xe2\x99\xaf"); // #
+                else if (n.accidental == -1) accStr = juce::String::fromUTF8("\xe2\x99\xad"); // b
+                else accStr = juce::String::fromUTF8("\xe2\x99\xae"); // natural
+
+                g.setColour(SaxFXColours::textPrimary);
+                g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 2.2f)));
+                g.drawText(accStr, juce::Rectangle<float>(nx - noteHeadR*4.0f, ny - lineSpacing, noteHeadR*2.5f, lineSpacing * 2.f), juce::Justification::centredRight, false);
+                barAccidentals[stepClass] = n.accidental; // update state for next note on this line
+            }
+
+            // Note head
+            g.setColour(juce::Colour(0xFF4CDFA8)); // Neon green
+            g.fillEllipse(nx - noteHeadR*1.3f, ny - noteHeadR, noteHeadR*2.6f, noteHeadR*2.0f);
+
+            // Stem
+            g.setColour(juce::Colour(0xFF4CDFA8));
+            if (n.absStep >= 34) { // B4 and above -> Stem goes DOWN from LEFT side
+                g.drawLine(nx - noteHeadR*0.9f, ny, nx - noteHeadR*0.9f, ny + lineSpacing * 3.2f, 1.5f);
+            } else { // Stem goes UP from RIGHT side
+                g.drawLine(nx + noteHeadR*0.9f, ny, nx + noteHeadR*0.9f, ny - lineSpacing * 3.2f, 1.5f);
+            }
+
+            // Text Label (Staggered to prevent overlap)
+            g.setColour(SaxFXColours::textSecondary);
+            g.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f)));
+            float labelY = staffBot + lineSpacing * 2.5f + (i % 2 == 1 ? 12.f : 0.f);
+            g.drawText(n.name, juce::Rectangle<float>(nx - 15.f, labelY, 30.f, 12.f), juce::Justification::centred, false);
+        }
     }
 
     static juce::String noteNameStr(int pitchClass) noexcept
     {
         static const char* kNames[12] = {
-            "C","C\xe2\x99\xaf","D","E\xe2\x99\xad","E","F",
-            "F\xe2\x99\xaf","G","A\xe2\x99\xad","A","B\xe2\x99\xad","B"
+            "C", "C\xe2\x99\xaf", "D", "E\xe2\x99\xad", "E", "F",
+            "F\xe2\x99\xaf", "G", "A\xe2\x99\xad", "A", "B\xe2\x99\xad", "B"
         };
-        return kNames[pitchClass % 12];
-    }
-
-    // ── Staff drawing ─────────────────────────────────────────────────────────
-
-    void drawStaff(juce::Graphics& g, int saxKey,
-                   const std::array<bool, 12>& scaleNotes,
-                   int W, int H) const
-    {
-        // Staff area
-        const float staffX     = 60.f;   // left margin (after clef)
-        const float staffRight = W - 24.f;
-        const float staffMidY  = H * 0.50f;   // centre of the 5 lines
-        const float lineSpacing = 10.f;  // pixels between staff lines
-        const float staffTop   = staffMidY - 2.f * lineSpacing;
-        const float staffBot   = staffMidY + 2.f * lineSpacing;
-
-        // 5 staff lines
-        g.setColour(SaxFXColours::textPrimary.withAlpha(0.85f));
-        for (int li = 0; li < 5; ++li)
-        {
-            const float ly = staffTop + li * lineSpacing;
-            g.drawLine(staffX, ly, staffRight, ly, 1.0f);
-        }
-
-        // Treble clef (simplified — Unicode glyph)
-        g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 7.5f)));
-        g.setColour(SaxFXColours::textPrimary);
-        g.drawText(juce::String::fromUTF8("\xf0\x9d\x84\x9e"),  // U+1D11E 𝄞
-                   juce::Rectangle<float>(4.f, staffTop - lineSpacing * 1.5f,
-                                          50.f, lineSpacing * 9.f),
-                   juce::Justification::centred, false);
-
-        // Key signature (sharps/flats for sax key)
-        drawKeySignature(g, saxKey, staffX, staffTop, lineSpacing);
-
-        // Scale note heads (1 octave from D4, the "middle" sax register)
-        // Starting MIDI note: find the scale root in octave 5 (sax reading range)
-        const int baseOctave   = 5;   // octave 5 = sax comfortable range
-        const int baseMidi     = baseOctave * 12 + saxKey;  // e.g. D5 = 74 for D key
-        const float noteHeadR  = lineSpacing * 0.45f;
-        const float noteSpacingX = (staffRight - staffX - 60.f); // available width
-
-        auto scaleArr = getScaleArray();
-        const int numNotes = static_cast<int>(scaleArr.size());
-        if (numNotes == 0) return;
-
-        // Include octave repeat (first note + 1 octave)
-        const int totalNotes = numNotes + 1;
-        const float stepX    = noteSpacingX / static_cast<float>(totalNotes + 1);
-
-        for (int ni = 0; ni <= numNotes; ++ni)
-        {
-            const int semOffset  = (ni < numNotes) ? scaleArr[ni] : 12;
-            const int midi       = baseMidi + semOffset;
-            const int pitchClass = midi % 12;
-            const bool inScale   = scaleNotes[pitchClass];
-
-            // Diatonic step position on staff (0 = bottom line E4, 0.5 = F4...)
-            const float dStep  = midiToDiatonicStep(midi);
-            // Bottom line of treble clef staff is E4 (dStep=0 → staffBot)
-            const float noteY  = staffBot - dStep * lineSpacing;
-            const float noteX  = staffX + 60.f + (ni + 1) * stepX;
-
-            // Ledger lines if needed
-            drawLedgerLines(g, noteX, noteY, noteHeadR, staffTop, staffBot, lineSpacing);
-
-            // Note head
-            const juce::Colour headCol = inScale
-                ? juce::Colour(0xFF4CDFA8)
-                : SaxFXColours::textSecondary.withAlpha(0.4f);
-            g.setColour(headCol);
-            g.fillEllipse(noteX - noteHeadR * 1.4f, noteY - noteHeadR,
-                          noteHeadR * 2.8f, noteHeadR * 2.0f);
-
-            // Stem up
-            if (dStep < 4.f)
-            {
-                g.setColour(headCol);
-                g.drawLine(noteX + noteHeadR * 1.2f, noteY,
-                           noteX + noteHeadR * 1.2f, noteY - lineSpacing * 3.5f, 1.3f);
-            }
-
-            // Accidental (sharp/flat) if black key
-            const bool isBlack = isBlackKey(pitchClass);
-            if (isBlack)
-            {
-                g.setColour(headCol);
-                g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 1.6f)));
-                g.drawText("#", juce::Rectangle<float>(noteX - noteHeadR * 3.0f,
-                                                       noteY - noteHeadR * 1.5f,
-                                                       noteHeadR * 2.5f, noteHeadR * 3.0f),
-                           juce::Justification::centred, false);
-            }
-
-            // Note name label below staff
-            g.setColour(inScale ? juce::Colour(0xFF4CDFA8).withAlpha(0.8f)
-                                : SaxFXColours::textSecondary.withAlpha(0.5f));
-            g.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
-            g.drawText(noteNameStr(pitchClass),
-                       juce::Rectangle<float>(noteX - 12.f, staffBot + lineSpacing * 1.2f,
-                                              24.f, 12.f),
-                       juce::Justification::centred, false);
-        }
-
-        // Scale name label
-        g.setColour(SaxFXColours::textSecondary);
-        g.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f)));
-        const juce::String scaleLabel = noteNameStr(saxKey) + " " + scaleTypeName();
-        g.drawText(scaleLabel, juce::Rectangle<float>(staffX, staffBot + lineSpacing * 2.5f,
-                                                      200.f, 14.f),
-                   juce::Justification::centredLeft, false);
-    }
-
-    void drawKeySignature(juce::Graphics& g, int saxKey,
-                          float staffX, float staffTop, float lineSpacing) const
-    {
-        // Number of sharps/flats for major keys
-        // Sharp keys:  G=1, D=2, A=3, E=4, B=5, F#=6, C#=7
-        // Flat keys:   F=1, Bb=2, Eb=3, Ab=4, Db=5, Gb=6, Cb=7
-        static constexpr int kSharps[12] = { 0, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10, 5 };
-        // negative = flats count, positive = sharps count
-        const int sig = kSharps[saxKey];  // sharps needed for this major key
-        const bool useFlats = (sig > 6);
-        const int count = useFlats ? (12 - sig) : sig;
-
-        if (count == 0) return;
-
-        // Sharp/flat positions on treble clef staff (diatonic steps above E4)
-        static constexpr float kSharpPositions[7] = { 4.5f,3.0f,5.0f,3.5f,2.0f,4.0f,2.5f };
-        static constexpr float kFlatPositions[7]  = { 2.0f,3.5f,1.5f,3.0f,1.0f,2.5f,0.5f };
-
-        g.setColour(SaxFXColours::textPrimary.withAlpha(0.85f));
-        g.setFont(juce::Font(juce::FontOptions{}.withHeight(lineSpacing * 1.8f)));
-
-        const float* positions = useFlats ? kFlatPositions : kSharpPositions;
-        const juce::String symbol = useFlats ? "\xe2\x99\xad" : "#";
-
-        for (int i = 0; i < count; ++i)
-        {
-            const float noteY = (staffTop + 4 * lineSpacing) - positions[i] * lineSpacing;
-            g.drawText(symbol,
-                       juce::Rectangle<float>(staffX + 2.f + i * 10.f,
-                                              noteY - lineSpacing,
-                                              10.f, lineSpacing * 2.f),
-                       juce::Justification::centred, false);
-        }
-    }
-
-    void drawLedgerLines(juce::Graphics& g, float noteX, float noteY,
-                         float noteHeadR, float staffTop, float staffBot,
-                         float lineSpacing) const
-    {
-        g.setColour(SaxFXColours::textPrimary.withAlpha(0.7f));
-        const float lw = noteHeadR * 3.0f;
-
-        // Above staff
-        if (noteY < staffTop - 0.5f * lineSpacing)
-        {
-            for (float ly = staffTop - lineSpacing; ly >= noteY - lineSpacing * 0.5f;
-                 ly -= lineSpacing)
-                g.drawLine(noteX - lw, ly, noteX + lw, ly, 0.8f);
-        }
-        // Below staff
-        if (noteY > staffBot + 0.5f * lineSpacing)
-        {
-            for (float ly = staffBot + lineSpacing; ly <= noteY + lineSpacing * 0.5f;
-                 ly += lineSpacing)
-                g.drawLine(noteX - lw, ly, noteX + lw, ly, 0.8f);
-        }
-    }
-
-    std::vector<int> getScaleArray() const
-    {
-        switch (scaleType_)
-        {
-            case PianoKeyboardPanel::ScaleType::Major:
-                return { kMajorScale, kMajorScale + 7 };
-            case PianoKeyboardPanel::ScaleType::Minor:
-                return { kMinorScale, kMinorScale + 7 };
-            case PianoKeyboardPanel::ScaleType::PentatonicMaj:
-                return { kPentatonicMajor, kPentatonicMajor + 5 };
-            case PianoKeyboardPanel::ScaleType::PentatonicMin:
-                return { kPentatonicMinor, kPentatonicMinor + 5 };
-            case PianoKeyboardPanel::ScaleType::Blues:
-                return { kBlues, kBlues + 6 };
-            case PianoKeyboardPanel::ScaleType::Dorian:
-                return { kDorian, kDorian + 7 };
-        }
-        return {};
+        return juce::String::fromUTF8(kNames[pitchClass % 12]);
     }
 
     juce::String scaleTypeName() const
@@ -371,21 +334,13 @@ private:
         return "";
     }
 
-    static bool isBlackKey(int pitchClass) noexcept
-    {
-        static constexpr bool kBlack[12] = {
-            false,true,false,true,false,false,true,false,true,false,true,false
-        };
-        return kBlack[pitchClass % 12];
-    }
-
-    // ── Members ───────────────────────────────────────────────────────────────
-
     juce::ComboBox scaleCombo_;
+    juce::ComboBox transCombo_;
 
     int         masterKey_   = 0;
     bool        masterMajor_ = true;
     PianoKeyboardPanel::ScaleType scaleType_ = PianoKeyboardPanel::ScaleType::Major;
+    Transposition trans_ = Transposition::TenorBb;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SaxStaffPanel)
 };
