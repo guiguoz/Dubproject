@@ -1,174 +1,244 @@
-# SaxFX Live
+# SONIC MONOLITH | SAX-OS
 
-Real-time audio processing application for live saxophone performance.
+Real-time audio effects processor for live saxophone performance, built with JUCE/C++.
+Designed for dub techno live sets with a neon dark "SAX-OS" interface.
 
-**Entrée** : Focusrite Scarlett Solo 2e gen (ASIO)
-**Effets** : Réverb, Flanger, Harmoniseur, Sampler
-**Contrôle** : Pédalier MIDI (ex. Behringer FCB1010)
-**Latence cible** : ≤ 20 ms
+**Input** : Focusrite Scarlett Solo 2nd gen (ASIO / WASAPI fallback)
+**Effects** : 12 effect types with drag-and-drop effect chain
+**Sampler** : 8-track step sequencer with AI-assisted mixing
+**Control** : MIDI pedalboard (e.g. Behringer FCB1010)
+**Target latency** : <= 20 ms
 
 ---
 
-## Prérequis
+## Features
 
-| Outil | Version | Installation |
-|-------|---------|-------------|
-| CMake | ≥ 3.22 | `winget install Kitware.CMake` |
+### Effect Chain (12 types)
+
+| Effect | Description | Presets |
+|--------|-------------|---------|
+| Reverb | JUCE freeverb (room, damping, width, mix) | 6 |
+| Delay | Tempo-synced with note divisions | 5 |
+| Flanger | LFO-modulated comb filter | 5 |
+| Harmonizer | 2-voice pitch-shifted harmony (WSOLA) | 7 |
+| Envelope Filter | Dynamics-driven auto-wah | 5 |
+| Octaver | Sub-octave generator (-1, -2 oct) | 5 |
+| PitchFork | Fixed pitch shift | 5 |
+| Whammy | Expression-controlled pitch bend | 5 |
+| AutoPitch | Chromatic pitch correction | 4 |
+| Slicer | Rhythmic gate/tremolo | 6 (PresetLibrary) + 15 built-in |
+| Accordeur | Chromatic tuner (A=415-465 Hz) | 2 |
+| Synth | Pitch-tracking synth (PolyBLEP, SuperSaw, Moog filter) | 22 built-in |
+
+Effects are organized in a modular chain with per-effect enable/disable,
+drag-and-drop reordering, and SmartMixEngine auto-optimization.
+
+### Synth Effect
+
+Full pitch-tracking synthesizer that follows the saxophone input:
+
+- **Oscillators**: Saw, Square, Triangle, Sine, SuperSaw (7-voice unison with detune)
+- **Filter**: Moog ladder (4-pole resonant lowpass)
+- **Envelope**: Amplitude envelope follower with attack/release
+- **8 parameters**: Waveform, Octave, Detune, Cutoff, Resonance, Attack, Release, Mix
+- **22 presets**: Dub Techno (sub bass, chord stab, deep pad, dub siren, techno lead),
+  Techno (acid bass, reese, hoover, Detroit pad), Leads, Ambient, Percussive, FX/Creative
+
+### Sampler & Step Sequencer
+
+- 8 sample slots with WAV loading
+- 16-step sequencer per track with velocity
+- BPM sync, swing, per-track mute/solo
+- AI content classification (ONNX) for automatic sample categorization
+
+### AI / ONNX Integration
+
+- **AiContentClassifier**: Neural network sample classifier (KICK, SNARE, HIHAT, BASS, PAD, SYNTH, PERC)
+- **AiMixEngine**: ML-driven EQ + gain optimization across 8 slots
+- **FeatureExtractor**: Real-time spectral analysis (RMS, centroid, crest factor)
+- **InferenceThread**: Lock-free async inference with < 5 ms latency
+- Fallback to heuristic rules when ONNX models unavailable
+
+### UI: SAX-OS Neon Dark Theme
+
+- Near-black backgrounds (#0A0A0A, #131314, #1C1B1C)
+- Neon green primary (#4CDFA8) with per-effect accent colours
+- Dark metal rotary knobs with neon value arcs and glow
+- Glow buttons, neon toggle circles, dark rounded popups
+- VU meter with exponential smoothing (attack 0.3, release 0.05)
+- Inter font family, uppercase tracking labels
+
+---
+
+## Prerequisites
+
+| Tool | Version | Installation |
+|------|---------|-------------|
+| CMake | >= 3.22 | `winget install Kitware.CMake` |
 | MSVC | 2022 | [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) |
-| Git | récent | `winget install Git.Git` |
-| ASIO SDK | 2.3+ | [Steinberg.net](https://www.steinberg.net/developers/) (gratuit, compte requis) |
-| Python | 3.9+ | `winget install Python.Python.3` (pour test latence) |
+| Git | recent | `winget install Git.Git` |
+| ASIO SDK | 2.3+ | [Steinberg.net](https://www.steinberg.net/developers/) (free, account required) |
+| ONNX Runtime | 1.24.4 | Auto-downloaded by CMake (`FetchContent`) |
+| Python | 3.9+ | `winget install Python.Python.3` (for AI training scripts) |
 
-> **Note ASIO :** Le SDK Steinberg n'est pas redistributable. Télécharge-le manuellement
-> et extrais-le dans `third_party/ASIO/`. Sans ce SDK, l'app utilisera WASAPI en fallback
-> (latence ~10–20 ms, suffisante pour les tests).
+> **ASIO note:** The Steinberg SDK is not redistributable. Download it manually
+> and extract to `third_party/ASIO/`. Without it, the app uses WASAPI fallback
+> (latency ~10-20 ms, sufficient for testing).
 
 ---
 
 ## Build
 
-### 1. Cloner le repo avec JUCE
+### 1. Clone with JUCE submodule
 
 ```bash
-git clone --recurse-submodules https://github.com/<ton-compte>/saxfx-live.git
-cd saxfx-live
+git clone --recurse-submodules https://github.com/guiguoz/Dubproject.git
+cd Dubproject
 ```
 
-Ou si déjà cloné sans submodules :
+Or if already cloned without submodules:
 ```bash
 git submodule update --init --recursive
 ```
 
-### 2. Configurer CMake
+### 2. Configure CMake
 
-**Sans ASIO SDK (WASAPI fallback) :**
+**Without ASIO SDK (WASAPI fallback):**
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 ```
 
-**Avec ASIO SDK :**
+**With ASIO SDK:**
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DJUCE_ASIO_SDK_PATH=third_party/ASIO
 ```
 
-### 3. Compiler
+### 3. Build
 
 ```bash
 cmake --build build --config Release --parallel
 ```
 
-### 4. Lancer
+### 4. Run
 
 ```bash
-./build/SaxFXLive_artefacts/Release/SaxFXLive.exe
+./build/SaxFXLive_artefacts/Release/SaxFX\ Live.exe
 ```
+
+### 5. Run tests
+
+```bash
+cmake --build build --config Release --target SaxFXTests --parallel
+./build/tests/Release/SaxFXTests.exe
+```
+
+180 tests (Catch2 v3.5.4). Current status: 179/180 pass (1 flaky timing test).
 
 ---
 
-## Test de latence
-
-```bash
-pip install pyaudio
-python scripts/latency_test.py
-```
-
-Cible : ≤ 20 ms avec ASIO, ≤ 30 ms avec WASAPI.
-
----
-
-## Structure du projet
+## Project Structure
 
 ```
-saxfx-live/
-├── src/                  Code source C++ (JUCE)
-├── tests/                Tests unitaires (Catch2)
-├── docs/                 Documentation technique
-│   └── project-format.md Spec du format .saxfx
-├── scripts/              Outils (setup, test latence)
+projet-dub/
+├── src/
+│   ├── MainComponent.h/.cpp      Main app (audio callback, UI layout)
+│   ├── dsp/                      DSP engine
+│   │   ├── IEffect.h             Effect interface + EffectType enum
+│   │   ├── EffectChain.h/.cpp    Ordered effect chain container
+│   │   ├── EffectFactory.h/.cpp  Effect creation by name/enum
+│   │   ├── EffectChainOptimizer  AI-driven parameter optimization
+│   │   ├── SmartMixEngine.h      Intelligent defaults + genre overrides
+│   │   ├── SynthEffect.h/.cpp    Pitch-tracking synth (22 presets)
+│   │   ├── DelayEffect.h/.cpp    Tempo-synced delay (5 presets)
+│   │   ├── SlicerEffect.h/.cpp   Rhythmic gate (15 built-in presets)
+│   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
+│   │   ├── [12 more effects]     Reverb, Flanger, Harmonizer, etc.
+│   │   ├── DspPipeline.h/.cpp    Audio processing pipeline
+│   │   ├── Sampler.h/.cpp        8-slot sample player
+│   │   ├── StepSequencer.h       16-step sequencer
+│   │   ├── BpmDetector.h/.cpp    Tempo detection
+│   │   ├── KeyDetector.h/.cpp    Key/scale detection
+│   │   ├── YinPitchTracker.cpp   YIN pitch detection
+│   │   ├── WsolaShifter.h/.cpp   WSOLA pitch shifting
+│   │   ├── AiContentClassifier   ONNX sample classifier
+│   │   ├── AiMixEngine.h/.cpp    ONNX mix optimizer
+│   │   ├── FeatureExtractor      Spectral feature extraction
+│   │   ├── OnnxInference.h       ONNX Runtime wrapper
+│   │   └── InferenceThread.h     Async inference thread
+│   ├── ui/                       UI components
+│   │   ├── SaxOsLookAndFeel      Neon dark theme (SAX-OS)
+│   │   ├── SaxFXLookAndFeel      Original theme
+│   │   ├── Colours.h             Palette + per-effect accents
+│   │   ├── EffectRackUnit.h      Effect card (icon, name, knobs)
+│   │   ├── PedalboardPanel.h     Drag-and-drop effect chain
+│   │   ├── EffectChainEditor.h   Chain editor wrapper
+│   │   ├── PresetLibrary.h       Compile-time preset tables
+│   │   ├── StepSequencerPanel.h  Sequencer grid UI
+│   │   ├── SamplerPanel.h        Sample slot panel
+│   │   └── [more UI components]  MagicButton, RotaryKnob, etc.
+│   └── project/                  Project save/load
+│       ├── ProjectData.h         Project data model (v4)
+│       ├── ProjectLoader.h/.cpp  JSON serialization (.saxfx)
+├── tests/                        Catch2 unit tests (180 tests)
+├── models/                       Trained ONNX models
+│   ├── content_classifier.onnx   Sample classifier
+│   └── mix_model.onnx            Mix optimizer
+├── scripts/                      Python training scripts
+│   ├── train_classifier.py       Train sample classifier
+│   ├── train_mix_model.py        Train mix model
+│   └── prepare_dataset.py        Generate synthetic dataset
+├── cmake/
+│   └── FindOnnxRuntime.cmake     ONNX Runtime finder
 ├── third_party/
-│   ├── JUCE/             Submodule JUCE 8
-│   └── ASIO/             SDK Steinberg (non versionné)
-└── .github/workflows/    CI GitHub Actions
+│   ├── JUCE/                     Submodule JUCE 8
+│   └── ASIO/                     Steinberg SDK (not versioned)
+└── CMakeLists.txt                Build configuration
 ```
 
 ---
 
 ## Roadmap
 
-| Sprint | Objectif | Critère |
-|--------|----------|---------|
-| **Sprint 1** (MVP) | Pipeline audio + pass-through | Signal casque < 20 ms |
-| **Sprint 2** | Pitch tracker + harmoniseur + effets | Latence ≤ 20 ms, tests > 80% |
-| **Sprint 3** | Sampler + MIDI + presets | Live-ready, CI verte |
-| **Sprint 4** | EffectChain & UI refactor | Modularity + src/ui/ |
-| **Sprint 5** | FX Pack (Delay, Octaver, etc.)| 5 new stage FX |
-| **Sprint 6** | Selection UI & Polish | Presets + MIDI mapping |
+| Sprint | Status | Objective |
+|--------|--------|-----------|
+| **Sprint 1** (MVP) | Done | Audio pipeline + pass-through |
+| **Sprint 2** | Done | Pitch tracker + harmonizer + flanger |
+| **Sprint 3** | Done | Sampler 8 slots + MIDI + project loader |
+| **Sprint 4** | Done | EffectChain + UI refactor (src/ui/) |
+| **Sprint 5** | Done | FX Pack (Delay, Octaver, Whammy, Slicer, Tuner, etc.) |
+| **Sprint 6** | Done | PresetLibrary + SynthEffect + SaxOS UI theme |
+| **Sprint 7** | Done | ONNX Runtime integration + InferenceThread |
+| **Sprint 8** | Done | AI content classifier (sample categorization) |
+| **Sprint 9** | Done | AI mix engine (EQ + gain optimization) |
+| **Sprint 10** | Pending | Compression IA + master limiter + live A/B test |
 
-### Sprint 7–10 : Auto-mastering IA (Niveau 3)
+### Sprint 10 -- Compression IA + polish
 
-Objectif : remplacer les règles heuristiques de `SmartSamplerEngine` et
-`SmartMixEngine` par un modèle IA capable d'analyser le mix global
-(sax + 8 slots) et de produire gain, EQ et compression optimaux.
-
-Chaque étape est **autonome, testable et mergeable** indépendamment.
-
-#### Sprint 7 — Infrastructure ONNX Runtime
-
-| Étape | Tâche | Test / Critère de validation |
-|-------|-------|------------------------------|
-| 7.1 | ✅ Intégrer ONNX Runtime dans `CMakeLists.txt` + `cmake/FindOnnxRuntime.cmake` | Build OK, 150/151 tests verts, DLL copiée |
-| 7.2 | ✅ Créer `src/dsp/OnnxInference.h` — wrapper header-only chargement + inférence | 5 tests ONNX verts (load, identity, sine, inputSize, invalid path) |
-| 7.3 | ✅ `InferenceThread.h` — thread IA avec `LockFreeQueue` (submit/poll) | 3 tests verts : single request, 100 sans perte, latence < 5 ms |
-| 7.4 | ✅ Benchmark : 50 runs median + P95 + throughput 100 inférences | 2 tests verts, median < 2 ms, avg < 2 ms |
-
-#### Sprint 8 — Classification IA des samples
-
-| Étape | Tâche | Test / Critère de validation |
-|-------|-------|------------------------------|
-| 8.1 | ✅ `scripts/prepare_dataset.py` — génère 210 samples synthétiques (7 catégories × 30) | 210 WAV dans `data/dataset/` |
-| 8.2 | ✅ `scripts/train_classifier.py` → `models/content_classifier.onnx` | Accuracy ≥ 85% vérifiée à l'entraînement |
-| 8.3 | ✅ `src/dsp/AiContentClassifier.h/.cpp` + `tests/test_ai_classifier.cpp` | 5 tests verts : kick→KICK, hihat→HIHAT, snare→SNARE, silence, resample |
-| 8.4 | ✅ Remplacer `detectContentType()` heuristique par `AiContentClassifier` (avec fallback) | `#ifdef SAXFX_HAS_ONNX` dans `SmartSamplerEngine`, tests existants verts |
-| 8.5 | ✅ `scripts/ab_test_classifier.py` — A/B test IA vs heuristique sur 50 samples | Log comparatif dans `docs/ab_test_classifier_results.txt`, IA ≥ heuristique |
-
-#### Sprint 9 — Mix IA adaptatif (EQ + gain multi-pistes)
-
-| Étape | Tâche | Test / Critère de validation |
-|-------|-------|------------------------------|
-| 9.1 | ✅ Définir format d'entrée IA : features par slot (RMS, centroid spectral, type, crest factor) | Struct `MixFeatures`, test extraction sur samples connus |
-| 9.2 | ✅ Créer `src/dsp/FeatureExtractor.h/.cpp` — extraction features temps réel | Test : sine 440 Hz → centroid ≈ 440 Hz, crest ≈ 1.41 |
-| 9.3 | ✅ Entraîner modèle mix (features 8 slots → EQ gains + volume par slot) | Script `scripts/train_mix_model.py`, val MSE = 0.245 (300 epochs, lr=0.003) |
-| 9.4 | ✅ Créer `src/dsp/AiMixEngine.h/.cpp` — remplace `applyRoleEQ` + `applyUnmasking` + `targetGainForType` | Test : 4 slots chargés → EQ + gains cohérents, pas de clipping |
-| 9.5 | ✅ Intégrer dans `SmartSamplerEngine::applyNeutronMix` (IA si dispo, sinon fallback heuristique) | `setUseAiMix(bool)` + EQ 3-band biquad (lowShelf 250 Hz / peak 1 kHz / highShelf 4 kHz) |
-| 9.6 | Ajouter analyse du signal sax live dans le mix IA (sax = slot "virtuel") | Test : sax 440 Hz → IA réduit les mids des slots qui masquent le sax |
-
-#### Sprint 10 — Compression IA + polish
-
-| Étape | Tâche | Test / Critère de validation |
-|-------|-------|------------------------------|
-| 10.1 | Ajouter compression dynamique par slot dans `AiMixEngine` | Test : signal avec crête à -1dB → compressé, RMS stable |
-| 10.2 | Master limiter léger en sortie (peak < 0 dBFS garanti) | Test : signal saturé en entrée → sortie ≤ 0 dBFS |
-| 10.3 | UI : affichage des décisions IA (EQ curves, gains, compression) | Visuel, pas de crash |
-| 10.4 | Benchmark latence globale pipeline (sax + 8 slots + IA) | Assert total ≤ 20 ms |
-| 10.5 | A/B test live : mix heuristique vs mix IA sur 5 morceaux | Évaluation subjective, documenter résultats dans `docs/` |
+| Step | Task | Validation |
+|------|------|------------|
+| 10.1 | Dynamic compression per slot in AiMixEngine | Test: peak at -1dB -> compressed, stable RMS |
+| 10.2 | Master limiter (peak < 0 dBFS guaranteed) | Test: saturated input -> output <= 0 dBFS |
+| 10.3 | UI: display AI decisions (EQ curves, gains) | Visual, no crash |
+| 10.4 | Benchmark full pipeline latency (sax + 8 slots + AI) | Assert total <= 20 ms |
+| 10.5 | A/B test live: heuristic vs AI mix on 5 tracks | Subjective evaluation |
 
 ---
 
-## Conventions Git
+## Git Conventions
 
-Format : `type(scope): description`
+Format: `type(scope): description`
 
-Types : `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 
-Exemples :
+Examples:
 ```
-feat(audio): add ASIO pass-through pipeline
-feat(sampler): support wav/sfz sample loading
-fix(pitch): correct octave detection error
+feat(synth): add pitch-tracking synth with 22 presets
+fix(project): prevent crash on load (forceRebuild after applyChain)
+feat(ui): neon dark SaxOS look-and-feel
 ```
 
 ---
 
-## Licence
+## License
 
-MIT © 2026 Guillaume — voir [LICENSE](LICENSE)
+MIT (c) 2026 Guillaume -- see [LICENSE](LICENSE)
