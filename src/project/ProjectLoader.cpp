@@ -158,6 +158,70 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         }
     }
 
+    // ── v5 — master key, AI mix states, scenes ───────────────────────────────
+    if (data.version >= 5)
+    {
+        data.masterKeyRoot  = static_cast<int>(root.getProperty("masterKeyRoot",  0));
+        data.masterKeyMajor = getBool(root, "masterKeyMajor", true);
+        data.currentScene   = static_cast<int>(root.getProperty("currentScene",   0));
+
+        // Slot mix states
+        if (const auto* mixArr = root["slotMix"].getArray())
+        {
+            for (const auto& entry : *mixArr)
+            {
+                const int slot = static_cast<int>(entry.getProperty("slot", -1));
+                if (slot < 0 || slot >= 8) continue;
+                auto& sm    = data.slotMix[static_cast<std::size_t>(slot)];
+                sm.gain     = getFloat(entry, "gain",    1.f);
+                sm.pan      = getFloat(entry, "pan",     0.f);
+                sm.width    = getFloat(entry, "width",   0.f);
+                sm.depth    = getFloat(entry, "depth",   0.f);
+                sm.applied  = getBool(entry,  "applied", false);
+            }
+        }
+
+        // Scenes
+        if (const auto* scenesArr = root["scenes"].getArray())
+        {
+            for (const auto& entry : *scenesArr)
+            {
+                const int si = static_cast<int>(entry.getProperty("index", -1));
+                if (si < 0 || si >= 8) continue;
+                auto& sc  = data.scenes[static_cast<std::size_t>(si)];
+                sc.bpm    = getFloat(entry, "bpm", 120.f);
+                sc.used   = getBool(entry,  "used", false);
+
+                if (const auto* pathsArr = entry["filePaths"].getArray())
+                    for (int i = 0; i < 8 && i < pathsArr->size(); ++i)
+                        sc.filePaths[static_cast<std::size_t>(i)] =
+                            (*pathsArr)[i].toString().toStdString();
+
+                if (const auto* muteArr = entry["mutes"].getArray())
+                    for (int i = 0; i < 8 && i < muteArr->size(); ++i)
+                        sc.mutes[static_cast<std::size_t>(i)] =
+                            static_cast<bool>((*muteArr)[i]);
+
+                if (const auto* gainArr = entry["gains"].getArray())
+                    for (int i = 0; i < 8 && i < gainArr->size(); ++i)
+                        sc.gains[static_cast<std::size_t>(i)] =
+                            static_cast<float>(static_cast<double>((*gainArr)[i]));
+
+                if (const auto* tracksArr = entry["steps"].getArray())
+                {
+                    for (int t = 0; t < 8 && t < tracksArr->size(); ++t)
+                    {
+                        if (const auto* stArr = (*tracksArr)[t].getArray())
+                            for (int s = 0; s < 16 && s < stArr->size(); ++s)
+                                sc.steps[static_cast<std::size_t>(t)]
+                                        [static_cast<std::size_t>(s)] =
+                                    static_cast<bool>((*stArr)[s]);
+                    }
+                }
+            }
+        }
+    }
+
     return data;
 }
 
@@ -235,6 +299,73 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         mc->setProperty("isMajor", data.musicContext.isMajor);
         mc->setProperty("style",   data.musicContext.style);
         root->setProperty("musicContext", juce::var(mc.get()));
+    }
+
+    // ── v5 — master key ───────────────────────────────────────────────────────
+    root->setProperty("masterKeyRoot",  data.masterKeyRoot);
+    root->setProperty("masterKeyMajor", data.masterKeyMajor);
+    root->setProperty("currentScene",   data.currentScene);
+
+    // ── v5 — slot mix states ──────────────────────────────────────────────────
+    {
+        juce::Array<juce::var> mixArr;
+        for (int i = 0; i < 8; ++i)
+        {
+            const auto& sm = data.slotMix[static_cast<std::size_t>(i)];
+            if (!sm.applied) continue;
+            juce::DynamicObject::Ptr entry = new juce::DynamicObject();
+            entry->setProperty("slot",    i);
+            entry->setProperty("gain",    static_cast<double>(sm.gain));
+            entry->setProperty("pan",     static_cast<double>(sm.pan));
+            entry->setProperty("width",   static_cast<double>(sm.width));
+            entry->setProperty("depth",   static_cast<double>(sm.depth));
+            entry->setProperty("applied", sm.applied);
+            mixArr.add(juce::var(entry.get()));
+        }
+        root->setProperty("slotMix", mixArr);
+    }
+
+    // ── v5 — scenes ───────────────────────────────────────────────────────────
+    {
+        juce::Array<juce::var> scenesArr;
+        for (int si = 0; si < 8; ++si)
+        {
+            const auto& sc = data.scenes[static_cast<std::size_t>(si)];
+            if (!sc.used) continue;
+            juce::DynamicObject::Ptr entry = new juce::DynamicObject();
+            entry->setProperty("index", si);
+            entry->setProperty("bpm",   static_cast<double>(sc.bpm));
+            entry->setProperty("used",  sc.used);
+
+            juce::Array<juce::var> pathsArr;
+            for (int i = 0; i < 8; ++i)
+                pathsArr.add(juce::String(sc.filePaths[static_cast<std::size_t>(i)]));
+            entry->setProperty("filePaths", pathsArr);
+
+            juce::Array<juce::var> muteArr;
+            for (int i = 0; i < 8; ++i)
+                muteArr.add(sc.mutes[static_cast<std::size_t>(i)]);
+            entry->setProperty("mutes", muteArr);
+
+            juce::Array<juce::var> gainArr;
+            for (int i = 0; i < 8; ++i)
+                gainArr.add(static_cast<double>(sc.gains[static_cast<std::size_t>(i)]));
+            entry->setProperty("gains", gainArr);
+
+            juce::Array<juce::var> tracksArr;
+            for (int t = 0; t < 8; ++t)
+            {
+                juce::Array<juce::var> stArr;
+                for (int s = 0; s < 16; ++s)
+                    stArr.add(sc.steps[static_cast<std::size_t>(t)]
+                                      [static_cast<std::size_t>(s)]);
+                tracksArr.add(stArr);
+            }
+            entry->setProperty("steps", tracksArr);
+
+            scenesArr.add(juce::var(entry.get()));
+        }
+        root->setProperty("scenes", scenesArr);
     }
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);

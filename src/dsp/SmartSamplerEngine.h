@@ -164,6 +164,23 @@ public:
         hasOverride_[static_cast<std::size_t>(slot)] = false;
     }
 
+    // ── Last mix state per slot (populated after magic mix, read by save) ────────
+
+    struct SlotMixState
+    {
+        float gain  = 1.f;  // runtime gain set by magic mix
+        float pan   = 0.f;  // pan [-1, +1]
+        float width = 0.f;  // stereo width [0, 1]
+        float depth = 0.f;  // depth [0, 1]
+        bool  active = false;
+    };
+
+    SlotMixState getSlotMixState(int slot) const noexcept
+    {
+        if (slot < 0 || slot >= kSamplerSlots) return {};
+        return lastMixState_[static_cast<std::size_t>(slot)];
+    }
+
     // ── Public spatial query (for UI display after magic mix) ─────────────────
 
     struct SpatialQuery { float pan, width, depth; };
@@ -843,6 +860,14 @@ private:
             sampler_.setSlotPan(i, sp.pan);
             const int haasSamples = static_cast<int>(sp.width * 0.025 * sampleRate_);
             sampler_.setSlotHaasDelay(i, haasSamples);
+
+            // Cache mix state for project save
+            auto& ms  = lastMixState_[static_cast<std::size_t>(i)];
+            ms.gain   = sampler_.getSlotGain(i);
+            ms.pan    = sp.pan;
+            ms.width  = sp.width;
+            ms.depth  = sp.depth;
+            ms.active = true;
         }
     }
 
@@ -876,6 +901,7 @@ private:
             sampler_.setSlotGain(i, 1.0f);
         }
         sampler_.clearSidechain();
+        for (auto& ms : lastMixState_) ms = {};
     }
 
     // ── Semitone shift helper ─────────────────────────────────────────────────
@@ -1264,6 +1290,7 @@ private:
     ContentType detectedTypes_[kSamplerSlots] {};
     ContentType overrideTypes_[kSamplerSlots] {};
     bool        hasOverride_  [kSamplerSlots] {};
+    std::array<SlotMixState, kSamplerSlots>  lastMixState_ {};
     std::unique_ptr<WorkerThread>            workerThread_;
     std::array<std::unique_ptr<OnLoadWorkerThread>, kSamplerSlots> onLoadWorkers_;
 

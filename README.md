@@ -190,7 +190,7 @@ projet-dub/
 │   │   ├── SpatialVisualization.h 2D stereo field display (pan × depth)
 │   │   └── [more UI components]  MagicButton, RotaryKnob, etc.
 │   └── project/                  Project save/load
-│       ├── ProjectData.h         Project data model (v4)
+│       ├── ProjectData.h         Project data model (v5)
 │       ├── ProjectLoader.h/.cpp  JSON serialization (.saxfx)
 ├── tests/                        Catch2 unit tests (180 tests)
 ├── models/                       Trained ONNX models

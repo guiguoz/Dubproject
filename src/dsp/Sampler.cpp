@@ -168,6 +168,12 @@ bool Sampler::isSlotMuted(int slot) const noexcept
     return slots_[static_cast<std::size_t>(slot)].muted.load(std::memory_order_relaxed);
 }
 
+float Sampler::getSlotGain(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 1.f;
+    return slots_[static_cast<std::size_t>(slot)].gain.load(std::memory_order_relaxed);
+}
+
 float Sampler::getSlotOutputPeak(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;

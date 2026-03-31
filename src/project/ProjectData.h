@@ -57,17 +57,48 @@ struct MusicContextData
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ProjectData — full project snapshot (version 4 format)
+// SlotMixData — AI magic mix result for one sampler slot (v5)
+// ─────────────────────────────────────────────────────────────────────────────
+struct SlotMixData
+{
+    float gain    { 1.f };   // runtime gain multiplier
+    float pan     { 0.f };   // pan [-1=L … +1=R]
+    float width   { 0.f };   // stereo width [0, 1]
+    float depth   { 0.f };   // spatial depth [0, 1]
+    bool  applied { false }; // true = magic mix was active on this slot
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SceneSaveData — one scene snapshot (v5)
+// ─────────────────────────────────────────────────────────────────────────────
+struct SceneSaveData
+{
+    float                                bpm      { 120.f };
+    std::array<std::string, 8>           filePaths {};
+    std::array<std::array<bool, 16>, 8>  steps    {};
+    std::array<float, 8>                 gains    { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+    std::array<bool, 8>                  mutes    {};
+    bool                                 used     { false };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ProjectData — full project snapshot (version 5 format)
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 4 };
+    int                         version     { 5 };
     std::string                 projectName { "Untitled" };
-    float                       bpm         { 120.f };  // v4 — master sequencer BPM
+    float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;
     std::array<SampleConfig, 8> samples {};
     std::vector<MidiMapping>    midiMappings;
-    MusicContextData            musicContext;  // v3
+    MusicContextData            musicContext;
+    // v5 — new fields
+    int                              masterKeyRoot  { 0 };     // 0=C … 11=B
+    bool                             masterKeyMajor { true };
+    std::array<SlotMixData, 8>       slotMix        {};        // AI mix results
+    std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
+    int                              currentScene   { 0 };
 };
 
 } // namespace project

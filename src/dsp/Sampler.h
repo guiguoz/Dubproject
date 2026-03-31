@@ -80,6 +80,9 @@ public:
     bool isPlaying(int slot) const noexcept;
     bool isSlotMuted(int slot) const noexcept;
 
+    // Returns current runtime gain multiplier for a slot (GUI thread safe).
+    float getSlotGain(int slot) const noexcept;
+
     // Returns the peak absolute amplitude of the slot's PCM data (0 if not loaded).
     // Safe to call from the GUI thread (data is not modified by the audio thread).
     float getSlotPeakLevel(int slot) const noexcept;

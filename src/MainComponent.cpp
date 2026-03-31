@@ -891,13 +891,49 @@ void MainComponent::saveProject()
             {
                 auto& sc    = data.samples[static_cast<std::size_t>(i)];
                 sc.filePath = stepSeqPanel_.getSlotFilePath(i);
-                sc.gain     = 1.0f;
+                sc.gain     = sampler.getSlotGain(i);   // actual runtime gain
                 sc.loop     = false;
                 sc.oneShot  = true;
                 sc.muted    = sampler.isSlotMuted(i);
                 sc.gridDiv  = 0;
                 for (int s = 0; s < 16; ++s)
                     sc.stepPattern[s] = stepSequencer_.getStep(i, s);
+            }
+
+            // ── AI mix states (gain, pan, width, depth) ───────────────────
+            for (int i = 0; i < 8; ++i)
+            {
+                const auto ms = samplerEngine_.getSlotMixState(i);
+                auto& sm      = data.slotMix[static_cast<std::size_t>(i)];
+                sm.gain    = ms.gain;
+                sm.pan     = ms.pan;
+                sm.width   = ms.width;
+                sm.depth   = ms.depth;
+                sm.applied = ms.active;
+            }
+
+            // ── Master key ────────────────────────────────────────────────
+            data.masterKeyRoot  = masterKeyRoot_;
+            data.masterKeyMajor = masterKeyMajor_;
+
+            // ── Scenes ────────────────────────────────────────────────────
+            captureCurrentScene();  // make sure current scene is up to date
+            data.currentScene = currentScene_;
+            for (int si = 0; si < kMaxScenes; ++si)
+            {
+                const auto& src = scenes_[static_cast<std::size_t>(si)];
+                auto& dst       = data.scenes[static_cast<std::size_t>(si)];
+                dst.used     = src.used;
+                dst.bpm      = src.bpm;
+                dst.filePaths = src.filePaths;
+                dst.mutes    = src.mutes;
+                dst.gains    = src.gains;
+                for (int t = 0; t < 8; ++t)
+                    for (int s = 0; s < 16; ++s)
+                        dst.steps[static_cast<std::size_t>(t)]
+                                 [static_cast<std::size_t>(s)] =
+                            src.steps[static_cast<std::size_t>(t)]
+                                     [static_cast<std::size_t>(s)];
             }
 
             auto path = results[0].getFullPathName();
@@ -971,6 +1007,55 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     midiManager_.clearMappings();
     for (const auto& m : data.midiMappings)
         midiManager_.setNoteMapping(m.midiNote, m.slotIndex);
+
+    // ── v5 — master key ───────────────────────────────────────────────────────
+    if (data.version >= 5)
+    {
+        masterKeyRoot_  = data.masterKeyRoot;
+        masterKeyMajor_ = data.masterKeyMajor;
+        masterKeyCombo_    .setSelectedId(masterKeyRoot_ + 1,          juce::dontSendNotification);
+        masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2,     juce::dontSendNotification);
+        applyMasterKey();
+    }
+
+    // ── v5 — AI mix states ────────────────────────────────────────────────────
+    if (data.version >= 5)
+    {
+        auto& sampler = dspPipeline_.getSampler();
+        for (int i = 0; i < 8; ++i)
+        {
+            const auto& sm = data.slotMix[static_cast<std::size_t>(i)];
+            if (!sm.applied) continue;
+            sampler.setSlotGain(i, sm.gain);
+            sampler.setSlotPan(i, sm.pan);
+            const int haasSamples = static_cast<int>(
+                sm.width * 0.025 * currentSampleRate_);
+            sampler.setSlotHaasDelay(i, haasSamples);
+        }
+    }
+
+    // ── v5 — scenes ───────────────────────────────────────────────────────────
+    if (data.version >= 5)
+    {
+        currentScene_ = std::clamp(data.currentScene, 0, kMaxScenes - 1);
+        for (int si = 0; si < kMaxScenes; ++si)
+        {
+            const auto& src = data.scenes[static_cast<std::size_t>(si)];
+            auto& dst       = scenes_    [static_cast<std::size_t>(si)];
+            dst.used      = src.used;
+            dst.bpm       = src.bpm;
+            dst.filePaths = src.filePaths;
+            dst.mutes     = src.mutes;
+            dst.gains     = src.gains;
+            for (int t = 0; t < 8; ++t)
+                for (int s = 0; s < 16; ++s)
+                    dst.steps[static_cast<std::size_t>(t)]
+                             [static_cast<std::size_t>(s)] =
+                        src.steps[static_cast<std::size_t>(t)]
+                                 [static_cast<std::size_t>(s)];
+        }
+        updateSceneLabel();
+    }
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 }
@@ -1493,12 +1578,15 @@ void MainComponent::captureCurrentScene()
     auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
     sc.bpm  = stepSequencer_.getBpm();
     sc.used = true;
+    auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 8; ++i)
     {
-        sc.filePaths[i] = stepSeqPanel_.getSlotFilePath(i);
-        sc.mutes[i]     = dspPipeline_.getSampler().isSlotMuted(i);
+        const std::size_t idx = static_cast<std::size_t>(i);
+        sc.filePaths[idx] = stepSeqPanel_.getSlotFilePath(i);
+        sc.mutes    [idx] = sampler.isSlotMuted(i);
+        sc.gains    [idx] = sampler.getSlotGain(i);
         for (int s = 0; s < 16; ++s)
-            sc.steps[i][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
+            sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
     }
 }
 
@@ -1534,6 +1622,7 @@ void MainComponent::applyScene(int idx)
             samplerEngine_.setSlotFilePath(i, sc.filePaths[i]);
         }
         dspPipeline_.getSampler().setSlotMuted(i, sc.mutes[i]);
+        dspPipeline_.getSampler().setSlotGain (i, sc.gains[static_cast<std::size_t>(i)]);
         stepSeqPanel_.setSlotMuted(i, sc.mutes[i]);
         for (int s = 0; s < 16; ++s)
         {
