@@ -136,6 +136,16 @@ if(SAXFX_ENABLE_ONNX)
     ort_copy_dll(SaxFXLive)
 endif()
 
+# Copy AI models next to the exe after each build
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/models")
+    add_custom_command(TARGET SaxFXLive POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/models"
+            "$<TARGET_FILE_DIR:SaxFXLive>/models"
+        COMMENT "Copying AI models to output directory"
+    )
+endif()
+
 # Génère JuceHeader.h (inclut tous les modules JUCE liés)
 juce_generate_juce_header(SaxFXLive)
 

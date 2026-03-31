@@ -325,6 +325,46 @@ public:
         }
     }
 
+    /// Update the slot's BPM indicator after auto-match processing.
+    /// Colours the loaded-indicator and appends a BPM tooltip to the sample label.
+    ///   confidence ≥ 0.7 → neon green ✓ ; ≥ 0.5 → orange ~ ; < 0.5 → red ?
+    void setSlotBpm(int slot, float bpm, float confidence) noexcept
+    {
+        if (slot < 0 || slot >= 8) return;
+        const auto idx = static_cast<std::size_t>(slot);
+
+        const juce::String bpmStr = (bpm > 0.f)
+            ? (juce::String(juce::roundToInt(bpm)) + " BPM")
+            : juce::String("-- BPM");
+
+        juce::Colour indicatorColour;
+        juce::String tooltipSuffix;
+        if (bpm <= 0.f || confidence < 0.01f) {
+            indicatorColour = SaxFXColours::textSecondary;
+            tooltipSuffix   = " (BPM: n/a)";
+        } else if (confidence >= 0.7f) {
+            indicatorColour = juce::Colour(0xFF4CDFA8);  // neon green
+            tooltipSuffix   = " | " + bpmStr + " \xe2\x9c\x93";
+        } else if (confidence >= 0.5f) {
+            indicatorColour = juce::Colour(0xFFFFAA00);  // amber
+            tooltipSuffix   = " | " + bpmStr + " ~";
+        } else {
+            indicatorColour = juce::Colour(0xFFFF4444);  // red
+            tooltipSuffix   = " | " + bpmStr + " ?";
+        }
+
+        // Only override indicator colour when slot is loaded (don't fight setSlotLoaded)
+        if (loadedIndicators_[idx].getText().contains(
+                juce::CharPointer_UTF8("\xe2\x97\x8f")))
+        {
+            loadedIndicators_[idx].setColour(juce::Label::textColourId, indicatorColour);
+        }
+
+        // Append BPM info as tooltip on the sample name label
+        sampleNameLabels_[idx].setTooltip(
+            sampleNameLabels_[idx].getText() + tooltipSuffix);
+    }
+
     void setSlotSampleName(int slot, const std::string& path)
     {
         if (slot < 0 || slot >= 8) return;

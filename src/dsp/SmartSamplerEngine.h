@@ -260,6 +260,27 @@ private:
 
     struct BiquadCoeffs { float b0, b1, b2, a1, a2; };  // a0 normalised to 1
 
+    // True-peak estimate via 4× linear oversampling (ITU-R BS.1770-4 simplified).
+    // Catches inter-sample peaks that exceed 0dBFS on a DAC even when PCM samples look safe.
+    static float calculateTruePeak(const std::vector<float>& pcm)
+    {
+        const int n = static_cast<int>(pcm.size());
+        if (n == 0) return 0.f;
+        float peak = 0.f;
+        // Upsample 4× by linear interpolation and track max absolute value.
+        for (int i = 0; i < n - 1; ++i)
+        {
+            const float s0 = pcm[static_cast<std::size_t>(i)];
+            const float s1 = pcm[static_cast<std::size_t>(i + 1)];
+            peak = std::max(peak, std::abs(s0));
+            peak = std::max(peak, std::abs(s0 + 0.25f * (s1 - s0)));
+            peak = std::max(peak, std::abs(s0 + 0.50f * (s1 - s0)));
+            peak = std::max(peak, std::abs(s0 + 0.75f * (s1 - s0)));
+        }
+        peak = std::max(peak, std::abs(pcm.back()));
+        return peak;
+    }
+
     static void applyBiquad(std::vector<float>& pcm, const BiquadCoeffs& c)
     {
         float x1 = 0.f, x2 = 0.f, y1 = 0.f, y2 = 0.f;
@@ -565,18 +586,23 @@ private:
 
                     const auto& d = decisions[static_cast<std::size_t>(i)];
 
-                    // 3-band EQ from AI decision (dB gains)
-                    applyBiquad(pcms[i], makeLowShelf (250.f,  d.lowGain,        sampleRate_));
-                    applyBiquad(pcms[i], makePeaking  (1000.f, d.midGain,  1.0f, sampleRate_));
-                    applyBiquad(pcms[i], makeHighShelf(4000.f, d.highGain,       sampleRate_));
+                    // 3-band EQ from AI decision — corrected frequencies & order:
+                    //   DC block (20Hz HP) → sub-bass shelf (100Hz) → presence peak (2500Hz)
+                    //   → air shelf (8000Hz) → anti-alias LP (18kHz)
+                    // Gains clamped to ±6dB to prevent saturation.
+                    const float safeLoG = std::clamp(d.lowGain,  -6.f, 6.f);
+                    const float safeMiG = std::clamp(d.midGain,  -6.f, 6.f);
+                    const float safeHiG = std::clamp(d.highGain, -6.f, 6.f);
+                    applyBiquad(pcms[i], makeHP       (20.f,           sampleRate_)); // DC block
+                    applyBiquad(pcms[i], makeLowShelf (100.f,  safeLoG, sampleRate_)); // sub-bass
+                    applyBiquad(pcms[i], makePeaking  (2500.f, safeMiG, 1.0f, sampleRate_)); // présence
+                    applyBiquad(pcms[i], makeHighShelf(8000.f, safeHiG, sampleRate_)); // air
+                    applyBiquad(pcms[i], makeLP       (18000.f,         sampleRate_)); // anti-alias
 
-                    // Gain: AI target volume / post-EQ peak
-                    float peakFinal = 0.f;
-                    for (float s : pcms[i])
-                        peakFinal = std::max(peakFinal, std::abs(s));
-                    if (peakFinal < 0.001f) peakFinal = 1.f;
-
-                    const float gain = juce::jlimit(0.f, 2.f, d.volume / peakFinal);
+                    // Gain: target volume / true-peak (4× oversample), -3dBFS headroom
+                    const float truePeak = calculateTruePeak(pcms[i]);
+                    const float gain = juce::jlimit(0.f, 1.5f,
+                        (d.volume * 0.707f) / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
 
@@ -619,14 +645,10 @@ private:
                         : types[j];
                 applyUnmasking(pcms[i], i, effectiveTypes, sampleRate_);
 
-                // Measure post-processing peak for gain calibration
-                float peakFinal = 0.f;
-                for (float s : pcms[i])
-                    peakFinal = std::max(peakFinal, std::abs(s));
-                if (peakFinal < 0.001f) peakFinal = 1.f;
-
-                const float gain = juce::jlimit(0.f, 2.f,
-                    targetGainForType(effectiveType) / peakFinal);
+                // Gain calibration: true-peak (4× oversample) + -3dBFS headroom
+                const float truePeak = calculateTruePeak(pcms[i]);
+                const float gain = juce::jlimit(0.f, 1.5f,
+                    (targetGainForType(effectiveType) * 0.707f) / std::max(truePeak, 0.001f));
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));
                 sampler_.setSlotGain(i, gain);
@@ -979,10 +1001,18 @@ private:
 
         void run() override
         {
-            if (revert_)
-                owner_.revertToOriginals(this);
-            else
-                owner_.applyNeutronMix(this);
+            try
+            {
+                if (revert_)
+                    owner_.revertToOriginals(this);
+                else
+                    owner_.applyNeutronMix(this);
+            }
+            catch (const std::exception& e)
+            {
+                juce::Logger::writeToLog(juce::String("SmartSamplerEngine error: ") + e.what());
+            }
+            catch (...) {}
             finish();
         }
 

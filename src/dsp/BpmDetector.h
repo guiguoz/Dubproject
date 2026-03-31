@@ -45,6 +45,21 @@ class BpmDetector
     static float detectOffline(const float* data, int numSamples,
                                 double sampleRate) noexcept;
 
+    /// BPM detection result with confidence score (0.0–1.0).
+    /// confidence ≥ 0.7 → reliable; 0.5–0.7 → plausible; < 0.5 → uncertain.
+    struct BpmDetectionResult
+    {
+        float bpm;        ///< estimated BPM (kDefaultBpm if detection failed)
+        float confidence; ///< 0.0 = no signal, 1.0 = very confident
+    };
+
+    /// Multi-method BPM detection with confidence score.
+    /// Tries 3 methods in order (RMS autocorrelation, onset-strength autocorrelation,
+    /// comb-filter energy); returns the first result whose confidence exceeds a
+    /// threshold, otherwise returns the best result found.
+    static BpmDetectionResult detectOfflineRobust(const float* data, int numSamples,
+                                                  double sampleRate) noexcept;
+
   private:
     void  onOnset() noexcept;
     float estimateFromIoi() noexcept;

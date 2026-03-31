@@ -109,7 +109,8 @@ private:
         std::atomic<bool> stopPending     { false };
         std::atomic<bool> quantTrigPending{ false };
         std::atomic<int>  quantDiv        { static_cast<int>(GridDiv::Quarter) };
-        int               readPos { 0 };  // only written by audio thread
+        int               readPos { 0 };   // only written by audio thread
+        int               fadeIn  { 0 };   // counts up to kFadeLen on each trigger
     };
 
     std::array<SampleSlot, kMaxSlots> slots_;

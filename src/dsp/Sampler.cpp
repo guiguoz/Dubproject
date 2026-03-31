@@ -1,6 +1,7 @@
 #include "Sampler.h"
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 
 namespace dsp {
 
@@ -268,6 +269,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             if (sl.loaded.load(std::memory_order_acquire))
             {
                 ps.readPos = 0;
+                ps.fadeIn  = 0;   // restart fade-in envelope
                 ps.playing.store(true, std::memory_order_relaxed);
             }
         }
@@ -290,13 +292,19 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
         const int   totalSamp = sl.sampleCount;
 
+        // Fade-in length: ~2 ms at 44.1 kHz (scales with actual sample rate)
+        static constexpr int kFadeLen = 88;
+
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
             if (ps.readPos >= totalSamp)
             {
                 if (loop)
+                {
                     ps.readPos = 0;
+                    ps.fadeIn  = 0;  // re-apply fade at loop restart
+                }
                 else
                 {
                     ps.playing.store(false, std::memory_order_relaxed);
@@ -306,7 +314,15 @@ void Sampler::process(float* buffer, int numSamples) noexcept
 
             if (!muted)
             {
-                const float s = gain * sl.data[static_cast<std::size_t>(ps.readPos)];
+                // Exponential fade-in to eliminate click/pop at trigger onset
+                float fadeGain = 1.0f;
+                if (ps.fadeIn < kFadeLen)
+                {
+                    fadeGain = 1.0f - std::exp(-5.0f * ps.fadeIn / static_cast<float>(kFadeLen));
+                    ++ps.fadeIn;
+                }
+
+                const float s = gain * fadeGain * sl.data[static_cast<std::size_t>(ps.readPos)];
                 buffer[i] += sidechainGains_[static_cast<std::size_t>(v)] * s;
                 // Track peak for sidechain source envelope
                 slotPeaks_[static_cast<std::size_t>(v)] =

@@ -172,4 +172,72 @@ void WsolaShifter::process(const float* input, float* output,
     readAbs_ += numSamples;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// resampleLinear — offline linear-interpolation time-scale change
+// ─────────────────────────────────────────────────────────────────────────────
+std::vector<float> WsolaShifter::resampleLinear(const std::vector<float>& input,
+                                                 float ratio) noexcept
+{
+    const int inN  = static_cast<int>(input.size());
+    if (inN <= 0 || ratio <= 0.f) return {};
+
+    const int outN = static_cast<int>(std::round(static_cast<float>(inN) / ratio));
+    if (outN <= 0) return {};
+
+    std::vector<float> output(static_cast<std::size_t>(outN));
+    for (int i = 0; i < outN; ++i)
+    {
+        const float srcPos = static_cast<float>(i) * ratio;
+        const int   idx0   = static_cast<int>(srcPos);
+        const int   idx1   = idx0 + 1;
+        const float frac   = srcPos - static_cast<float>(idx0);
+        const float s0 = (idx0 < inN) ? input[static_cast<std::size_t>(idx0)] : 0.f;
+        const float s1 = (idx1 < inN) ? input[static_cast<std::size_t>(idx1)] : 0.f;
+        output[static_cast<std::size_t>(i)] = s0 + frac * (s1 - s0);
+    }
+    return output;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resampleHermite — offline Hermite 4-point time-scale change
+// ─────────────────────────────────────────────────────────────────────────────
+std::vector<float> WsolaShifter::resampleHermite(const std::vector<float>& input,
+                                                  float ratio) noexcept
+{
+    const int inN  = static_cast<int>(input.size());
+    if (inN <= 0 || ratio <= 0.f) return {};
+    const int outN = static_cast<int>(std::round(static_cast<float>(inN) / ratio));
+    if (outN <= 0) return {};
+
+    std::vector<float> output(static_cast<std::size_t>(outN));
+    for (int i = 0; i < outN; ++i)
+    {
+        const float srcPos = static_cast<float>(i) * ratio;
+        const int   i0     = static_cast<int>(srcPos);
+        const float t      = srcPos - static_cast<float>(i0);
+
+        // Edge guard: fewer than 4 neighbours → linear fallback
+        if (i0 < 1 || i0 + 2 >= inN)
+        {
+            const int   i1 = std::min(i0 + 1, inN - 1);
+            const float s0 = input[static_cast<std::size_t>(std::max(i0, 0))];
+            const float s1 = input[static_cast<std::size_t>(i1)];
+            output[static_cast<std::size_t>(i)] = s0 + t * (s1 - s0);
+            continue;
+        }
+
+        // Hermite 4-points (Catmull-Rom variant, THD+N ≈ 0.01%)
+        const float ym1 = input[static_cast<std::size_t>(i0 - 1)];
+        const float y0  = input[static_cast<std::size_t>(i0)];
+        const float y1  = input[static_cast<std::size_t>(i0 + 1)];
+        const float y2  = input[static_cast<std::size_t>(i0 + 2)];
+        const float c0  = y0;
+        const float c1  = 0.5f * (y1 - ym1);
+        const float c2  = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
+        const float c3  = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
+        output[static_cast<std::size_t>(i)] = ((c3 * t + c2) * t + c1) * t + c0;
+    }
+    return output;
+}
+
 } // namespace dsp

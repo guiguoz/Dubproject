@@ -93,6 +93,9 @@ class DspPipeline
     bool isDuckingEnabled() const noexcept { return duckingEnabled_.load(std::memory_order_relaxed); }
     float getCurrentDuckingGain() const noexcept { return currentDuckingGain_.load(std::memory_order_relaxed); }
 
+    // Reset the smoothed ducking state (call on preset change / scene switch).
+    void resetDucking() noexcept { smoothDuck_ = 1.0f; }
+
     // ── Master Limiter (GUI thread) ──────────────────────────────────────────
     void setMasterLimiterEnabled(bool enabled) noexcept { masterLimiter_.setEnabled(enabled); }
     bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }
@@ -110,6 +113,8 @@ class DspPipeline
     std::atomic<bool> samplerEnabled_{true};
     std::atomic<bool> duckingEnabled_{true};
     std::atomic<float> currentDuckingGain_{1.0f};
+
+    float smoothDuck_{ 1.0f };  // EMA-smoothed duck gain (audio thread only)
 
     std::vector<float> tempBuffer_; // Used for sampler ducking
 

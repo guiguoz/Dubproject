@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 
+#include "dsp/BpmDetector.h"
 #include "dsp/DelayEffect.h"
 #include "dsp/FeatureExtractor.h"
 #include "dsp/FlangerEffect.h"
@@ -10,6 +11,7 @@
 #include "dsp/WsolaShifter.h"
 
 #include <cmath>
+#include <future>
 #include <memory>
 
 //==============================================================================
@@ -113,11 +115,10 @@ MainComponent::MainComponent()
     addAndMakeVisible(samplerLabel_);
 
     // ── Sidebar lower: scene navigation ───────────────────────────────────────
+    // No explicit colour override → SaxOsLookAndFeel handles styling uniformly
     auto styleSideBtn = [](juce::TextButton& b, const juce::String& text)
     {
         b.setButtonText(text);
-        b.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF1A1A2E));
-        b.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFCCCCCC));
     };
 
     styleSideBtn(sceneUpBtn_,    juce::CharPointer_UTF8("\xe2\x96\xb2"));  // ▲
@@ -143,13 +144,13 @@ MainComponent::MainComponent()
 
     // ── Sidebar lower: transport (▶/■, TAP, BPM, ⚡) ─────────────────────────
     sidebarPlayBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
-    sidebarPlayBtn_.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF1A2E1A));
-    sidebarPlayBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF2A4A2A));
-    sidebarPlayBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF44FF44));
+    // Keep accent-green text for semantic play identity, LAF handles background
+    sidebarPlayBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
+    sidebarPlayBtn_.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4CDFA8));
     sidebarPlayBtn_.onClick = [this] { stepSeqPanel_.triggerPlay(); };
 
     sidebarTapBtn_.setButtonText("TAP TEMPO");
-    sidebarTapBtn_.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF4CDFA8).withAlpha(0.10f));
+    // LAF background, accent text to indicate tempo function
     sidebarTapBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
     sidebarTapBtn_.onClick = [this] { stepSeqPanel_.triggerTap(); };
 
@@ -176,7 +177,7 @@ MainComponent::MainComponent()
     };
 
     sidebarMagicBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x9a\xa1"));  // ⚡
-    sidebarMagicBtn_.setTooltip("Smart mix Neutron: actif = EQ+sidechain, re-clic = annuler");
+    sidebarMagicBtn_.setTooltip("Re-analyser le mix IA (re-clic = annuler)");
     sidebarMagicBtn_.setClickingTogglesState(true);
     sidebarMagicBtn_.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF2A1C00));
     sidebarMagicBtn_.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(0xFF886600));
@@ -184,10 +185,17 @@ MainComponent::MainComponent()
     sidebarMagicBtn_.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFFFFEE88));
     sidebarMagicBtn_.onClick = [this] { samplerEngine_.toggleMagicMix(); };
 
+    // AI status indicator
+    aiStatusLabel_.setText("", juce::dontSendNotification);
+    aiStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f).withStyle("Bold")));
+    aiStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFF4CDFA8));
+    aiStatusLabel_.setJustificationType(juce::Justification::centred);
+
     addAndMakeVisible(sidebarPlayBtn_);
     addAndMakeVisible(sidebarTapBtn_);
     addAndMakeVisible(sidebarBpmLabel_);
     addAndMakeVisible(sidebarMagicBtn_);
+    addAndMakeVisible(aiStatusLabel_);
 
     // ── Project buttons ───────────────────────────────────────────────────────
     saveProjectButton_.setButtonText("SAVE PROJECT");
@@ -241,7 +249,11 @@ MainComponent::MainComponent()
         const double fileSr = static_cast<double>(reader->sampleRate);
 
         samplerEngine_.setSlotFilePath(slot, path);
-        pitchMatchSampleAsync(slot, std::move(pcm), fileSr);
+        autoMatchSampleAsync(slot, std::move(pcm), fileSr);
+
+        // Auto-trigger AI mix analysis as soon as a sample is loaded
+        samplerEngine_.applyMagicMix();
+        aiStatusLabel_.setText("IA...", juce::dontSendNotification);
     };
 
     // Step toggled: already forwarded to stepSequencer_ inside the panel
@@ -298,6 +310,7 @@ MainComponent::MainComponent()
         }
         stepSeqPanel_.setMagicActive(true);
         sidebarMagicBtn_.setToggleState(true, juce::dontSendNotification);
+        aiStatusLabel_.setText(juce::CharPointer_UTF8("IA \xe2\x9c\x93"), juce::dontSendNotification);  // "IA ✓"
     };
 
     // onDone : si revert → effacer les tags et désactiver les toggles visuels
@@ -309,6 +322,7 @@ MainComponent::MainComponent()
                 stepSeqPanel_.setSlotContentType(i, "");
             stepSeqPanel_.setMagicActive(false);
             sidebarMagicBtn_.setToggleState(false, juce::dontSendNotification);
+            aiStatusLabel_.setText("", juce::dontSendNotification);
         }
     };
 
@@ -441,6 +455,17 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    // Signal background workers to abort as soon as possible
+    shutdownFlag_.store(true, std::memory_order_release);
+
+    // Wait for all pending background tasks (max ~5 s to avoid hanging)
+    for (auto& f : backgroundTasks_)
+    {
+        if (f.valid())
+            f.wait();
+    }
+    backgroundTasks_.clear();
+
     // Restore default look and feel and release SAX-OS look
     setLookAndFeel(nullptr);
     saxOsLookAndFeel_.reset();
@@ -487,11 +512,18 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// pitchMatchSampleAsync — key detection + WSOLA shift, then load into Sampler
+// autoMatchSampleAsync — BPM + key detection, time-stretch + pitch-shift, then
+// reload into Sampler.
+//
+// Thread safety:
+//   - Raw sample loaded immediately on the GUI thread (playable at once).
+//   - Background worker: std::async (stored in backgroundTasks_).
+//   - processingSlot_[slot] prevents overlapping jobs on the same slot.
+//   - shutdownFlag_ checked periodically; lambda exits cleanly on destruction.
 // ─────────────────────────────────────────────────────────────────────────────
-void MainComponent::pitchMatchSampleAsync(int slot, std::vector<float> raw, double sr)
+void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, double sr)
 {
-    // Charger le sample brut immédiatement — slot jouable dès maintenant
+    // Load the raw sample immediately — slot is playable right away
     {
         auto& sampler = dspPipeline_.getSampler();
         sampler.loadSample(slot, raw.data(), static_cast<int>(raw.size()), sr);
@@ -499,55 +531,269 @@ void MainComponent::pitchMatchSampleAsync(int slot, std::vector<float> raw, doub
         stepSeqPanel_.setSlotLoaded(slot, true);
     }
 
-    // Slot 0 = référence, pas de shift
+    // Slot 0 is the reference master — never auto-shift it
     if (slot == 0)
         return;
 
-    // Thread de fond : détection de tonalité + WSOLA, swap si shift ≠ 0
-    std::thread([this, slot, raw = std::move(raw), sr]() mutable
-    {
-        // 1. Type de contenu — skip pitch-shift pour percussions
-        auto features = ::dsp::FeatureExtractor::extract(raw, sr);
-        const bool isPercussive =
-            (features.contentType == ::dsp::ContentCategory::KICK   ||
-             features.contentType == ::dsp::ContentCategory::SNARE  ||
-             features.contentType == ::dsp::ContentCategory::HIHAT  ||
-             features.contentType == ::dsp::ContentCategory::PERC);
+    // Only one background job per slot at a time
+    if (slot < 0 || slot >= static_cast<int>(processingSlot_.size()))
+        return;
+    bool expected = false;
+    if (!processingSlot_[static_cast<std::size_t>(slot)].compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel))
+        return;  // job already running for this slot
 
-        if (isPercussive) return;  // raw déjà chargé, on garde
+    // Prune completed futures to avoid unbounded growth
+    backgroundTasks_.erase(
+        std::remove_if(backgroundTasks_.begin(), backgroundTasks_.end(),
+            [](const std::future<void>& f) {
+                return f.valid() &&
+                       f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            }),
+        backgroundTasks_.end());
 
-        // 2. Détection de la tonalité du sample
-        ::dsp::KeyDetector kd;
-        kd.process(raw.data(), static_cast<int>(raw.size()), sr);
-        const auto result = kd.getResult();
-        if (result.key < 0) return;  // détection échouée, raw déjà chargé
+    // Snapshot project SR on GUI thread before handing off (Réserve #2)
+    const double snapProjectSr = currentSampleRate_;
 
-        int delta = masterKeyRoot_ - result.key;
-        while (delta >  6) delta -= 12;
-        while (delta < -6) delta += 12;
-        const float shiftSemitones = static_cast<float>(delta);
+    // Save raw copy for potential BPM-retry (Réserve #3)
+    rawPcmForRetry_[static_cast<std::size_t>(slot)] = raw;
+    rawSrForRetry_ [static_cast<std::size_t>(slot)] = sr;
 
-        if (std::abs(shiftSemitones) <= 0.05f) return;  // déjà dans la bonne tonalité
-
-        // 3. WSOLA pitch-shift (batch)
-        std::vector<float> shifted(raw.size());
-        ::dsp::WsolaShifter ws;
-        ws.prepare(sr, 512);
-        ws.setShiftSemitones(shiftSemitones);
-        constexpr int kBlock = 512;
-        for (int i = 0; i < static_cast<int>(raw.size()); i += kBlock)
-        {
-            const int n = std::min(kBlock, static_cast<int>(raw.size()) - i);
-            ws.process(raw.data() + i, shifted.data() + i, n, 0.f);
-        }
-
-        // 4. Swap sur le thread GUI (raw toujours en fallback si WSOLA échoue)
-        juce::MessageManager::callAsync(
-            [this, slot, shifted = std::move(shifted)]() mutable
+    backgroundTasks_.push_back(
+        std::async(std::launch::async,
+            [this, slot, raw = std::move(raw), sr, snapProjectSr]() mutable
             {
-                dspPipeline_.getSampler().reloadSlotData(slot, std::move(shifted));
-            });
-    }).detach();
+                // RAII guard: clear processingSlot on exit
+                struct SlotGuard {
+                    std::atomic<bool>& flag;
+                    ~SlotGuard() { flag.store(false, std::memory_order_release); }
+                } guard{ processingSlot_[static_cast<std::size_t>(slot)] };
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // ── Réserve #2 : SR normalisation ────────────────────────────────
+                // If the file SR differs from the project SR, resample the raw PCM
+                // so that all analysis and processing runs at the project rate.
+                if (snapProjectSr > 0.0 && std::abs(sr - snapProjectSr) > 1.0)
+                {
+                    const float srRatio = static_cast<float>(sr / snapProjectSr);
+                    auto resampled = ::dsp::WsolaShifter::resampleLinear(raw, srRatio);
+                    if (!resampled.empty())
+                    {
+                        raw = std::move(resampled);
+                        sr  = snapProjectSr;
+                        // Push SR-corrected version immediately (replaces initial load)
+                        juce::MessageManager::callAsync(
+                            [this, slot, srFixed = raw]() mutable
+                            {
+                                dspPipeline_.getSampler().reloadSlotData(
+                                    slot, std::move(srFixed));
+                            });
+                    }
+                }
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // 1. Skip pitch/tempo correction for pure percussion
+                auto features = ::dsp::FeatureExtractor::extract(raw, sr);
+                const bool isPercussive =
+                    (features.contentType == ::dsp::ContentCategory::KICK  ||
+                     features.contentType == ::dsp::ContentCategory::SNARE ||
+                     features.contentType == ::dsp::ContentCategory::HIHAT ||
+                     features.contentType == ::dsp::ContentCategory::PERC);
+                if (isPercussive) return;
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // 2. BPM detection with confidence (3-method fallback)
+                ::dsp::BpmDetector::BpmDetectionResult bpmResult;
+                if (overrideBpm_ > 0.f)
+                {
+                    // Manual BPM from popup override (Réserve #3)
+                    bpmResult.bpm        = overrideBpm_;
+                    bpmResult.confidence = 1.0f;
+                    overrideBpm_ = 0.f;  // consume it
+                }
+                else
+                {
+                    bpmResult = ::dsp::BpmDetector::detectOfflineRobust(
+                        raw.data(), static_cast<int>(raw.size()), sr);
+                }
+
+                // Snapshot project BPM (atomic read from BPM detector)
+                const float masterBpm = dspPipeline_.getBpmDetector().getBpm();
+
+                // ── Réserve #3 : low-confidence popup ────────────────────────────
+                if (bpmResult.confidence < 0.5f &&
+                    bpmResult.bpm >= ::dsp::BpmDetector::kMinBpm)
+                {
+                    const float detected = bpmResult.bpm;
+                    juce::MessageManager::callAsync(
+                        [this, slot, detected]()
+                        { showBpmConfidencePopup(slot, detected); });
+                    return;  // async processing will restart if user confirms
+                }
+
+                float stretchRatio      = 1.f;
+                float pitchFixSemitones = 0.f;
+                bool  doStretch         = false;
+
+                if (bpmResult.confidence > 0.5f &&
+                    bpmResult.bpm >= ::dsp::BpmDetector::kMinBpm &&
+                    bpmResult.bpm <= ::dsp::BpmDetector::kMaxBpm &&
+                    masterBpm    >= ::dsp::BpmDetector::kMinBpm)
+                {
+                    stretchRatio = masterBpm / bpmResult.bpm;
+                    doStretch    = (std::abs(stretchRatio - 1.f) >= 0.05f) &&
+                                   stretchRatio > 0.33f && stretchRatio < 3.f;
+                    if (doStretch)
+                        pitchFixSemitones = -12.f * std::log2(stretchRatio);
+                }
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // 3. Key detection
+                ::dsp::KeyDetector kd;
+                kd.process(raw.data(), static_cast<int>(raw.size()), sr);
+                const auto keyResult = kd.getResult();
+                float keyShiftSemitones = 0.f;
+                if (keyResult.key >= 0)
+                {
+                    int delta = masterKeyRoot_ - keyResult.key;
+                    while (delta >  6) delta -= 12;
+                    while (delta < -6) delta += 12;
+                    keyShiftSemitones = static_cast<float>(delta);
+                }
+
+                // totalSemitones: key correction + pre-compensation for the pitch
+                // drop that Hermite resample will introduce in Pass 2.
+                // pitchFix = -12*log2(stretchRatio)  →  cancelled by resample.
+                const float totalSemitones = keyShiftSemitones + pitchFixSemitones;
+                const bool  doShift        = std::abs(totalSemitones) > 0.25f;
+
+                if (!doStretch && !doShift) return;  // nothing to do
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // ── Pitch-first dual-pass ─────────────────────────────────────────
+                // Pass 1: WSOLA pitch shift on the pristine (or SR-normalised) signal.
+                //   totalSemitones includes pitchFix to pre-compensate for Pass 2.
+                std::vector<float> processed = raw;
+                if (doShift)
+                {
+                    std::vector<float> shifted(processed.size(), 0.f);
+                    ::dsp::WsolaShifter ws;
+                    ws.prepare(sr, 1024);
+                    ws.setShiftSemitones(totalSemitones);
+                    constexpr int kBlock = 1024;
+                    for (int i = 0; i < static_cast<int>(processed.size()); i += kBlock)
+                    {
+                        if (shutdownFlag_.load(std::memory_order_acquire)) return;
+                        const int n = std::min(kBlock,
+                                               static_cast<int>(processed.size()) - i);
+                        ws.process(processed.data() + i, shifted.data() + i, n, 0.f);
+                    }
+                    processed = std::move(shifted);
+                }
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // Pass 2: Hermite resample for tempo alignment.
+                //   Also lowers pitch by -pitchFix semitones — exactly cancelled by Pass 1.
+                if (doStretch)
+                {
+                    auto stretched = ::dsp::WsolaShifter::resampleHermite(processed,
+                                                                            stretchRatio);
+                    if (!stretched.empty()) processed = std::move(stretched);
+                }
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // 6. Reload on the GUI thread.
+                //    Capture bpm/confidence as individual floats (Réserve #1 —
+                //    avoids dangling reference to stack-local bpmResult struct).
+                juce::MessageManager::callAsync(
+                    [this, slot,
+                     processed  = std::move(processed),
+                     bpm        = bpmResult.bpm,
+                     confidence = bpmResult.confidence]() mutable
+                    {
+                        dspPipeline_.getSampler().reloadSlotData(slot,
+                                                                  std::move(processed));
+                        stepSeqPanel_.setSlotBpm(slot, bpm, confidence);
+                    });
+            }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// showBpmConfidencePopup — shown when detectOfflineRobust confidence < 0.5.
+// Lets the user confirm the detected BPM or enter one manually.
+// Called on the GUI thread via MessageManager::callAsync.
+// ─────────────────────────────────────────────────────────────────────────────
+void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
+{
+    const juce::String msg =
+        "BPM detected: " + juce::String(juce::roundToInt(detectedBpm)) +
+        "\n(low confidence — may be inaccurate for melodic/ambient samples)\n\n"
+        "What would you like to do?";
+
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions{}
+            .withTitle("BPM Uncertain")
+            .withMessage(msg)
+            .withButton("Use " + juce::String(juce::roundToInt(detectedBpm)) + " BPM")
+            .withButton("Enter Manually")
+            .withButton("Cancel"),
+        [this, slot, detectedBpm](int result)
+        {
+            const auto idx = static_cast<std::size_t>(slot);
+            if (result == 1)  // "Use detected BPM"
+            {
+                auto  raw = rawPcmForRetry_[idx];
+                double sr = rawSrForRetry_ [idx];
+                rawPcmForRetry_[idx].clear();
+                overrideBpm_ = detectedBpm;
+                autoMatchSampleAsync(slot, std::move(raw), sr);
+            }
+            else if (result == 2)  // "Enter Manually"
+            {
+                auto* aw = new juce::AlertWindow("Manual BPM",
+                                                 "Enter the sample BPM:",
+                                                 juce::MessageBoxIconType::QuestionIcon);
+                aw->addTextEditor("bpm",
+                    juce::String(juce::roundToInt(detectedBpm)), "BPM:");
+                aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+                aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+                aw->enterModalState(true,
+                    juce::ModalCallbackFunction::create(
+                        [this, slot, aw](int r)
+                        {
+                            const auto i = static_cast<std::size_t>(slot);
+                            if (r == 1)
+                            {
+                                const float bpm =
+                                    aw->getTextEditorContents("bpm").getFloatValue();
+                                if (bpm >= 40.f && bpm <= 300.f)
+                                {
+                                    auto   raw = rawPcmForRetry_[i];
+                                    double sr  = rawSrForRetry_ [i];
+                                    rawPcmForRetry_[i].clear();
+                                    overrideBpm_ = bpm;
+                                    autoMatchSampleAsync(slot, std::move(raw), sr);
+                                }
+                            }
+                            else
+                            {
+                                rawPcmForRetry_[i].clear();
+                            }
+                        }),
+                    true);  // deleteWhenDismissed
+            }
+            else  // "Cancel"
+            {
+                rawPcmForRetry_[idx].clear();
+            }
+        });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -946,17 +1192,13 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 498, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // "KEY" micro-label above master key combos (drawn inline — position mirrors resized())
-        // kPad=8, kStatusH=24 → magicY=H-58, playY=H-120
-        const int playY_p      = H - 24 - 8 - 26 - 8 - 54;  // H - 120
-        const int viewBtnY_p   = playY_p - 8 - 28;           // H - 156
-        const int scaleY_p     = viewBtnY_p - 4 - 26;        // H - 186
-        const int masterKeyY_p = scaleY_p - 4 - 24;          // H - 214
-        g.drawText("KEY", sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
+        // Labels mirroring resized() bottom-up layout:
+        // magicY=H-58, aiStatus=H-76, play=H-144, viewBtn=H-176, masterKey=H-210
+        const int masterKeyY_p = H - 210;
+        const int viewBtnY_p   = H - 176;
+        g.drawText("KEY",  sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
-        g.drawText("SCALE", sidebarX + 12, scaleY_p - 11, kSidebarW - 24, 10,
-                   juce::Justification::centredLeft);
-        g.drawText("VIEW", sidebarX + 12, viewBtnY_p - 11, kSidebarW - 24, 10,
+        g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
     }
 
@@ -1065,25 +1307,26 @@ void MainComponent::resized()
         sceneResetBtn_.setBounds(sbBtnX, y, sbBtnW, 22); y += 25;
         sceneCopyBtn_ .setBounds(sbBtnX, y, sbBtnW, 22);
 
-        // PLAY button (large) + magic — pinned near bottom
-        const int magicY = H - kStatusH - kPad - 26;
-        const int playY  = magicY - kPad - 54;
-        sidebarPlayBtn_ .setBounds(sbBtnX, playY,  sbBtnW, 54);
-        sidebarMagicBtn_.setBounds(sbBtnX, magicY, sbBtnW, 26);
+        // ── Bottom section (pinned, bottom-up) ──────────────────────────
+        // magicY   = H-58 | aiStatus = H-76 | play = H-144
+        // viewBtn  = H-176 | masterKey = H-210
+        const int magicY     = H - kStatusH - kPad - 26;  // 26px ⚡
+        const int aiStatusY  = magicY - 18;                // 16px AI label
+        const int playY      = aiStatusY - kPad - 60;      // 60px PLAY
+        const int viewBtnY   = playY - kPad - 24;          // 24px 🎹🎼
+        const int masterKeyY = viewBtnY - kPad - 26;       // 26px KEY
 
-        // ── VIEW SWITCH + MASTER KEY (above play button) ──────────────
-        const int viewBtnY   = playY - kPad - 28;     // 28px view buttons
-        const int scaleY     = viewBtnY - 4 - 26;     // 26px scale combo
-        const int masterKeyY = scaleY - 4 - 24;       // 24px key combos
+        sidebarPlayBtn_ .setBounds(sbBtnX, playY,     sbBtnW, 60);
+        aiStatusLabel_  .setBounds(sbBtnX, aiStatusY, sbBtnW, 16);
+        sidebarMagicBtn_.setBounds(sbBtnX, magicY,    sbBtnW, 26);
 
         const int halfW = sbBtnW / 2 - 2;
-        viewKeyboardBtn_.setBounds(sbBtnX,               viewBtnY, halfW, 28);
-        viewStaffBtn_   .setBounds(sbBtnX + halfW + 4,   viewBtnY, halfW, 28);
+        viewKeyboardBtn_.setBounds(sbBtnX,             viewBtnY, halfW, 24);
+        viewStaffBtn_   .setBounds(sbBtnX + halfW + 4, viewBtnY, halfW, 24);
 
-        globalScaleCombo_.setBounds(sbBtnX, scaleY, sbBtnW, 26);
-
-        masterKeyCombo_    .setBounds(sbBtnX,               masterKeyY, halfW, 24);
-        masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4,   masterKeyY, halfW, 24);
+        globalScaleCombo_.setBounds(0, 0, 0, 0);           // supprimé — doublon
+        masterKeyCombo_    .setBounds(sbBtnX,             masterKeyY, halfW, 26);
+        masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4, masterKeyY, halfW, 26);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1096,6 +1339,7 @@ void MainComponent::resized()
     // Effect chain section + swappable panels (same bounds)
     const int fxTop = kHeaderH + 16;
     fxLabel_.setBounds(16, fxTop, 180, 16);
+
     const auto panelBounds = juce::Rectangle<int>(16, fxTop + 20, mainW, 390);
     effectChainEditor_  .setBounds(panelBounds);
     pianoKeyboardPanel_ .setBounds(panelBounds);
@@ -1110,6 +1354,15 @@ void MainComponent::resized()
 void MainComponent::timerCallback()
 {
     dspPipeline_.getEffectChain().collectGarbage();
+
+    // AI status animation while busy
+    if (samplerEngine_.isBusy())
+    {
+        static const char* kFrames[] = { "IA \xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f\xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f" };
+        aiStatusLabel_.setText(juce::CharPointer_UTF8(kFrames[aiAnimFrame_ % 4]),
+                               juce::dontSendNotification);
+        ++aiAnimFrame_;
+    }
 
     // Sync play button text with sequencer state
     sidebarPlayBtn_.setButtonText(

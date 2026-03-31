@@ -46,10 +46,17 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 
 ### Sampler & Step Sequencer
 
-- 8 sample slots with WAV loading
+- 8 sample slots with WAV loading (drag-and-drop from Explorer / Sononym)
 - 16-step sequencer per track with velocity
 - BPM sync, swing, per-track mute/solo
 - AI content classification (ONNX) for automatic sample categorization
+- **Auto-Match** on load: BPM + key detected, sample time-stretched + pitch-shifted to project tempo/key
+  - 3-method BPM detection with confidence score (RMS autocorrelation, onset-strength, comb-filter)
+  - Hermite 4-point interpolation resample for high-quality tempo alignment
+  - Pitch-first dual-pass: WSOLA pitch shift on clean signal → Hermite tempo stretch
+  - Sample-rate normalisation: 48 kHz files resampled to project rate automatically
+  - Popup confirmation when BPM confidence < 50% (use detected / enter manually / cancel)
+  - BPM confidence indicator per slot (green ✓ / amber ~ / red ?)
 
 ### AI / ONNX Integration
 
@@ -210,17 +217,18 @@ projet-dub/
 | **Sprint 7** | Done | ONNX Runtime integration + InferenceThread |
 | **Sprint 8** | Done | AI content classifier (sample categorization) |
 | **Sprint 9** | Done | AI mix engine (EQ + gain optimization) |
-| **Sprint 10** | Pending | Compression IA + master limiter + live A/B test |
+| **Sprint 10** | Done | Master limiter, dynamic ducking (anti-masking), drag-and-drop sampler |
+| **Sprint 11** | Done | Audio quality overhaul + Auto-Match Tempo/Key |
 
-### Sprint 10 -- Compression IA + polish
+### Sprint 11 — Audio quality overhaul + Auto-Match
 
-| Step | Task | Validation |
-|------|------|------------|
-| 10.1 | Dynamic compression per slot in AiMixEngine | Test: peak at -1dB -> compressed, stable RMS |
-| 10.2 | Master limiter (peak < 0 dBFS guaranteed) | Test: saturated input -> output <= 0 dBFS |
-| 10.3 | UI: display AI decisions (EQ curves, gains) | Visual, no crash |
-| 10.4 | Benchmark full pipeline latency (sax + 8 slots + AI) | Assert total <= 20 ms |
-| 10.5 | A/B test live: heuristic vs AI mix on 5 tracks | Subjective evaluation |
+| Fix | Description |
+|-----|-------------|
+| C1 | Exponential fade-in at trigger onset — eliminates click/pop |
+| C2 | EMA ramp on ducking gain — eliminates ducking crackle |
+| C3/C4 | AI EQ corrected: filter order + frequencies (100/2500/8000 Hz) + ±6 dB clamp |
+| M2 | True-peak detection (4× oversampling ITU-R BS.1770) + −3 dBFS headroom |
+| Phase 2 | `autoMatchSampleAsync`: 3-method BPM detection, Hermite resample, pitch-first dual-pass, SR normalisation, BPM confidence popup |
 
 ---
 

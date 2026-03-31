@@ -14,6 +14,10 @@
 #include "ui/StepSequencerPanel.h"
 
 #include <JuceHeader.h>
+#include <atomic>
+#include <array>
+#include <future>
+#include <vector>
 
 //==============================================================================
 /**
@@ -103,6 +107,8 @@ private:
     juce::TextButton sidebarTapBtn_;
     juce::Label      sidebarBpmLabel_;
     juce::TextButton sidebarMagicBtn_;
+    juce::Label      aiStatusLabel_;
+    int              aiAnimFrame_ { 0 };
 
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;
@@ -128,6 +134,18 @@ private:
     int currentScene_ { 0 };
 
     //==========================================================================
+    // Background task management
+    //==========================================================================
+    std::atomic<bool>                               shutdownFlag_{ false };
+    std::array<std::atomic<bool>, 8>                processingSlot_{};
+    std::vector<std::future<void>>                  backgroundTasks_;
+
+    // Réserve #3 — BPM override + raw-PCM retry storage (GUI thread only)
+    float                           overrideBpm_{ 0.f };          // consumed by next async run
+    std::array<std::vector<float>, 8> rawPcmForRetry_{};
+    std::array<double,             8> rawSrForRetry_{};           // value-initialised to 0
+
+    //==========================================================================
     // State
     //==========================================================================
     std::atomic<float> currentRmsLevel_{0.0f};
@@ -140,7 +158,8 @@ private:
     // Helpers
     //==========================================================================
     void loadSampleIntoSlot(int slot, const std::string& path);
-    void pitchMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
+    void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
+    void showBpmConfidencePopup(int slot, float detectedBpm);
     ::dsp::SynthEffect* findSynthEffect() noexcept;
     void applyProjectData(const project::ProjectData& data);
     void saveProject();

@@ -3,6 +3,7 @@
 #include "DspCommon.h"
 #include <array>
 #include <cassert>
+#include <vector>
 
 namespace dsp {
 
@@ -48,6 +49,23 @@ public:
                  int numSamples, float inputPitchHz) noexcept;
 
     void reset() noexcept;
+
+    // ── Offline utility ──────────────────────────────────────────────────────
+
+    /// Linear-interpolation time-scale change for offline (batch) processing.
+    /// ratio = sourceBpm / targetBpm  (or inputSampleRate / outputSampleRate).
+    ///   ratio < 1 → output longer  (time-stretch, e.g. 110/130 ≈ 0.846)
+    ///   ratio > 1 → output shorter (time-compress)
+    /// Pitch is NOT preserved — apply pitchShift separately after this call to
+    /// compensate with semitones = -12 * log2(ratio).
+    static std::vector<float> resampleLinear(const std::vector<float>& input,
+                                             float ratio) noexcept;
+
+    /// Hermite 4-point interpolation time-scale change (offline, batch).
+    /// Same semantics as resampleLinear but THD+N ≈ 0.01% vs 0.5% for linear.
+    /// Preferred for tempo-correction paths; falls back to linear near edges.
+    static std::vector<float> resampleHermite(const std::vector<float>& input,
+                                              float ratio) noexcept;
 
 private:
     static constexpr int kRingMask  = kRingSize  - 1;

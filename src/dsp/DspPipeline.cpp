@@ -22,6 +22,7 @@ void DspPipeline::reset() noexcept
     sampler_.reset();
     bpmDetector_.reset();
     rmsRunning_ = 0.0f;
+    smoothDuck_ = 1.0f;
     lastPitchHz_.store(0.0f, std::memory_order_relaxed);
     lastConfidence_.store(0.0f, std::memory_order_relaxed);
     rmsLevel_.store(0.0f, std::memory_order_relaxed);
@@ -74,18 +75,15 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
 
         if (duckingEnabled_.load(std::memory_order_relaxed))
         {
-            // Ducking: if sax RMS > 0.05, reduce sampler volume (up to -6 dB at RMS=0.3)
-            float duckGain = 1.0f;
+            // Target duck gain: map RMS [0.05 … 0.3] → gain [1.0 … 0.5]
+            float targetDuck = 1.0f;
             if (rmsRunning_ > 0.05f)
             {
-                // Map [0.05 ... 0.3] -> [1.0 ... 0.5]
-                float ratio = (rmsRunning_ - 0.05f) / 0.25f;
-                ratio = std::min(1.0f, ratio);
-                duckGain = 1.0f - (ratio * 0.5f); // Drops to 0.5 at max
+                const float ratio = std::min(1.0f, (rmsRunning_ - 0.05f) / 0.25f);
+                targetDuck = 1.0f - ratio * 0.5f;
             }
 
-            // Smooth the duck gain slightly if needed, but per-block is fine
-            // Render sampler to a temp buffer, then mix with ducking
+            // Render sampler to temp buffer
             if (numSamples > static_cast<int>(tempBuffer_.size()))
                 tempBuffer_.resize(numSamples, 0.0f);
             else
@@ -93,10 +91,16 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
 
             sampler_.process(tempBuffer_.data(), numSamples);
 
+            // EMA ramp per-sample (~5 ms at 44100 Hz) — eliminates ducking clicks
+            static constexpr float kDuckCoeff = 0.002f;
             for (int i = 0; i < numSamples; ++i)
-                buffer[i] += tempBuffer_[i] * duckGain;
+            {
+                smoothDuck_ = std::clamp(smoothDuck_ + kDuckCoeff * (targetDuck - smoothDuck_),
+                                         0.0f, 2.0f);
+                buffer[i] += tempBuffer_[i] * smoothDuck_;
+            }
 
-            currentDuckingGain_.store(duckGain, std::memory_order_relaxed);
+            currentDuckingGain_.store(smoothDuck_, std::memory_order_relaxed);
         }
         else
         {
