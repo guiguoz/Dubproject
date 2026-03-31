@@ -23,6 +23,9 @@ struct MixDecision {
     float lowGain  = 0.f;
     float midGain  = 0.f;
     float highGain = 0.f;
+    float pan      = 0.f;   // −1.0 (L) … +1.0 (R)
+    float width    = 0.f;   // 0 = mono, 1 = full Haas (25 ms)
+    float depth    = 0.f;   // 0 = front, 1 = back (high-shelf attenuation)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

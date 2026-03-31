@@ -99,6 +99,23 @@ public:
     // Mixes sampler output INTO buffer (additive, realtime-safe).
     void process(float* buffer, int numSamples) noexcept;
 
+    // Mixes sampler output into STEREO L/R buffers (additive, realtime-safe).
+    // Pan law: equal-power (-3dB centre).
+    // Width: Haas effect delay on the weaker channel (set via setSlotHaasDelay).
+    void processStereo(float* left, float* right, int numSamples) noexcept;
+
+    // Set panoramic position for a slot.  pan in [-1.0, +1.0].
+    // Converts to equal-power L/R gains stored as atomics.
+    // Call from GUI thread (after magic mix).
+    void setSlotPan(int slot, float pan) noexcept;
+
+    // Set Haas delay for a slot (0 = disabled, max kHaasDelayMax-1 samples).
+    // Written by GUI thread, read by audio thread (audio-thread-only write pos is safe).
+    void setSlotHaasDelay(int slot, int samples) noexcept;
+
+    // Reset pan to centre and disable Haas for all slots.
+    void resetSpatial() noexcept;
+
     void reset() noexcept;
 
 private:
@@ -128,6 +145,21 @@ private:
 
     // Per-slot output peak — written by audio thread, read by GUI (VU meter).
     std::atomic<float> outputPeaks_[kMaxSlots] {};
+
+    // ── Spatial (pan + Haas width) ─────────────────────────────────────────────
+    // Equal-power pan gains — written by GUI thread, read by audio thread.
+    std::array<std::atomic<float>, kMaxSlots> panL_ {};  // initialised in reset()
+    std::array<std::atomic<float>, kMaxSlots> panR_ {};
+
+    // Haas effect ring buffers — fixed size, never reallocated on audio thread.
+    // 2048 samples > 42 ms @ 48 kHz — covers the full width=1 (25 ms) with margin.
+    static constexpr int kHaasDelayMax = 2048;
+    std::array<std::array<float, kHaasDelayMax>, kMaxSlots> haasDelay_ {};
+    std::array<int, kMaxSlots> haasWritePos_    {};  // audio thread only
+    std::array<int, kMaxSlots> haasDelaySamples_{};  // 0 = off; written by GUI thread
+
+    // Applies Haas delay ring buffer for one slot and returns delayed sample.
+    inline float applyHaasDelay(int slot, float sample) noexcept;
 };
 
 } // namespace dsp

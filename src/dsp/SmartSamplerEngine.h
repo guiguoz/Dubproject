@@ -164,6 +164,32 @@ public:
         hasOverride_[static_cast<std::size_t>(slot)] = false;
     }
 
+    // ── Public spatial query (for UI display after magic mix) ─────────────────
+
+    struct SpatialQuery { float pan, width, depth; };
+
+    /// Returns the default spatial position for a content type + slot index.
+    /// Uses a centroid of 1000 Hz (neutral) — matches the heuristic applied
+    /// by applyNeutronMix() for non-sub-bass content.
+    static SpatialQuery spatialForType(int slot, ContentType type) noexcept
+    {
+        float pan = 0.f, width = 0.f, depth = 0.f;
+        switch (type)
+        {
+            case ContentType::KICK:  pan=0.f;  width=0.f;  depth=0.f;  break;
+            case ContentType::SNARE: pan=0.f;  width=0.1f; depth=0.1f; break;
+            case ContentType::BASS:  pan=0.f;  width=0.f;  depth=0.f;  break;
+            case ContentType::HIHAT:
+                pan = (slot % 2 == 0) ? 0.4f : -0.4f;
+                width = 0.3f; depth = 0.2f;              break;
+            case ContentType::PAD:   pan=0.f;  width=0.8f; depth=0.6f; break;
+            case ContentType::SYNTH: pan=0.f;  width=0.4f; depth=0.3f; break;
+            case ContentType::PERC:  pan=0.3f; width=0.2f; depth=0.2f; break;
+            default:                 pan=0.f;  width=0.2f; depth=0.2f; break;
+        }
+        return { pan, width, depth };
+    }
+
 private:
     // ─────────────────────────────────────────────────────────────────────────
     static constexpr int kSamplerSlots = 8;   // S1–S8 only (master has its own analysis)
@@ -176,6 +202,88 @@ private:
         float  masterBpm;   // 0 = unknown
         double sampleRate;
     };
+
+    // ── Spatial decision per slot ─────────────────────────────────────────────
+
+    struct SpatialDecision
+    {
+        float pan   = 0.f;  // −1.0 (L) … +1.0 (R)
+        float width = 0.f;  // 0 = mono, 1 = max Haas (25 ms)
+        float depth = 0.f;  // 0 = front, 1 = back (high-shelf −6dB @ 8kHz)
+    };
+
+    /// Compute per-slot spatialization from content type and spectral centroid.
+    /// L/R balancing is done in a second pass by the caller (applyNeutronMix).
+    static SpatialDecision computeSpatialization(int slot, ContentType type,
+                                                 float centroid) noexcept
+    {
+        float pan = 0.f, width = 0.f, depth = 0.f;
+        switch (type)
+        {
+            case ContentType::KICK:
+                pan = 0.f;  width = 0.f;  depth = 0.f;   break;
+            case ContentType::SNARE:
+                pan = 0.f;  width = 0.1f; depth = 0.1f;  break;
+            case ContentType::BASS:
+                pan = 0.f;  width = 0.f;  depth = 0.f;   break;
+            case ContentType::HIHAT:
+                // Alternating L/R by slot index → natural stereo when 2 hats loaded
+                pan = (slot % 2 == 0) ? 0.4f : -0.4f;
+                width = 0.3f;  depth = 0.2f;              break;
+            case ContentType::PAD:
+                pan = 0.f;  width = 0.8f; depth = 0.6f;  break;
+            case ContentType::SYNTH:
+                pan = 0.f;  width = 0.4f; depth = 0.3f;  break;
+            case ContentType::PERC:
+                pan = 0.3f; width = 0.2f; depth = 0.2f;  break;
+            default:
+                pan = 0.f;  width = 0.2f; depth = 0.2f;  break;
+        }
+
+        // Sub-bass mono enforcement: centroid < 200 Hz → pan=0, width=0
+        if (centroid < 200.f) { pan = 0.f; width = 0.f; }
+
+        return { pan, width, depth };
+    }
+
+    // ── Spectral centroid estimate ────────────────────────────────────────────
+
+    /// Lightweight spectral centroid (Hz) using the same 4-band LP cascade as
+    /// detectContentType().  Band centres: sub≈75, bass≈325, mid≈1750, high≈8000 Hz.
+    static float estimateSpectralCentroid(const std::vector<float>& pcm,
+                                          double sampleRate) noexcept
+    {
+        if (pcm.empty()) return 1000.f;
+        const float fs = static_cast<float>(sampleRate);
+
+        const auto alphaFor = [fs](float fc) noexcept {
+            const float t = juce::MathConstants<float>::twoPi * fc / fs;
+            return t / (t + 1.f);
+        };
+        const float a150  = alphaFor(150.f);
+        const float a500  = alphaFor(500.f);
+        const float a3000 = alphaFor(3000.f);
+
+        float y150 = 0.f, y500 = 0.f, y3000 = 0.f;
+        float eSub = 0.f, eBass = 0.f, eMid = 0.f, eHigh = 0.f;
+
+        const int N = std::min(static_cast<int>(pcm.size()),
+                               static_cast<int>(sampleRate));
+        for (int i = 0; i < N; ++i)
+        {
+            const float x = pcm[static_cast<std::size_t>(i)];
+            y150  = a150  * x + (1.f - a150)  * y150;
+            y500  = a500  * x + (1.f - a500)  * y500;
+            y3000 = a3000 * x + (1.f - a3000) * y3000;
+            eSub  += y150  * y150;
+            eBass += (y500 - y150)  * (y500 - y150);
+            eMid  += (y3000 - y500) * (y3000 - y500);
+            eHigh += (x - y3000)    * (x - y3000);
+        }
+        const float total = eSub + eBass + eMid + eHigh;
+        if (total < 1e-8f) return 1000.f;
+        return (75.f * eSub + 325.f * eBass + 1750.f * eMid + 8000.f * eHigh) / total;
+    }
 
     // ── Instrument content type helpers ───────────────────────────────────────
 
@@ -495,9 +603,10 @@ private:
         juce::AudioFormatManager fmt;
         fmt.registerBasicFormats();
 
-        ContentType           types[kSamplerSlots] {};
-        std::vector<float>    pcms [kSamplerSlots];
-        bool                  loaded[kSamplerSlots] {};
+        ContentType           types    [kSamplerSlots] {};
+        float                 centroids[kSamplerSlots] {};  // spectral centroid (Hz)
+        std::vector<float>    pcms     [kSamplerSlots];
+        bool                  loaded   [kSamplerSlots] {};
         int                   numLoaded = 0;
 
         // Phase 1: read original files + detect content type
@@ -531,6 +640,7 @@ private:
             #else
             types[i]  = detectContentType(pcms[i], reader->sampleRate);
             #endif
+            centroids[i] = estimateSpectralCentroid(pcms[i], reader->sampleRate);
             loaded[i] = true;
             ++numLoaded;
         }
@@ -675,6 +785,64 @@ private:
                 if (types[tgt] == ContentType::BASS || types[tgt] == ContentType::SYNTH)
                     sampler_.setSidechainPair(kick, tgt);
             }
+        }
+
+        // Phase 4: Spatial assignment (pan + Haas width + depth)
+        //
+        // Pass 1 — compute individual spatial decisions.
+        std::array<SpatialDecision, kSamplerSlots> spatials {};
+        for (int i = 0; i < kSamplerSlots; ++i)
+        {
+            if (!loaded[i]) continue;
+            const ContentType effectiveType = hasOverride_[static_cast<std::size_t>(i)]
+                ? overrideTypes_[static_cast<std::size_t>(i)] : types[i];
+            spatials[static_cast<std::size_t>(i)] =
+                computeSpatialization(i, effectiveType, centroids[i]);
+        }
+
+        // Pass 2 — global L/R balance correction.
+        // Count panned slots; if imbalance > 3, flip non-critical slots (PAD/SYNTH/PERC).
+        int leftCount = 0, rightCount = 0;
+        for (int i = 0; i < kSamplerSlots; ++i)
+        {
+            if (!loaded[i]) continue;
+            if (spatials[static_cast<std::size_t>(i)].pan < -0.1f) ++leftCount;
+            if (spatials[static_cast<std::size_t>(i)].pan >  0.1f) ++rightCount;
+        }
+        if (std::abs(leftCount - rightCount) > 3)
+        {
+            for (int i = 0; i < kSamplerSlots; ++i)
+            {
+                if (!loaded[i]) continue;
+                const ContentType t = types[i];
+                if (t != ContentType::PAD && t != ContentType::SYNTH
+                 && t != ContentType::PERC) continue;
+
+                auto& sp = spatials[static_cast<std::size_t>(i)];
+                if (leftCount > rightCount && sp.pan < 0.f)
+                {
+                    sp.pan = -sp.pan;
+                    --leftCount; ++rightCount;
+                }
+                else if (rightCount > leftCount && sp.pan > 0.f)
+                {
+                    sp.pan = -sp.pan;
+                    --rightCount; ++leftCount;
+                }
+                if (std::abs(leftCount - rightCount) <= 1) break;
+            }
+        }
+
+        // Apply results: pan gains + Haas delay samples.
+        // depth v1.0: pure heuristic — the EQ applied in Phase 2 already reduces
+        //             high-frequency content for back-panned slots (TODO v2.0: reverb send).
+        for (int i = 0; i < kSamplerSlots; ++i)
+        {
+            if (!loaded[i]) continue;
+            const auto& sp = spatials[static_cast<std::size_t>(i)];
+            sampler_.setSlotPan(i, sp.pan);
+            const int haasSamples = static_cast<int>(sp.width * 0.025 * sampleRate_);
+            sampler_.setSlotHaasDelay(i, haasSamples);
         }
     }
 

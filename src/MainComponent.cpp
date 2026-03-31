@@ -301,13 +301,34 @@ MainComponent::MainComponent()
     // Mise à jour des tags de type dans l'UI quand la détection est terminée
     samplerEngine_.onTypesDetected = [this]
     {
+        // Per-slot content-type accent colours (mirrors StepSequencerPanel::trackColour)
+        static const juce::Colour kSlotColours[8] = {
+            juce::Colour { 0xFF4CDFA8 }, juce::Colour { 0xFF06B6D4 },
+            juce::Colour { 0xFFC8C7C7 }, juce::Colour { 0xFF8B5CF6 },
+            juce::Colour { 0xFFF97316 }, juce::Colour { 0xFFF43F5E },
+            juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
+        };
+
         for (int i = 0; i < 8; ++i)
         {
             const auto type = samplerEngine_.getDetectedType(i);
-            if (dspPipeline_.getSampler().isLoaded(i))
+            const bool loaded = dspPipeline_.getSampler().isLoaded(i);
+            if (loaded)
                 stepSeqPanel_.setSlotContentType(
                     i, ::dsp::SmartSamplerEngine::contentTypeName(type));
+
+            // Spatial visualization — pan/width/depth are set by SmartSamplerEngine
+            // after applyNeutronMix(); we just update the visual state here.
+            // Note: pan/width/depth are heuristic values from computeSpatialization().
+            // We reconstruct them from the sampler's stored gains for display.
+            // Simple approach: use content-type defaults (matches what was applied).
+            const ::dsp::SmartSamplerEngine::ContentType ct =
+                samplerEngine_.getDetectedType(i);
+            const auto sp = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
+            spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth,
+                                     loaded, kSlotColours[i]);
         }
+        spatialViz_.setSaxActive(true);
         stepSeqPanel_.setMagicActive(true);
         sidebarMagicBtn_.setToggleState(true, juce::dontSendNotification);
         aiStatusLabel_.setText(juce::CharPointer_UTF8("IA \xe2\x9c\x93"), juce::dontSendNotification);  // "IA ✓"
@@ -323,6 +344,7 @@ MainComponent::MainComponent()
             stepSeqPanel_.setMagicActive(false);
             sidebarMagicBtn_.setToggleState(false, juce::dontSendNotification);
             aiStatusLabel_.setText("", juce::dontSendNotification);
+            spatialViz_.resetAll();
         }
     };
 
@@ -442,6 +464,9 @@ MainComponent::MainComponent()
     saxStaffPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
     saxStaffPanel_.setVisible(false);
     addAndMakeVisible(saxStaffPanel_);
+
+    // ── Spatial visualization ─────────────────────────────────────────────────
+    addAndMakeVisible(spatialViz_);
 
     // Initial BPM
     stepSequencer_.setBpm(120.f);
@@ -978,16 +1003,16 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         return;
     }
 
-    float* monoChannel = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
     const int numSamples = bufferToFill.numSamples;
+    const int numCh      = bufferToFill.buffer->getNumChannels();
 
-    // Compute RMS before processing (for VU meter) — exponential smoothing
-    // Attack fast (0.3) so the meter reacts quickly to transients,
-    // release slow (0.05) so it doesn't jump back to zero between notes.
+    float* left = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
+
+    // Compute input RMS before processing (for VU meter) — exponential smoothing
     {
         float sumSquares = 0.0f;
         for (int i = 0; i < numSamples; ++i)
-            sumSquares += monoChannel[i] * monoChannel[i];
+            sumSquares += left[i] * left[i];
         const float rawRms = std::sqrt(sumSquares / static_cast<float>(numSamples));
         const float prev   = currentRmsLevel_.load(std::memory_order_relaxed);
         const float coeff  = (rawRms > prev) ? 0.3f : 0.05f;
@@ -998,32 +1023,63 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     // Step sequencer — triggers sampler slots at step boundaries (before DSP mix)
     stepSequencer_.process(numSamples, dspPipeline_.getSampler());
 
-    // DSP pipeline (effects + sampler mix)
-    dspPipeline_.process(monoChannel, numSamples);
-
-    // Apply master output gain
-    const float outGain = outputGain_.load(std::memory_order_relaxed);
-    if (outGain != 1.0f)
-        for (int i = 0; i < numSamples; ++i)
-            monoChannel[i] *= outGain;
-
-    // Compute Output RMS (for VU meter)
+    if (numCh >= 2)
     {
-        float sumSquares = 0.0f;
-        for (int i = 0; i < numSamples; ++i)
-            sumSquares += monoChannel[i] * monoChannel[i];
-        const float rawRms = std::sqrt(sumSquares / static_cast<float>(numSamples));
-        const float prev   = currentOutputRmsLevel_.load(std::memory_order_relaxed);
-        const float coeff  = (rawRms > prev) ? 0.3f : 0.05f;
-        currentOutputRmsLevel_.store(prev + coeff * (rawRms - prev),
-                               std::memory_order_relaxed);
+        // ── Stereo path ───────────────────────────────────────────────────────
+        float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
+        // Seed right channel with sax input (same as left before effects)
+        std::copy(left, left + numSamples, right);
+
+        dspPipeline_.processStereo(left, right, numSamples);
+
+        // Apply master output gain to both channels
+        const float outGain = outputGain_.load(std::memory_order_relaxed);
+        if (outGain != 1.0f)
+            for (int i = 0; i < numSamples; ++i)
+            {
+                left [i] *= outGain;
+                right[i] *= outGain;
+            }
+
+        // Copy right to any additional channels (surround)
+        for (int ch = 2; ch < numCh; ++ch)
+            bufferToFill.buffer->copyFrom(ch, bufferToFill.startSample,
+                                          *bufferToFill.buffer, 1,
+                                          bufferToFill.startSample, numSamples);
+
+        // Output RMS on left channel
+        {
+            float sumSquares = 0.0f;
+            for (int i = 0; i < numSamples; ++i)
+                sumSquares += left[i] * left[i];
+            const float rawRms = std::sqrt(sumSquares / static_cast<float>(numSamples));
+            const float prev   = currentOutputRmsLevel_.load(std::memory_order_relaxed);
+            const float coeff  = (rawRms > prev) ? 0.3f : 0.05f;
+            currentOutputRmsLevel_.store(prev + coeff * (rawRms - prev),
+                                         std::memory_order_relaxed);
+        }
     }
-
-    // Copy mono to all output channels
-    for (int ch = 1; ch < bufferToFill.buffer->getNumChannels(); ++ch)
+    else
     {
-        bufferToFill.buffer->copyFrom(ch, bufferToFill.startSample, *bufferToFill.buffer, 0,
-                                      bufferToFill.startSample, numSamples);
+        // ── Mono fallback path (unchanged) ───────────────────────────────────
+        dspPipeline_.process(left, numSamples);
+
+        const float outGain = outputGain_.load(std::memory_order_relaxed);
+        if (outGain != 1.0f)
+            for (int i = 0; i < numSamples; ++i)
+                left[i] *= outGain;
+
+        // Compute Output RMS
+        {
+            float sumSquares = 0.0f;
+            for (int i = 0; i < numSamples; ++i)
+                sumSquares += left[i] * left[i];
+            const float rawRms = std::sqrt(sumSquares / static_cast<float>(numSamples));
+            const float prev   = currentOutputRmsLevel_.load(std::memory_order_relaxed);
+            const float coeff  = (rawRms > prev) ? 0.3f : 0.05f;
+            currentOutputRmsLevel_.store(prev + coeff * (rawRms - prev),
+                                         std::memory_order_relaxed);
+        }
     }
 }
 
@@ -1297,6 +1353,9 @@ void MainComponent::resized()
 
         // Info label (tiny, below audio settings)
         infoLabel_.setBounds(sidebarX, kHeaderH + 436, kSidebarW, 10);
+
+        // ── SPATIAL pad ─────────────────────────────────────────────────
+        spatialViz_.setBounds(sbBtnX, kHeaderH + 450, sbBtnW, 58);
 
         // ── TRANSPORT section ────────────────────────────────────────────
         // Separator + label drawn in paint()

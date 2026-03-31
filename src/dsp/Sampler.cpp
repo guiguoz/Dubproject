@@ -347,6 +347,195 @@ void Sampler::reset() noexcept
         ps.readPos = 0;
     }
     clearSidechain();
+    resetSpatial();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Spatial — pan + Haas width
+// ─────────────────────────────────────────────────────────────────────────────
+
+void Sampler::setSlotPan(int slot, float pan) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    // Equal-power law: map pan [-1, +1] to angle [0, π/2]
+    constexpr float kPi = 3.14159265358979f;
+    const float angle = (std::clamp(pan, -1.f, 1.f) + 1.f) * 0.25f * kPi;
+    panL_[static_cast<std::size_t>(slot)].store(std::cos(angle),
+                                                std::memory_order_relaxed);
+    panR_[static_cast<std::size_t>(slot)].store(std::sin(angle),
+                                                std::memory_order_relaxed);
+}
+
+void Sampler::setSlotHaasDelay(int slot, int samples) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    haasDelaySamples_[static_cast<std::size_t>(slot)] =
+        std::clamp(samples, 0, kHaasDelayMax - 1);
+}
+
+void Sampler::resetSpatial() noexcept
+{
+    // Centre pan: equal-power at π/4 → cos = sin = 1/√2 ≈ 0.7071
+    constexpr float kCentre = 0.70710678f;
+    for (int v = 0; v < kMaxSlots; ++v)
+    {
+        const auto idx = static_cast<std::size_t>(v);
+        panL_[idx].store(kCentre, std::memory_order_relaxed);
+        panR_[idx].store(kCentre, std::memory_order_relaxed);
+        haasDelaySamples_[idx] = 0;
+        haasWritePos_[idx]     = 0;
+        haasDelay_[idx].fill(0.f);
+    }
+}
+
+inline float Sampler::applyHaasDelay(int slot, float sample) noexcept
+{
+    const auto   idx   = static_cast<std::size_t>(slot);
+    const int    delay = haasDelaySamples_[idx];
+    if (delay == 0) return sample;
+
+    auto& buf = haasDelay_[idx];
+    const int wp  = haasWritePos_[idx];
+    buf[static_cast<std::size_t>(wp)] = sample;
+    const int rp  = (wp - delay + kHaasDelayMax) & (kHaasDelayMax - 1);
+    haasWritePos_[idx] = (wp + 1) & (kHaasDelayMax - 1);
+    return buf[static_cast<std::size_t>(rp)];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// processStereo
+//
+// Identical to process() but outputs separate L/R channels.
+// Pan gains (panL_/panR_) follow equal-power law.
+// Width (Haas delay) is applied to the right channel only; pan determines
+// which channel is "stronger" — the weaker channel gets the delayed signal.
+// For pan > 0 (right-heavy): left gets delayed (Haas on L).
+// For pan < 0 (left-heavy):  right gets delayed (Haas on R).
+// For pan = 0 (centre):      right gets delayed (subtle stereo width).
+// ─────────────────────────────────────────────────────────────────────────────
+void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
+{
+    // ── Sidechain update (same as mono process) ───────────────────────────────
+    static constexpr float kAttack   = 0.5f;
+    static constexpr float kRelease  = 0.985f;
+    static constexpr float kThresh   = 0.25f;
+    static constexpr float kRatio    = 4.0f;
+
+    for (int sc = 0; sc < numSidechains_; ++sc)
+    {
+        auto& pair = sidechains_[static_cast<std::size_t>(sc)];
+        if (pair.source < 0 || pair.target < 0) continue;
+
+        const float srcPeak = slotPeaks_[static_cast<std::size_t>(pair.source)];
+        if (srcPeak > kThresh)
+        {
+            const float over = (srcPeak - kThresh) / kThresh;
+            const float targetGain = 1.f - over * (1.f - 1.f / kRatio);
+            pair.envelope += kAttack * (targetGain - pair.envelope);
+        }
+        else
+        {
+            pair.envelope += kRelease * (1.f - pair.envelope);
+        }
+        sidechainGains_[static_cast<std::size_t>(pair.target)] = pair.envelope;
+    }
+    std::fill(slotPeaks_, slotPeaks_ + kMaxSlots, 0.f);
+
+    // ── Beat clock + quantized triggers (same as mono process) ───────────────
+    const double phaseBefore = beatClock_.advance(numSamples);
+    const double phaseAfter  = beatClock_.getPhase();
+
+    for (int v = 0; v < kMaxSlots; ++v)
+    {
+        auto& ps = playStates_[static_cast<std::size_t>(v)];
+
+        if (ps.quantTrigPending.load(std::memory_order_acquire))
+        {
+            const auto div = static_cast<GridDiv>(ps.quantDiv.load(std::memory_order_relaxed));
+            if (BeatClock::crossedBoundary(phaseBefore, phaseAfter, div))
+            {
+                ps.quantTrigPending.store(false, std::memory_order_release);
+                ps.triggerPending.store(true,  std::memory_order_release);
+            }
+        }
+    }
+
+    // ── Per-slot playback ─────────────────────────────────────────────────────
+    static constexpr int kFadeLen = 88; // ~2 ms @ 44.1 kHz — must match process()
+    for (int v = 0; v < kMaxSlots; ++v)
+    {
+        const auto  idx    = static_cast<std::size_t>(v);
+        auto&       ps     = playStates_[idx];
+        const auto& sl     = slots_[idx];
+
+        // Handle stop / trigger requests
+        if (ps.stopPending.load(std::memory_order_acquire))
+        {
+            ps.playing.store(false, std::memory_order_relaxed);
+            ps.stopPending.store(false, std::memory_order_release);
+        }
+        if (ps.triggerPending.load(std::memory_order_acquire))
+        {
+            ps.readPos = 0;
+            ps.fadeIn  = 0;
+            ps.playing.store(true,  std::memory_order_relaxed);
+            ps.triggerPending.store(false, std::memory_order_release);
+        }
+
+        if (!ps.playing.load(std::memory_order_relaxed)) continue;
+        if (!sl.loaded.load(std::memory_order_acquire))  continue;
+
+        const int   totalSamp = sl.sampleCount;
+        const float gain      = sl.gain.load(std::memory_order_relaxed);
+        const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
+        const bool  muted     = sl.muted.load(std::memory_order_relaxed);
+
+        const float gL = panL_[idx].load(std::memory_order_relaxed);
+        const float gR = panR_[idx].load(std::memory_order_relaxed);
+        // Haas is applied to the weaker channel:
+        // pan > 0 → L is weaker → delay L; pan ≤ 0 → R is weaker → delay R
+        const bool  haasOnLeft = (gL < gR);
+
+        float blockPeak = 0.f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (ps.readPos >= totalSamp)
+            {
+                if (loop) { ps.readPos = 0; ps.fadeIn = 0; }
+                else       { ps.playing.store(false, std::memory_order_relaxed); break; }
+            }
+
+            if (!muted)
+            {
+                float fadeGain = 1.f;
+                if (ps.fadeIn < kFadeLen)
+                {
+                    fadeGain = 1.f - std::exp(-5.f * ps.fadeIn
+                                              / static_cast<float>(kFadeLen));
+                    ++ps.fadeIn;
+                }
+
+                const float s = sidechainGains_[idx] * gain * fadeGain
+                                * sl.data[static_cast<std::size_t>(ps.readPos)];
+
+                if (haasOnLeft)
+                {
+                    left [i] += applyHaasDelay(v, s) * gL;
+                    right[i] += s * gR;
+                }
+                else
+                {
+                    left [i] += s * gL;
+                    right[i] += applyHaasDelay(v, s) * gR;
+                }
+
+                slotPeaks_[idx] = std::max(slotPeaks_[idx], std::abs(s));
+                blockPeak        = std::max(blockPeak, std::abs(s));
+            }
+            ++ps.readPos;
+        }
+        outputPeaks_[idx].store(blockPeak, std::memory_order_relaxed);
+    }
 }
 
 } // namespace dsp

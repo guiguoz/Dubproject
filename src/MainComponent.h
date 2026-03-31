@@ -11,6 +11,7 @@
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
 #include "ui/SaxStaffPanel.h"
+#include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
 
 #include <JuceHeader.h>
@@ -76,7 +77,8 @@ private:
     // ── Modular Effects ──────────────────────────────────────────────────────
     ui::EffectChainEditor  effectChainEditor_{dspPipeline_.getEffectChain()};
     ui::PianoKeyboardPanel pianoKeyboardPanel_;
-    ui::SaxStaffPanel      saxStaffPanel_;
+    ui::SaxStaffPanel          saxStaffPanel_;
+    ui::SpatialVisualization   spatialViz_;
     juce::Label fxLabel_;
 
     // ── View switching ────────────────────────────────────────────────────────

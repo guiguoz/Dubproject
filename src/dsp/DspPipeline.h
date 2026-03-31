@@ -36,6 +36,12 @@ class DspPipeline
     /// Process a mono block in-place. Realtime-safe.
     void process(float* buffer, int numSamples) noexcept;
 
+    /// Process a stereo block in-place. Realtime-safe.
+    /// Both channels should contain the live saxophone input on entry.
+    /// The sax effect chain runs on left; right gets a panned copy (+0.2 R).
+    /// Sampler uses per-slot pan/Haas settings (set by SmartSamplerEngine).
+    void processStereo(float* left, float* right, int numSamples) noexcept;
+
     void reset() noexcept;
 
     // ── Enable / disable (GUI thread) ───────────────────────────────────────
@@ -116,7 +122,9 @@ class DspPipeline
 
     float smoothDuck_{ 1.0f };  // EMA-smoothed duck gain (audio thread only)
 
-    std::vector<float> tempBuffer_; // Used for sampler ducking
+    std::vector<float> tempBuffer_; // Used for sampler ducking (mono path)
+    std::vector<float> tempBufL_;   // Stereo path: sampler left  temp
+    std::vector<float> tempBufR_;   // Stereo path: sampler right temp
 
     // Latest pitch (written by audio thread, read by GUI thread)
     std::atomic<float> lastPitchHz_{0.0f};
