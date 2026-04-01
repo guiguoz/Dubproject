@@ -183,6 +183,7 @@ MainComponent::MainComponent()
     sidebarMagicBtn_.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(0xFF886600));
     sidebarMagicBtn_.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFFFFCC44));
     sidebarMagicBtn_.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFFFFEE88));
+    sidebarMagicBtn_.setAccentColour(juce::Colour(0xFFFFAA00));  // amber glow
     sidebarMagicBtn_.onClick = [this] { samplerEngine_.toggleMagicMix(); };
 
     // AI status indicator
@@ -358,16 +359,28 @@ MainComponent::MainComponent()
                 slot, static_cast<::dsp::SmartSamplerEngine::ContentType>(typeIndex));
     };
 
+    // Éditeur de sample (bouton [ED])
+    stepSeqPanel_.onEditPressed = [this](int slot) { openSampleEditor(slot); };
+
+    // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
+    stepSeqPanel_.getSlotPlayhead = [this](int slot) -> float
+    {
+        return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
+    };
+
     // VU meter — real per-slot output peak from audio thread (reflects gain/mute)
     stepSeqPanel_.getSlotLevel = [this](int slot) -> float
     {
         return dspPipeline_.getSampler().getSlotOutputPeak(slot);
     };
 
-    // Variable step count per track
-    stepSeqPanel_.onStepCountChanged = [this](int track, int count)
+    // Solo per slot
+    stepSeqPanel_.onSoloChanged = [this](int slot, bool soloed)
     {
-        stepSequencer_.setTrackStepCount(track, count);
+        if (soloed)
+            dspPipeline_.getSampler().setSoloSlot(slot);
+        else
+            dspPipeline_.getSampler().clearSolo();
     };
 
     // Provide the ducking gain to the UI (1.0 = normal, 0.5 = -6dB)
@@ -522,6 +535,12 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
     sampler.setSlotOneShot(slot, true);
 
     stepSeqPanel_.setSlotLoaded(slot, true);
+
+    // Update waveform preview for this slot
+    {
+        auto pcm = sampler.getSlotPcmSnapshot(slot);
+        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(pcm));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -554,6 +573,7 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
         sampler.loadSample(slot, raw.data(), static_cast<int>(raw.size()), sr);
         sampler.setSlotOneShot(slot, true);
         stepSeqPanel_.setSlotLoaded(slot, true);
+        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(raw));
     }
 
     // Slot 0 is the reference master — never auto-shift it
@@ -743,9 +763,12 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                      bpm        = bpmResult.bpm,
                      confidence = bpmResult.confidence]() mutable
                     {
+                        // Compute envelope before moving processed data
+                        auto envelope = computeEnvelope(processed);
                         dspPipeline_.getSampler().reloadSlotData(slot,
                                                                   std::move(processed));
                         stepSeqPanel_.setSlotBpm(slot, bpm, confidence);
+                        stepSeqPanel_.setSlotWaveform(slot, std::move(envelope));
                     });
             }));
 }
@@ -855,6 +878,75 @@ void MainComponent::applyMasterKey()
     ctx.keyRoot  = masterKeyRoot_;
     ctx.isMajor  = masterKeyMajor_;
     effectChainEditor_.setMusicContext(ctx);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeEnvelope — builds a peak-amplitude envelope (bins values, 0..1)
+// Called on the GUI thread after sample load; safe and fast (<1ms for 200 bins).
+// ─────────────────────────────────────────────────────────────────────────────
+std::vector<float> MainComponent::computeEnvelope(const std::vector<float>& pcm, int bins)
+{
+    if (pcm.empty()) return {};
+    std::vector<float> env(static_cast<std::size_t>(bins), 0.f);
+    const int total = static_cast<int>(pcm.size());
+    for (int b = 0; b < bins; ++b)
+    {
+        const int first = b * total / bins;
+        const int last  = std::min(total, (b + 1) * total / bins);
+        float peak = 0.f;
+        for (int i = first; i < last; ++i)
+            peak = std::max(peak, std::abs(pcm[static_cast<std::size_t>(i)]));
+        env[static_cast<std::size_t>(b)] = peak;
+    }
+    return env;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// openSampleEditor — ouvre la fenêtre waveform + trim pour un slot
+// ─────────────────────────────────────────────────────────────────────────────
+void MainComponent::openSampleEditor(int slot)
+{
+    auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
+    if (pcm.empty()) return;
+
+    const juce::String fileName =
+        juce::File(stepSeqPanel_.getSlotFilePath(slot))
+            .getFileNameWithoutExtension();
+    const juce::String title =
+        "Edit Sample  —  " + (fileName.isEmpty() ? "S" + juce::String(slot + 1) : fileName)
+        + "  [S" + juce::String(slot + 1) + "]";
+
+    auto* editor = new ui::SampleEditorComponent(std::move(pcm), currentSampleRate_);
+
+    editor->onApply = [this, slot](int startSample, int endSample)
+    {
+        auto snapshot = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
+        const int total = static_cast<int>(snapshot.size());
+        const int s = juce::jlimit(0, total - 1, startSample);
+        const int e = juce::jlimit(s + 1, total,  endSample);
+        std::vector<float> trimmed(snapshot.begin() + s, snapshot.begin() + e);
+        dspPipeline_.getSampler().reloadSlotData(slot, std::move(trimmed));
+    };
+
+    editor->onPlayRequested = [this, slot]()
+    {
+        dspPipeline_.getSampler().trigger(slot);
+    };
+
+    editor->onStopRequested = [this, slot]()
+    {
+        dspPipeline_.getSampler().stop(slot);
+    };
+
+    juce::DialogWindow::LaunchOptions opts;
+    opts.content.setOwned(editor);
+    opts.dialogTitle             = title;
+    opts.componentToCentreAround = this;
+    opts.useNativeTitleBar       = false;
+    opts.resizable               = false;
+    opts.dialogBackgroundColour  = juce::Colour(0xFF0A0A0A);
+    opts.content->setSize(720, 280);
+    opts.launchAsync();
 }
 
 void MainComponent::saveProject()

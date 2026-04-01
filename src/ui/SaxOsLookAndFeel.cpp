@@ -117,31 +117,47 @@ void SaxOsLookAndFeel::drawButtonBackground(juce::Graphics& g,
                                              bool isButtonDown)
 {
     auto bounds = button.getLocalBounds().toFloat().reduced(1.5f);
-    const float cr = 2.0f; // corner radius
+    const float cr = 6.0f; // corner radius — was 2.0f, now more modern
 
-    // ── Dark body ────────────────────────────────────────────────────────
-    g.setColour(backgroundColour);
-    g.fillRoundedRectangle(bounds, cr);
+    // ── Ambient glow (always on, very subtle) ────────────────────────────
+    g.setColour(accent_.withAlpha(0.04f));
+    g.fillRoundedRectangle(bounds.expanded(4.f), cr + 3.f);
 
-    // ── Neon border glow ─────────────────────────────────────────────────
+    // ── Hover / pressed glow (multi-pass) ────────────────────────────────
     if (isButtonDown)
     {
-        g.setColour(accent_.withAlpha(0.55f));
-        g.fillRoundedRectangle(bounds.expanded(2.0f), cr);
-        g.setColour(accent_);
+        g.setColour(accent_.withAlpha(0.30f));
+        g.fillRoundedRectangle(bounds.expanded(4.f), cr + 3.f);
+        g.setColour(accent_.withAlpha(0.45f));
+        g.fillRoundedRectangle(bounds.expanded(2.f), cr + 1.f);
     }
     else if (isHighlighted)
     {
+        g.setColour(accent_.withAlpha(0.10f));
+        g.fillRoundedRectangle(bounds.expanded(4.f), cr + 3.f);
+        g.setColour(accent_.withAlpha(0.20f));
+        g.fillRoundedRectangle(bounds.expanded(2.f), cr + 1.f);
         g.setColour(accent_.withAlpha(0.30f));
-        g.fillRoundedRectangle(bounds.expanded(1.5f), cr);
-        g.setColour(accent_.withAlpha(0.65f));
-    }
-    else
-    {
-        g.setColour(juce::Colour(0xFF353436));
+        g.fillRoundedRectangle(bounds.expanded(1.f), cr);
     }
 
-    g.drawRoundedRectangle(bounds, cr, 1.0f);
+    // ── Dark body ────────────────────────────────────────────────────────
+    if (isButtonDown)
+        g.setColour(backgroundColour.interpolatedWith(accent_.withAlpha(0.12f), 0.5f));
+    else
+        g.setColour(backgroundColour);
+    g.fillRoundedRectangle(bounds, cr);
+
+    // ── Neon border ───────────────────────────────────────────────────────
+    if (isButtonDown)
+        g.setColour(accent_.withAlpha(0.90f));
+    else if (isHighlighted)
+        g.setColour(accent_.withAlpha(0.70f));
+    else
+        g.setColour(accent_.withAlpha(0.25f));
+
+    g.drawRoundedRectangle(bounds, cr,
+                           isButtonDown ? 2.0f : (isHighlighted ? 1.5f : 1.0f));
 }
 
 void SaxOsLookAndFeel::drawButtonText(juce::Graphics& g,
@@ -154,10 +170,9 @@ void SaxOsLookAndFeel::drawButtonText(juce::Graphics& g,
     auto text   = button.getButtonText();
 
     g.setColour(isButtonDown ? accent_.brighter(0.2f)
-                : button.findColour(juce::TextButton::textColourOffId));
-    g.setFont(juce::Font(juce::FontOptions{}
-                          .withHeight(static_cast<float>(bounds.getHeight()) * 0.4f)
-                          .withStyle("Bold")));
+                             : button.findColour(juce::TextButton::textColourOffId));
+    const float fh = std::max(9.f, static_cast<float>(bounds.getHeight()) * 0.42f);
+    g.setFont(juce::Font(juce::FontOptions{}.withHeight(fh).withStyle("Bold")));
     g.drawFittedText(text, bounds, juce::Justification::centred, 1);
 }
 

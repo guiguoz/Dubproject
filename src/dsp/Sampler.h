@@ -76,6 +76,12 @@ public:
     void setSlotOneShot(int slot, bool oneShot) noexcept;
     void setSlotMuted(int slot, bool muted) noexcept;
 
+    // Solo: only the solo slot produces audio; -1 = no solo.
+    // Safe to call from any thread (atomic).
+    void setSoloSlot(int slot) noexcept;
+    void clearSolo() noexcept;
+    int  getSoloSlot() const noexcept;
+
     bool isLoaded(int slot) const noexcept;
     bool isPlaying(int slot) const noexcept;
     bool isSlotMuted(int slot) const noexcept;
@@ -83,12 +89,19 @@ public:
     // Returns current runtime gain multiplier for a slot (GUI thread safe).
     float getSlotGain(int slot) const noexcept;
 
+    // Returns a copy of the slot's PCM data for display / offline editing (GUI thread only).
+    std::vector<float> getSlotPcmSnapshot(int slot) const noexcept;
+
     // Returns the peak absolute amplitude of the slot's PCM data (0 if not loaded).
     // Safe to call from the GUI thread (data is not modified by the audio thread).
     float getSlotPeakLevel(int slot) const noexcept;
 
     // Returns the number of PCM samples in a slot (0 if not loaded).
     int getSlotSampleCount(int slot) const noexcept;
+
+    // Returns current playhead position as a 0..1 ratio (GUI thread, approximate).
+    // Value is 0 when not playing or not loaded.
+    float getSlotPlayheadRatio(int slot) const noexcept;
 
     // Returns the peak output level for slot in the last audio block (0.0–1.0+).
     // Written by the audio thread each block; safe to read from the GUI thread.
@@ -145,6 +158,7 @@ private:
     int   numSidechains_                { 0 };
     float sidechainGains_[kMaxSlots]   { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
     float slotPeaks_     [kMaxSlots]   {};
+    std::atomic<int>   soloSlot_       { -1 };  // -1 = no solo
 
     // Per-slot output peak — written by audio thread, read by GUI (VU meter).
     std::atomic<float> outputPeaks_[kMaxSlots] {};

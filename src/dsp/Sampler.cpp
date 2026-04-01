@@ -174,6 +174,27 @@ float Sampler::getSlotGain(int slot) const noexcept
     return slots_[static_cast<std::size_t>(slot)].gain.load(std::memory_order_relaxed);
 }
 
+void Sampler::setSoloSlot(int slot) noexcept
+{
+    soloSlot_.store(slot, std::memory_order_relaxed);
+}
+
+void Sampler::clearSolo() noexcept
+{
+    soloSlot_.store(-1, std::memory_order_relaxed);
+}
+
+int Sampler::getSoloSlot() const noexcept
+{
+    return soloSlot_.load(std::memory_order_relaxed);
+}
+
+std::vector<float> Sampler::getSlotPcmSnapshot(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    return slots_[static_cast<std::size_t>(slot)].data;
+}
+
 float Sampler::getSlotOutputPeak(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;
@@ -195,6 +216,18 @@ int Sampler::getSlotSampleCount(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0;
     return slots_[static_cast<std::size_t>(slot)].sampleCount;
+}
+
+float Sampler::getSlotPlayheadRatio(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    const auto& ps = playStates_[static_cast<std::size_t>(slot)];
+    const auto& sl = slots_     [static_cast<std::size_t>(slot)];
+    if (!sl.loaded.load() || sl.sampleCount <= 0) return 0.f;
+    // readPos is written only by the audio thread; reading here is approximate
+    // but safe for display purposes (worst case: one frame stale).
+    return static_cast<float>(ps.readPos)
+           / static_cast<float>(sl.sampleCount);
 }
 
 void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
@@ -296,6 +329,8 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         const float gain      = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
+        const int   solo      = soloSlot_.load(std::memory_order_relaxed);
+        const bool  soloMuted = (solo >= 0 && v != solo);
         const int   totalSamp = sl.sampleCount;
 
         // Fade-in length: ~2 ms at 44.1 kHz (scales with actual sample rate)
@@ -318,7 +353,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                 }
             }
 
-            if (!muted)
+            if (!muted && !soloMuted)
             {
                 // Exponential fade-in to eliminate click/pop at trigger onset
                 float fadeGain = 1.0f;
@@ -495,6 +530,8 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         const float gain      = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
+        const int   solo      = soloSlot_.load(std::memory_order_relaxed);
+        const bool  soloMuted = (solo >= 0 && v != solo);
 
         const float gL = panL_[idx].load(std::memory_order_relaxed);
         const float gR = panR_[idx].load(std::memory_order_relaxed);
@@ -511,7 +548,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
                 else       { ps.playing.store(false, std::memory_order_relaxed); break; }
             }
 
-            if (!muted)
+            if (!muted && !soloMuted)
             {
                 float fadeGain = 1.f;
                 if (ps.fadeIn < kFadeLen)

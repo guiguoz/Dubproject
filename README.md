@@ -76,9 +76,20 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 - Near-black backgrounds (#0A0A0A, #131314, #1C1B1C)
 - Neon green primary (#4CDFA8) with per-effect accent colours
 - Dark metal rotary knobs with neon value arcs and glow
-- Glow buttons, neon toggle circles, dark rounded popups
+- **NeonButton**: glow multi-pass (3 concentric layers) + 150 ms cubic-out hover animation
+- **Waveform preview** in each loaded slot: peak envelope (200 bins), gradient cyan→green, symmetric vertical bars
+- **Playhead animation**: white vertical line tracking sample read position in real time
 - VU meter with exponential smoothing (attack 0.3, release 0.05)
+- Per-slot button accent colours: Load=green, Edit=cyan, Mute=red, Solo=amber
+- `SaxFXFonts` / `SaxFXLayout` / `AnimatedValue` design system files
 - Inter font family, uppercase tracking labels
+
+### Sample Editor
+
+- Per-slot **[ED]** button opens a waveform + trim dialog
+- IN / OUT draggable markers (±8 px snap) set start/end trim points
+- **Play / Stop** toggle previews the sample in isolation
+- Apply trims by reloading only the selected PCM range into the sampler slot
 
 ---
 
@@ -181,11 +192,16 @@ projet-dub/
 │   │   ├── SaxOsLookAndFeel      Neon dark theme (SAX-OS)
 │   │   ├── SaxFXLookAndFeel      Original theme
 │   │   ├── Colours.h             Palette + per-effect accents
+│   │   ├── SaxFXFonts.h          Typography scale (xxs→huge, mono/sans/bold)
+│   │   ├── SaxFXLayout.h         Spacing, radius, border constants
+│   │   ├── AnimatedValue.h       Cubic-out interpolator for smooth UI transitions
+│   │   ├── NeonButton.h          TextButton + glow + 150 ms hover animation
+│   │   ├── SampleEditorComponent.h Waveform trim dialog (IN/OUT markers, Play/Stop)
 │   │   ├── EffectRackUnit.h      Effect card (icon, name, knobs)
 │   │   ├── PedalboardPanel.h     Drag-and-drop effect chain
 │   │   ├── EffectChainEditor.h   Chain editor wrapper
 │   │   ├── PresetLibrary.h       Compile-time preset tables
-│   │   ├── StepSequencerPanel.h  Sequencer grid UI
+│   │   ├── StepSequencerPanel.h  Sequencer grid UI (waveform + playhead per slot)
 │   │   ├── SamplerPanel.h        Sample slot panel
 │   │   ├── SpatialVisualization.h 2D stereo field display (pan × depth)
 │   │   └── [more UI components]  MagicButton, RotaryKnob, etc.
@@ -226,6 +242,7 @@ projet-dub/
 | **Sprint 10** | Done | Master limiter, dynamic ducking (anti-masking), drag-and-drop sampler |
 | **Sprint 11** | Done | Audio quality overhaul + Auto-Match Tempo/Key |
 | **Sprint 12** | Done | Intelligent spatialization (stereo field, Haas effect, AI pan/width/depth) |
+| **Sprint 13** | Done | UI overhaul: NeonButton, waveform preview, playhead, design system, solo, sample editor |
 
 ### Sprint 12 — Intelligent Spatialization
 
@@ -241,6 +258,19 @@ Full stereo field for the 8-track AI mix, driven by content-type detection:
 | L/R balance | 2-pass algorithm: individual rules then global redistribution if >3 slots on one side |
 | Sax anti-masking | Live sax spread at pan≈+0.2R via equal-power constants in DspPipeline |
 | SpatialVisualization | 2D pad component (X=pan, Y=depth) with radius=width, glow rings, slot labels |
+
+### Sprint 13 — UI Overhaul & Sample Editor
+
+| Feature | Description |
+|---------|-------------|
+| NeonButton | Custom `TextButton` subclass with 3-layer glow + 150 ms cubic-out hover; per-type accent: Load=green, Edit=cyan, Mute=red, Solo=amber |
+| Waveform preview | 200-bin peak envelope drawn in each slot LCD zone; gradient cyan→green, symmetric bars |
+| Playhead animation | `Sampler::getSlotPlayheadRatio()` feeds a white vertical line that tracks sample read position at 30 fps |
+| Design system | `SaxFXFonts.h` (mono/sans/bold scale), `SaxFXLayout.h` (spacing, radii, borders), `AnimatedValue.h` (cubic-out helper) |
+| Sample editor | `[ED]` button per slot opens waveform + trim dialog: draggable IN/OUT markers, Play/Stop preview, Apply reloads trimmed PCM |
+| Solo per slot | Toggle mutes all other slots via `Sampler::setSoloSlot()`; amber glow on active solo button |
+| LookAndFeel polish | Corner radius 2→6 px, 3-pass glow on hover/press in `SaxOsLookAndFeel` |
+| Project save v5 | AI mix state, all 8 scenes, master key persisted in `.saxfx` JSON |
 
 ### Sprint 11 — Audio quality overhaul + Auto-Match
 

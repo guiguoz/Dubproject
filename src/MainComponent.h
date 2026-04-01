@@ -8,9 +8,11 @@
 #include "project/ProjectLoader.h"
 #include "ui/EffectChainEditor.h"
 #include "ui/PianoKeyboardPanel.h"
+#include "ui/NeonButton.h"
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
 #include "ui/SaxStaffPanel.h"
+#include "ui/SampleEditorComponent.h"
 #include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
 
@@ -108,7 +110,7 @@ private:
     juce::TextButton sidebarPlayBtn_;
     juce::TextButton sidebarTapBtn_;
     juce::Label      sidebarBpmLabel_;
-    juce::TextButton sidebarMagicBtn_;
+    ui::NeonButton   sidebarMagicBtn_;
     juce::Label      aiStatusLabel_;
     int              aiAnimFrame_ { 0 };
 
@@ -162,6 +164,8 @@ private:
     void loadSampleIntoSlot(int slot, const std::string& path);
     void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
     void showBpmConfidencePopup(int slot, float detectedBpm);
+    void openSampleEditor(int slot);
+    static std::vector<float> computeEnvelope(const std::vector<float>& pcm, int bins = 200);
     ::dsp::SynthEffect* findSynthEffect() noexcept;
     void applyProjectData(const project::ProjectData& data);
     void saveProject();

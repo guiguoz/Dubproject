@@ -68,5 +68,12 @@ namespace SaxFXColours
         }
     }
 
+    // ── Additional surface / glow colours ────────────────────────────────────
+    inline const juce::Colour bgInput   { 0xFF0D1117 };  // waveform / input backgrounds
+    inline const juce::Colour bgHover   { 0xFF252530 };  // hover state surface
+    inline const juce::Colour neonCyan  { 0xFF22D3EE };  // = flangerAccent (cyan-400)
+    inline const juce::Colour glowGreen { 0x804CDFA8 };  // aiBadge at 50% alpha
+    inline const juce::Colour glowCyan  { 0x8022D3EE };  // neonCyan  at 50% alpha
+
 } // namespace SaxFXColours
 } // namespace ui
