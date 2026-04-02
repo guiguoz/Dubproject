@@ -26,6 +26,7 @@ namespace ui
 // ─────────────────────────────────────────────────────────────────────────────
 class StepSequencerPanel : public juce::Component,
                            public juce::FileDragAndDropTarget,
+                           public juce::ScrollBar::Listener,
                            private juce::Timer
 {
 public:
@@ -49,6 +50,9 @@ public:
     std::function<void(int slot)>                         onEditPressed;
     /// Returns the playhead ratio [0..1] for a slot (for waveform animation).
     std::function<float(int slot)>                        getSlotPlayhead;
+    /// Called when the global step count changes via the page label menu.
+    /// (track, bars) — MainComponent uses this to update StepSequencer.
+    std::function<void(int track, int bars)>              onTrackBarCountChanged;
 
     // ── Constructor ───────────────────────────────────────────────────────────
     explicit StepSequencerPanel(::dsp::StepSequencer& seq)
@@ -241,6 +245,15 @@ public:
         pageLabel_.addMouseListener(this, false);
         addAndMakeVisible(pageLabel_);
 
+        // Scrollbar horizontale sous la grille de steps
+        hScrollBar_.setAutoHide(false);
+        hScrollBar_.setColour(juce::ScrollBar::thumbColourId,
+                              juce::Colour(0xFF4CDFA8).withAlpha(0.55f));
+        hScrollBar_.setColour(juce::ScrollBar::trackColourId,
+                              juce::Colour(0xFF1C1B1C));
+        hScrollBar_.addListener(this);
+        addAndMakeVisible(hScrollBar_);
+
         startTimerHz(30);
     }
 
@@ -431,6 +444,7 @@ public:
         const int H = getHeight();
 
         static constexpr int kTopH       = 18;  // page nav bar
+        static constexpr int kScrollH    = 12;  // scrollbar height
         static constexpr int kLeftW      = 222;
         static constexpr int kRightW     = 36;
         static constexpr int kPad        = 3;
@@ -441,8 +455,13 @@ public:
         pageLabel_  .setBounds(kLeftW + kPad + 22,       1, 80, kTopH - 2);
         nextPageBtn_.setBounds(kLeftW + kPad + 104,      1, 20, kTopH - 2);
 
+        // Scrollbar — sous la grille, alignée sur la zone des steps
+        hScrollBar_.setBounds(kLeftW + kPad, H - kScrollH - 1,
+                              W - kLeftW - kRightW - 2 * kPad, kScrollH);
+        updateScrollBar();
+
         const int rowAreaY = kTopH + kPad;
-        const int rowAreaH = H - rowAreaY - kPad;
+        const int rowAreaH = H - rowAreaY - kScrollH - kPad * 2;
         const int rowH     = rowAreaH / 8;
         const int gridW    = W - kLeftW - kRightW - 2 * kPad;
         const int stepW    = gridW / kViewSteps;
@@ -493,12 +512,13 @@ public:
         static constexpr int kRightW = 36;
         static constexpr int kPad    = 3;
         static constexpr int kTopH   = 18;
+        static constexpr int kScrollH = 12;
         static constexpr int kViewSteps = 32;
 
         const int W     = getWidth();
         const int H     = getHeight();
         const int gridW = W - kLeftW - kRightW - 2 * kPad;
-        const int rowH  = (H - kTopH - kPad - kPad) / 8;
+        const int rowH  = (H - kTopH - kPad - kScrollH - kPad * 2) / 8;
         const int gridY = kTopH + kPad;
 
         // ── Waveform preview + playhead (behind LCD label, in slot left zone) ──
@@ -939,18 +959,21 @@ private:
 
     void setGlobalStepCount(int newSteps)
     {
-        // Apply to ALL tracks
+        const int newBars = newSteps / ::dsp::StepSequencer::kStepsPerBar;
         for (int t = 0; t < 8; ++t)
         {
             trackStepCounts_[t] = newSteps;
             seq_.setTrackStepCount(t, newSteps);
         }
+        if (onTrackBarCountChanged)
+            for (int t = 0; t < 8; ++t)
+                onTrackBarCountChanged(t, newBars);
 
-        // Reset view to start if shrinking
         if (viewOffsetSteps_ >= newSteps)
             viewOffsetSteps_ = 0;
 
         updatePageLabel();
+        updateScrollBar();
         refreshStepButtons();
         resized();
     }
@@ -964,7 +987,20 @@ private:
         viewOffsetSteps_ = juce::jlimit(0, maxOffset, viewOffsetSteps_ + delta * 32);
         refreshStepButtons();
         updatePageLabel();
+        updateScrollBar();
         resized();
+    }
+
+    void updateScrollBar()
+    {
+        int maxSteps = 16;
+        for (int t = 0; t < 8; ++t)
+            maxSteps = std::max(maxSteps, trackStepCounts_[t]);
+        hScrollBar_.setRangeLimits(0.0, static_cast<double>(maxSteps), juce::dontSendNotification);
+        hScrollBar_.setCurrentRange(static_cast<double>(viewOffsetSteps_), 32.0,
+                                    juce::dontSendNotification);
+        // Masquer si tout tient dans la fenêtre
+        hScrollBar_.setVisible(maxSteps > 32);
     }
 
     void refreshStepButtons()
@@ -1039,10 +1075,11 @@ private:
     /// Convert a Y coordinate to a track index (0-7), or -1 if outside rows.
     int trackIndexAtY(int y) const noexcept
     {
-        static constexpr int kTopH = 18;
-        static constexpr int kPad  = 3;
+        static constexpr int kTopH    = 18;
+        static constexpr int kPad     = 3;
+        static constexpr int kScrollH = 12;
         const int rowAreaY = kTopH + kPad;
-        const int rowAreaH = getHeight() - rowAreaY - kPad;
+        const int rowAreaH = getHeight() - rowAreaY - kScrollH - kPad * 2;
         if (rowAreaH <= 0) return -1;
         const int rowH = rowAreaH / 8;
         if (rowH <= 0) return -1;
@@ -1070,6 +1107,21 @@ private:
         return kColours[t % 8];
     }
 
+    // ── ScrollBar listener ────────────────────────────────────────────────────
+    void scrollBarMoved(juce::ScrollBar* bar, double newRangeStart) override
+    {
+        if (bar != &hScrollBar_) return;
+        // Snap au multiple de 16 (une mesure)
+        const int snapped = (static_cast<int>(newRangeStart) / 16) * 16;
+        if (snapped != viewOffsetSteps_)
+        {
+            viewOffsetSteps_ = snapped;
+            refreshStepButtons();
+            updatePageLabel();
+            resized();
+        }
+    }
+
     // ── Members ───────────────────────────────────────────────────────────────
 
     ::dsp::StepSequencer& seq_;
@@ -1095,6 +1147,7 @@ private:
     juce::TextButton prevPageBtn_;
     juce::TextButton nextPageBtn_;
     juce::Label      pageLabel_;
+    juce::ScrollBar  hScrollBar_ { false };  // horizontal
     int              viewOffsetSteps_ = 0;
 
     std::array<std::string, 8>  slotFilePaths_;

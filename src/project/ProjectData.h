@@ -73,12 +73,13 @@ struct SlotMixData
 // ─────────────────────────────────────────────────────────────────────────────
 struct SceneSaveData
 {
-    float                                bpm      { 120.f };
-    std::array<std::string, 8>           filePaths {};
-    std::array<std::array<bool, 16>, 8>  steps    {};
-    std::array<float, 8>                 gains    { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-    std::array<bool, 8>                  mutes    {};
-    bool                                 used     { false };
+    float                                 bpm           { 120.f };
+    std::array<std::string, 8>            filePaths     {};
+    std::array<std::array<bool, 512>, 8>  steps         {};   // up to 32 bars × 16 steps
+    std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+    std::array<bool, 8>                   mutes         {};
+    std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };  // v6
+    bool                                  used          { false };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +87,7 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 5 };
+    int                         version     { 6 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;

@@ -149,6 +149,10 @@ endif()
 # Génère JuceHeader.h (inclut tous les modules JUCE liés)
 juce_generate_juce_header(SaxFXLive)
 
+# ── Binary resources (logo embarqué) ─────────────────────────────────────────
+juce_add_binary_data(SaxFXAssets SOURCES src/logo.png)
+target_link_libraries(SaxFXLive PRIVATE SaxFXAssets)
+
 # Warnings
 if(MSVC)
     target_compile_options(SaxFXLive PRIVATE /W4 /WX-)

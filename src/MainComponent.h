@@ -50,6 +50,7 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
 
 private:
     std::unique_ptr<ui::SaxOsLookAndFeel> saxOsLookAndFeel_;
+    juce::Image logoImage_;  // DubEngine logo (embarqué via BinaryData)
     //==========================================================================
     // Timer — mise à jour du VU-mètre et affichage pitch (~30 fps)
     //==========================================================================
@@ -126,12 +127,13 @@ private:
 
     struct SceneData
     {
-        float                                bpm      { 120.f };
-        std::array<std::string, 8>           filePaths {};
-        std::array<std::array<bool, 16>, 8>  steps    {};
-        std::array<float, 8>                 gains    { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-        std::array<bool, 8>                  mutes    {};
-        bool                                 used     { false };
+        float                                 bpm           { 120.f };
+        std::array<std::string, 8>            filePaths     {};
+        std::array<std::array<bool, 512>, 8>  steps         {};
+        std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+        std::array<bool, 8>                   mutes         {};
+        std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };
+        bool                                  used          { false };
     };
 
     std::array<SceneData, kMaxScenes> scenes_;

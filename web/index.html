@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DubEngine</title>
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="stylesheet" href="src/styles/scene-selector.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0A0A0A;
+      color: #ccc;
+      font-family: 'Inter', system-ui, monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 24px;
+      background: #131314;
+      border-bottom: 1px solid #1C1B1C;
+    }
+
+    header img {
+      height: 40px;
+      width: 40px;
+      object-fit: contain;
+      border-radius: 6px;
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #4CDFA8;
+    }
+
+    header .tagline {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #555;
+      margin-top: 2px;
+    }
+
+    /* ── Main layout ─────────────────────────────────────────────────────── */
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 24px;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* ── Transport ───────────────────────────────────────────────────────── */
+
+    .transport {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .transport button {
+      padding: 8px 20px;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      background: #1C1B1C;
+      color: #ccc;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+
+    #play-btn { border-color: #4CDFA8; color: #4CDFA8; }
+    #play-btn:hover:not(:disabled) { background: #0d2b1f; }
+    #stop-btn:hover:not(:disabled) { background: #2a2a4a; color: #fff; }
+
+    .transport button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .transport label {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #555;
+    }
+
+    #bpm-input {
+      width: 64px;
+      padding: 6px 8px;
+      background: #1C1B1C;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      color: #4CDFA8;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    #bpm-input:focus { outline: none; border-color: #4CDFA8; }
+
+    /* ── Project load ────────────────────────────────────────────────────── */
+
+    .project-load {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .project-load label {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #555;
+    }
+
+    #project-file { display: none; }
+
+    .file-btn {
+      padding: 6px 14px;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      background: #1C1B1C;
+      color: #888;
+      font-family: inherit;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .file-btn:hover { border-color: #4CDFA8; color: #4CDFA8; }
+
+    #file-name {
+      font-size: 10px;
+      color: #555;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <img src="logo.png" alt="DubEngine logo">
+    <div>
+      <h1>DubEngine</h1>
+      <div class="tagline">Scene Sequencer · Web Audio</div>
+    </div>
+  </header>
+
+  <main>
+
+    <div class="transport">
+      <button id="play-btn">▶ Play</button>
+      <button id="stop-btn" disabled>■ Stop</button>
+      <label for="bpm-input">BPM</label>
+      <input id="bpm-input" type="number" min="40" max="300" value="120">
+    </div>
+
+    <div class="project-load">
+      <label>Projet</label>
+      <button class="file-btn" onclick="document.getElementById('project-file').click()">
+        Ouvrir .saxfx
+      </button>
+      <input id="project-file" type="file" accept=".saxfx,.json">
+      <span id="file-name">aucun fichier</span>
+    </div>
+
+    <div id="scene-selector"></div>
+
+  </main>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

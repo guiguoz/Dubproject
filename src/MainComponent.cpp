@@ -21,8 +21,10 @@ MainComponent::MainComponent()
     saxOsLookAndFeel_ = std::make_unique<ui::SaxOsLookAndFeel>();
     if (saxOsLookAndFeel_)
         setLookAndFeel(saxOsLookAndFeel_.get());
-    // Fallback to default if needed
-    // setLookAndFeel(&laf_);
+
+    // Charger le logo depuis les ressources embarquées
+    logoImage_ = juce::ImageCache::getFromMemory(
+        BinaryData::logo_png, BinaryData::logo_pngSize);
 
     // ── Audio settings button ─────────────────────────────────────────────────
     audioSettingsButton_.setButtonText("AUDIO SETTINGS");
@@ -203,7 +205,7 @@ MainComponent::MainComponent()
     saveProjectButton_.onClick = [this] { saveProject(); };
     addAndMakeVisible(saveProjectButton_);
 
-    loadProjectButton_.setButtonText("LOAD PRESET");
+    loadProjectButton_.setButtonText("LOAD PROJECT");
     loadProjectButton_.onClick = [this]
     {
         auto chooser =
@@ -361,6 +363,12 @@ MainComponent::MainComponent()
 
     // Éditeur de sample (bouton [ED])
     stepSeqPanel_.onEditPressed = [this](int slot) { openSampleEditor(slot); };
+
+    // Changement de longueur de pattern via le menu pageLabel_
+    stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
+    {
+        stepSequencer_.setTrackBarCount(track, bars);
+    };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
     stepSeqPanel_.getSlotPlayhead = [this](int slot) -> float
@@ -1015,17 +1023,21 @@ void MainComponent::saveProject()
             {
                 const auto& src = scenes_[static_cast<std::size_t>(si)];
                 auto& dst       = data.scenes[static_cast<std::size_t>(si)];
-                dst.used     = src.used;
-                dst.bpm      = src.bpm;
-                dst.filePaths = src.filePaths;
-                dst.mutes    = src.mutes;
-                dst.gains    = src.gains;
+                dst.used          = src.used;
+                dst.bpm           = src.bpm;
+                dst.filePaths     = src.filePaths;
+                dst.mutes         = src.mutes;
+                dst.gains         = src.gains;
+                dst.trackBarCounts = src.trackBarCounts;
                 for (int t = 0; t < 8; ++t)
-                    for (int s = 0; s < 16; ++s)
+                {
+                    const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
+                    for (int s = 0; s < numSteps; ++s)
                         dst.steps[static_cast<std::size_t>(t)]
                                  [static_cast<std::size_t>(s)] =
                             src.steps[static_cast<std::size_t>(t)]
                                      [static_cast<std::size_t>(s)];
+                }
             }
 
             auto path = results[0].getFullPathName();
@@ -1134,18 +1146,26 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         {
             const auto& src = data.scenes[static_cast<std::size_t>(si)];
             auto& dst       = scenes_    [static_cast<std::size_t>(si)];
-            dst.used      = src.used;
-            dst.bpm       = src.bpm;
-            dst.filePaths = src.filePaths;
-            dst.mutes     = src.mutes;
-            dst.gains     = src.gains;
+            dst.used          = src.used;
+            dst.bpm           = src.bpm;
+            dst.filePaths     = src.filePaths;
+            dst.mutes         = src.mutes;
+            dst.gains         = src.gains;
+            dst.trackBarCounts = src.trackBarCounts;
             for (int t = 0; t < 8; ++t)
-                for (int s = 0; s < 16; ++s)
+            {
+                const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
+                for (int s = 0; s < numSteps; ++s)
                     dst.steps[static_cast<std::size_t>(t)]
                              [static_cast<std::size_t>(s)] =
                         src.steps[static_cast<std::size_t>(t)]
                                  [static_cast<std::size_t>(s)];
+            }
         }
+        // Restore bar counts for the current scene into the sequencer
+        const auto& curSc = scenes_[static_cast<std::size_t>(currentScene_)];
+        for (int i = 0; i < 8; ++i)
+            stepSequencer_.setTrackBarCount(i, curSc.trackBarCounts[static_cast<std::size_t>(i)]);
         updateSceneLabel();
     }
 
@@ -1288,36 +1308,24 @@ void MainComponent::paint(juce::Graphics& g)
         g.setColour(ui::SaxFXColours::cardBorder);
         g.fillRect(0, kHeaderH - 1, W, 1);
 
-        // Title
-        g.setColour(ui::SaxFXColours::vuLow); // primary #4cdfa8
-        g.setFont(juce::Font(juce::FontOptions{}.withHeight(15.f).withStyle("Bold")));
-        g.drawText("SONIC MONOLITH | SAX-OS", 20, 0, 280, kHeaderH,
-                   juce::Justification::centredLeft);
-
-        // Nav tabs (effects)
-        const juce::String tabs[] = { "HARMONIZER", "FLANGER", "DELAY", "OCTAVER" };
-        int tabX = 320;
-        for (int i = 0; i < 4; ++i)
+        // Logo
+        if (logoImage_.isValid())
         {
-            const bool active = (i == 0);
-            g.setColour(active ? ui::SaxFXColours::vuLow
-                               : ui::SaxFXColours::textPrimary.withAlpha(0.35f));
-            g.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
-            g.drawText(tabs[i], tabX, 0, 90, kHeaderH - (active ? 2 : 0),
-                       juce::Justification::centredLeft);
-            if (active)
-            {
-                g.setColour(ui::SaxFXColours::vuLow);
-                g.fillRect(tabX, kHeaderH - 2, 80, 2);
-            }
-            tabX += 96;
+            const int logoSize = kHeaderH - 10;
+            g.drawImageWithin(logoImage_, 10, 5, logoSize, logoSize,
+                juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
         }
 
-        // Pitch display (top-right of header area, before sidebar)
+        // Titre "DubEngine"
+        const int titleX = logoImage_.isValid() ? kHeaderH + 6 : 16;
+        g.setColour(ui::SaxFXColours::vuLow);
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(15.f).withStyle("Bold")));
+        g.drawText("DubEngine", titleX, 0, 160, kHeaderH, juce::Justification::centredLeft);
+
+        // Pitch display
         g.setColour(juce::Colours::cyan.withAlpha(0.85f));
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(13.f).withStyle("Bold")));
-        const auto pitchStr = pitchLabel_.getText();
-        g.drawText(pitchStr, sidebarX - 180, 0, 170, kHeaderH,
+        g.drawText(pitchLabel_.getText(), sidebarX - 180, 0, 170, kHeaderH,
                    juce::Justification::centredRight);
     }
 
@@ -1472,7 +1480,7 @@ void MainComponent::paint(juce::Graphics& g)
                    juce::Justification::centredLeft);
 
         g.setColour(ui::SaxFXColours::textPrimary.withAlpha(0.20f));
-        g.drawText("SONIC MONOLITH SAX-OS V0.1.0", statusW - 260, statusY, 250, kStatusH,
+        g.drawText("DubEngine v0.1.0", statusW - 260, statusY, 250, kStatusH,
                    juce::Justification::centredRight);
     }
 
@@ -1673,11 +1681,13 @@ void MainComponent::captureCurrentScene()
     auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 8; ++i)
     {
-        const std::size_t idx = static_cast<std::size_t>(i);
-        sc.filePaths[idx] = stepSeqPanel_.getSlotFilePath(i);
-        sc.mutes    [idx] = sampler.isSlotMuted(i);
-        sc.gains    [idx] = sampler.getSlotGain(i);
-        for (int s = 0; s < 16; ++s)
+        const std::size_t idx  = static_cast<std::size_t>(i);
+        const int numSteps     = stepSequencer_.getTrackStepCount(i);
+        sc.filePaths    [idx]  = stepSeqPanel_.getSlotFilePath(i);
+        sc.mutes        [idx]  = sampler.isSlotMuted(i);
+        sc.gains        [idx]  = sampler.getSlotGain(i);
+        sc.trackBarCounts[idx] = stepSequencer_.getTrackBarCount(i);
+        for (int s = 0; s < numSteps; ++s)
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
     }
 }
@@ -1704,9 +1714,15 @@ void MainComponent::applyScene(int idx)
     stepSeqPanel_.setBpm(sc.bpm);
     updateSidebarBpm(sc.bpm);
 
-    // Restore samples and step patterns
+    // Restore samples, bar counts and step patterns
     for (int i = 0; i < 8; ++i)
     {
+        const std::size_t idx = static_cast<std::size_t>(i);
+        const int barCount    = sc.trackBarCounts[idx];
+        const int numSteps    = barCount * 16;
+
+        stepSequencer_.setTrackBarCount(i, barCount);
+
         if (!sc.filePaths[i].empty())
         {
             loadSampleIntoSlot(i, sc.filePaths[i]);
@@ -1714,11 +1730,11 @@ void MainComponent::applyScene(int idx)
             samplerEngine_.setSlotFilePath(i, sc.filePaths[i]);
         }
         dspPipeline_.getSampler().setSlotMuted(i, sc.mutes[i]);
-        dspPipeline_.getSampler().setSlotGain (i, sc.gains[static_cast<std::size_t>(i)]);
+        dspPipeline_.getSampler().setSlotGain (i, sc.gains[idx]);
         stepSeqPanel_.setSlotMuted(i, sc.mutes[i]);
-        for (int s = 0; s < 16; ++s)
+        for (int s = 0; s < numSteps; ++s)
         {
-            const bool active = sc.steps[i][static_cast<std::size_t>(s)];
+            const bool active = sc.steps[idx][static_cast<std::size_t>(s)];
             stepSequencer_.setStep(i, s, active);
             stepSeqPanel_.setStepState(i, s, active);
         }

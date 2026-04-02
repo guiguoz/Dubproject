@@ -192,6 +192,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                 sc.bpm    = getFloat(entry, "bpm", 120.f);
                 sc.used   = getBool(entry,  "used", false);
 
+                // v6 — bar counts per track (default 1 for v5 compat)
+                if (const auto* bcArr = entry["trackBarCounts"].getArray())
+                    for (int i = 0; i < 8 && i < bcArr->size(); ++i)
+                        sc.trackBarCounts[static_cast<std::size_t>(i)] =
+                            juce::jlimit(1, 32, static_cast<int>((*bcArr)[i]));
+
                 if (const auto* pathsArr = entry["filePaths"].getArray())
                     for (int i = 0; i < 8 && i < pathsArr->size(); ++i)
                         sc.filePaths[static_cast<std::size_t>(i)] =
@@ -211,8 +217,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                 {
                     for (int t = 0; t < 8 && t < tracksArr->size(); ++t)
                     {
+                        const int maxSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                         if (const auto* stArr = (*tracksArr)[t].getArray())
-                            for (int s = 0; s < 16 && s < stArr->size(); ++s)
+                            for (int s = 0; s < maxSteps && s < stArr->size(); ++s)
                                 sc.steps[static_cast<std::size_t>(t)]
                                         [static_cast<std::size_t>(s)] =
                                     static_cast<bool>((*stArr)[s]);
@@ -231,7 +238,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     4);  // always write latest format
+    root->setProperty("version",     6);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -337,6 +344,11 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             entry->setProperty("bpm",   static_cast<double>(sc.bpm));
             entry->setProperty("used",  sc.used);
 
+            juce::Array<juce::var> barCountsArr;
+            for (int i = 0; i < 8; ++i)
+                barCountsArr.add(sc.trackBarCounts[static_cast<std::size_t>(i)]);
+            entry->setProperty("trackBarCounts", barCountsArr);
+
             juce::Array<juce::var> pathsArr;
             for (int i = 0; i < 8; ++i)
                 pathsArr.add(juce::String(sc.filePaths[static_cast<std::size_t>(i)]));
@@ -355,8 +367,9 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             juce::Array<juce::var> tracksArr;
             for (int t = 0; t < 8; ++t)
             {
+                const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                 juce::Array<juce::var> stArr;
-                for (int s = 0; s < 16; ++s)
+                for (int s = 0; s < numSteps; ++s)
                     stArr.add(sc.steps[static_cast<std::size_t>(t)]
                                       [static_cast<std::size_t>(s)]);
                 tracksArr.add(stArr);

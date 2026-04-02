@@ -1,7 +1,7 @@
-# SONIC MONOLITH | SAX-OS
+# DubEngine
 
 Real-time audio effects processor for live saxophone performance, built with JUCE/C++.
-Designed for dub techno live sets with a neon dark "SAX-OS" interface.
+Designed for dub techno live sets with a neon dark interface.
 
 **Input** : Focusrite Scarlett Solo 2nd gen (ASIO / WASAPI fallback)
 **Effects** : 12 effect types with drag-and-drop effect chain
@@ -47,7 +47,8 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 ### Sampler & Step Sequencer
 
 - 8 sample slots with WAV loading (drag-and-drop from Explorer / Sononym)
-- 16-step sequencer per track with velocity
+- Up to 32-bar patterns per track (512 steps), variable per scene
+- Horizontal scrollbar for pattern navigation + ◀/▶ page buttons + mousewheel
 - BPM sync, swing, per-track mute/solo
 - AI content classification (ONNX) for automatic sample categorization
 - **Auto-Match** on load: BPM + key detected, sample time-stretched + pitch-shifted to project tempo/key
@@ -71,10 +72,11 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 - **InferenceThread**: Lock-free async inference with < 5 ms latency
 - Fallback to heuristic rules when ONNX models unavailable
 
-### UI: SAX-OS Neon Dark Theme
+### UI: DubEngine Neon Dark Theme
 
 - Near-black backgrounds (#0A0A0A, #131314, #1C1B1C)
 - Neon green primary (#4CDFA8) with per-effect accent colours
+- App logo embedded via `juce_add_binary_data`, displayed in header
 - Dark metal rotary knobs with neon value arcs and glow
 - **NeonButton**: glow multi-pass (3 concentric layers) + 150 ms cubic-out hover animation
 - **Waveform preview** in each loaded slot: peak envelope (200 bins), gradient cyan→green, symmetric vertical bars
@@ -90,6 +92,13 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 - IN / OUT draggable markers (±8 px snap) set start/end trim points
 - **Play / Stop** toggle previews the sample in isolation
 - Apply trims by reloading only the selected PCM range into the sampler slot
+
+### Project Save/Load (format v6)
+
+- `.saxfx` JSON format, fully versioned with backward compatibility (v1–v5 auto-migrated)
+- Saves per-scene: BPM, 8 sample paths, gains, mutes, step patterns, **bar counts per track**
+- Up to 512 steps per track (32 bars × 16 steps) persisted correctly
+- AI mix states (gain, pan, width, depth) and master key persisted
 
 ---
 
@@ -136,6 +145,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DJUCE_ASIO_SDK_PATH=third_party/ASIO
 ```
 
+> Re-configure required after any `CMakeLists.txt` change (e.g. adding binary assets).
+
 ### 3. Build
 
 ```bash
@@ -164,6 +175,7 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ```
 projet-dub/
 ├── src/
+│   ├── logo.png                  App logo (embedded via juce_add_binary_data)
 │   ├── MainComponent.h/.cpp      Main app (audio callback, UI layout)
 │   ├── dsp/                      DSP engine
 │   │   ├── IEffect.h             Effect interface + EffectType enum
@@ -178,7 +190,7 @@ projet-dub/
 │   │   ├── [12 more effects]     Reverb, Flanger, Harmonizer, etc.
 │   │   ├── DspPipeline.h/.cpp    Audio processing pipeline
 │   │   ├── Sampler.h/.cpp        8-slot sample player
-│   │   ├── StepSequencer.h       16-step sequencer
+│   │   ├── StepSequencer.h       Up-to-512-step sequencer (32 bars)
 │   │   ├── BpmDetector.h/.cpp    Tempo detection
 │   │   ├── KeyDetector.h/.cpp    Key/scale detection
 │   │   ├── YinPitchTracker.cpp   YIN pitch detection
@@ -189,7 +201,7 @@ projet-dub/
 │   │   ├── OnnxInference.h       ONNX Runtime wrapper
 │   │   └── InferenceThread.h     Async inference thread
 │   ├── ui/                       UI components
-│   │   ├── SaxOsLookAndFeel      Neon dark theme (SAX-OS)
+│   │   ├── SaxOsLookAndFeel      Neon dark theme
 │   │   ├── SaxFXLookAndFeel      Original theme
 │   │   ├── Colours.h             Palette + per-effect accents
 │   │   ├── SaxFXFonts.h          Typography scale (xxs→huge, mono/sans/bold)
@@ -201,21 +213,24 @@ projet-dub/
 │   │   ├── PedalboardPanel.h     Drag-and-drop effect chain
 │   │   ├── EffectChainEditor.h   Chain editor wrapper
 │   │   ├── PresetLibrary.h       Compile-time preset tables
-│   │   ├── StepSequencerPanel.h  Sequencer grid UI (waveform + playhead per slot)
-│   │   ├── SamplerPanel.h        Sample slot panel
+│   │   ├── StepSequencerPanel.h  Sequencer grid UI (scrollbar, waveform, playhead)
 │   │   ├── SpatialVisualization.h 2D stereo field display (pan × depth)
 │   │   └── [more UI components]  MagicButton, RotaryKnob, etc.
 │   └── project/                  Project save/load
-│       ├── ProjectData.h         Project data model (v5)
+│       ├── ProjectData.h         Project data model (v6)
 │       ├── ProjectLoader.h/.cpp  JSON serialization (.saxfx)
+├── web/                          Web companion (JavaScript / Web Audio API)
+│   ├── index.html                DubEngine web UI
+│   ├── logo.png                  App logo
+│   └── src/
+│       ├── audio/                SceneManager, Scheduler, AudioBufferPool
+│       ├── ui/                   SceneSelectorUI
+│       └── styles/               scene-selector.css (neon dark theme)
 ├── tests/                        Catch2 unit tests (180 tests)
 ├── models/                       Trained ONNX models
 │   ├── content_classifier.onnx   Sample classifier
 │   └── mix_model.onnx            Mix optimizer
 ├── scripts/                      Python training scripts
-│   ├── train_classifier.py       Train sample classifier
-│   ├── train_mix_model.py        Train mix model
-│   └── prepare_dataset.py        Generate synthetic dataset
 ├── cmake/
 │   └── FindOnnxRuntime.cmake     ONNX Runtime finder
 ├── third_party/
@@ -243,21 +258,27 @@ projet-dub/
 | **Sprint 11** | Done | Audio quality overhaul + Auto-Match Tempo/Key |
 | **Sprint 12** | Done | Intelligent spatialization (stereo field, Haas effect, AI pan/width/depth) |
 | **Sprint 13** | Done | UI overhaul: NeonButton, waveform preview, playhead, design system, solo, sample editor |
+| **Sprint 14** | Done | Web companion: SceneManager + Scheduler + SceneSelectorUI (Web Audio API) |
+| **Sprint 15** | Done | Save/load v6: bar counts per track, scrollbar, DubEngine rebrand + logo |
 
-### Sprint 12 — Intelligent Spatialization
-
-Full stereo field for the 8-track AI mix, driven by content-type detection:
+### Sprint 15 — Save/Load v6 + Scrollbar + Rebrand
 
 | Feature | Description |
 |---------|-------------|
-| Stereo pipeline | Mono → Stereo conversion throughout (`Sampler`, `DspPipeline`, `MainComponent`) |
-| AI pan/width/depth | `computeSpatialization()` assigns pan/width/depth per slot based on content type |
-| Content rules | KICK/BASS → centre+mono, HIHAT → L/R alternating ±0.4, PAD → wide 0.8 / depth 0.6, etc. |
-| Sub-bass enforcement | Spectral centroid < 200 Hz → forced mono regardless of type |
-| Haas effect | Per-slot ring buffer delay (0–25 ms) for stereo width — no RT heap allocation |
-| L/R balance | 2-pass algorithm: individual rules then global redistribution if >3 slots on one side |
-| Sax anti-masking | Live sax spread at pan≈+0.2R via equal-power constants in DspPipeline |
-| SpatialVisualization | 2D pad component (X=pan, Y=depth) with radius=width, glow rings, slot labels |
+| Project format v6 | `trackBarCounts[8]` per scene, `steps[8][512]`, bug fix version écrite=4→6 |
+| Scrollbar | `juce::ScrollBar` horizontal sous la grille, snap mesure, auto-hide ≤ 32 steps |
+| Pattern length | Menu pageLabel_ → 1/2/4/8/16/32 mesures, notifie `MainComponent` via `onTrackBarCountChanged` |
+| DubEngine rebrand | Titre, status bar, `juce_add_binary_data` logo embarqué, affiché dans le header |
+
+### Sprint 14 — Web Companion (Web Audio API)
+
+| Feature | Description |
+|---------|-------------|
+| SceneManager | Transitions automatiques entre scènes, pending scene, callbacks UI |
+| Scheduler | Look-ahead 100 ms via `audioContext.currentTime`, setTimeout 25 ms |
+| SceneSelectorUI | Boutons scènes, blink orange pending, barre de progression rAF 60 FPS, countdown |
+| AudioBufferPool | Cache décodé par URL, `Promise.allSettled`, préchargement parallèle |
+| index.html | UI DubEngine neon dark, logo, transport Play/Stop/BPM, ouverture .saxfx |
 
 ### Sprint 13 — UI Overhaul & Sample Editor
 
@@ -269,18 +290,7 @@ Full stereo field for the 8-track AI mix, driven by content-type detection:
 | Design system | `SaxFXFonts.h` (mono/sans/bold scale), `SaxFXLayout.h` (spacing, radii, borders), `AnimatedValue.h` (cubic-out helper) |
 | Sample editor | `[ED]` button per slot opens waveform + trim dialog: draggable IN/OUT markers, Play/Stop preview, Apply reloads trimmed PCM |
 | Solo per slot | Toggle mutes all other slots via `Sampler::setSoloSlot()`; amber glow on active solo button |
-| LookAndFeel polish | Corner radius 2→6 px, 3-pass glow on hover/press in `SaxOsLookAndFeel` |
 | Project save v5 | AI mix state, all 8 scenes, master key persisted in `.saxfx` JSON |
-
-### Sprint 11 — Audio quality overhaul + Auto-Match
-
-| Fix | Description |
-|-----|-------------|
-| C1 | Exponential fade-in at trigger onset — eliminates click/pop |
-| C2 | EMA ramp on ducking gain — eliminates ducking crackle |
-| C3/C4 | AI EQ corrected: filter order + frequencies (100/2500/8000 Hz) + ±6 dB clamp |
-| M2 | True-peak detection (4× oversampling ITU-R BS.1770) + −3 dBFS headroom |
-| Phase 2 | `autoMatchSampleAsync`: 3-method BPM detection, Hermite resample, pitch-first dual-pass, SR normalisation, BPM confidence popup |
 
 ---
 
@@ -292,9 +302,9 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 
 Examples:
 ```
-feat(synth): add pitch-tracking synth with 22 presets
-fix(project): prevent crash on load (forceRebuild after applyChain)
-feat(ui): neon dark SaxOS look-and-feel
+feat(ui): DubEngine rebrand + embedded logo
+fix(project): save version 4→6, trackBarCounts per scene
+feat(sequencer): horizontal scrollbar for multi-bar patterns
 ```
 
 ---
