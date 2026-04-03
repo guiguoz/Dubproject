@@ -119,7 +119,8 @@ private:
     juce::TextButton sceneUpBtn_;
     juce::Label      sceneNumLabel_;
     juce::TextButton sceneDownBtn_;
-    juce::TextButton sceneResetBtn_;
+    juce::TextButton sceneResetBtn_;      // efface les patterns de la scène courante
+    juce::TextButton sceneTrackResetBtn_; // full reset : patterns + samples de la scène courante
     juce::TextButton sceneCopyBtn_;
 
     // ── Scene data ─────────────────────────────────────────────────────────────
@@ -178,7 +179,8 @@ private:
     void captureCurrentScene();
     void applyScene(int idx);
     void navigateScene(int delta);
-    void resetCurrentScene();
+    void resetCurrentScene();       // patterns only
+    void resetCurrentSceneFull();   // patterns + samples
     void copyCurrentSceneToNext();
     void updateSceneLabel();
     void updateSidebarBpm(float bpm);

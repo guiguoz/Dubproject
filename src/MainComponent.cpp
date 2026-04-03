@@ -125,13 +125,41 @@ MainComponent::MainComponent()
 
     styleSideBtn(sceneUpBtn_,    juce::CharPointer_UTF8("\xe2\x96\xb2"));  // ▲
     styleSideBtn(sceneDownBtn_,  juce::CharPointer_UTF8("\xe2\x96\xbc"));  // ▼
-    styleSideBtn(sceneResetBtn_, "RESET");
-    styleSideBtn(sceneCopyBtn_,  "COPY");
+    styleSideBtn(sceneResetBtn_,      "RST SCN");
+    styleSideBtn(sceneTrackResetBtn_, "RST TRK");
+    styleSideBtn(sceneCopyBtn_,       "COPY");
 
     sceneUpBtn_  .onClick = [this] { navigateScene(-1); };
     sceneDownBtn_.onClick = [this] { navigateScene(+1); };
-    sceneResetBtn_.onClick = [this] { resetCurrentScene(); };
-    sceneCopyBtn_ .onClick = [this] { copyCurrentSceneToNext(); };
+    sceneCopyBtn_.onClick = [this] { copyCurrentSceneToNext(); };
+
+    sceneResetBtn_.onClick = [this]
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon,
+            "Reset Scene",
+            "Effacer les patterns de la scene " + juce::String(currentScene_ + 1) + " ?\n"
+            "(les samples restent charges)",
+            "Reset", "Annuler", nullptr,
+            juce::ModalCallbackFunction::create([this](int result)
+            {
+                if (result == 1) resetCurrentScene();
+            }));
+    };
+
+    sceneTrackResetBtn_.onClick = [this]
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon,
+            "Full Reset",
+            "Effacer patterns ET samples de la scene " + juce::String(currentScene_ + 1) + " ?\n"
+            "Cette action est irreversible.",
+            "Reset complet", "Annuler", nullptr,
+            juce::ModalCallbackFunction::create([this](int result)
+            {
+                if (result == 1) resetCurrentSceneFull();
+            }));
+    };
 
     sceneNumLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(13.f).withStyle("Bold")));
     sceneNumLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFFFFCC44));
@@ -141,6 +169,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(sceneNumLabel_);
     addAndMakeVisible(sceneDownBtn_);
     addAndMakeVisible(sceneResetBtn_);
+    addAndMakeVisible(sceneTrackResetBtn_);
     addAndMakeVisible(sceneCopyBtn_);
     updateSceneLabel();
 
@@ -1560,8 +1589,13 @@ void MainComponent::resized()
         sceneUpBtn_   .setBounds(sbBtnX, y, sbBtnW, 26); y += 28;
         sceneNumLabel_.setBounds(sbBtnX, y, sbBtnW, 18); y += 20;
         sceneDownBtn_ .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
-        sceneResetBtn_.setBounds(sbBtnX, y, sbBtnW, 22); y += 25;
-        sceneCopyBtn_ .setBounds(sbBtnX, y, sbBtnW, 22);
+        {
+            const int half = (sbBtnW - 2) / 2;
+            sceneResetBtn_     .setBounds(sbBtnX,          y, half,            22);
+            sceneTrackResetBtn_.setBounds(sbBtnX + half + 2, y, sbBtnW - half - 2, 22);
+        }
+        y += 25;
+        sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);
 
         // ── Bottom section (pinned, bottom-up) ──────────────────────────
         // magicY   = H-58 | aiStatus = H-76 | play = H-144
@@ -1819,12 +1853,38 @@ void MainComponent::resetCurrentScene()
 {
     // Clear step patterns only — keep samples loaded
     for (int i = 0; i < 8; ++i)
-        for (int s = 0; s < 16; ++s)
+    {
+        const int numSteps = stepSequencer_.getTrackStepCount(i);
+        for (int s = 0; s < numSteps; ++s)
         {
             stepSequencer_.setStep(i, s, false);
             stepSeqPanel_.setStepState(i, s, false);
         }
-    // Mark scene as used (but empty)
+    }
+    scenes_[static_cast<std::size_t>(currentScene_)].used = false;
+}
+
+void MainComponent::resetCurrentSceneFull()
+{
+    // Clear patterns (all steps)
+    for (int i = 0; i < 8; ++i)
+    {
+        const int numSteps = stepSequencer_.getTrackStepCount(i);
+        for (int s = 0; s < numSteps; ++s)
+        {
+            stepSequencer_.setStep(i, s, false);
+            stepSeqPanel_.setStepState(i, s, false);
+        }
+    }
+    // Unload all samples
+    auto& sampler = dspPipeline_.getSampler();
+    for (int i = 0; i < 8; ++i)
+    {
+        sampler.clearSlot(i);
+        stepSeqPanel_.setSlotFilePath(i, "");
+        samplerEngine_.setSlotFilePath(i, "");
+        stepSeqPanel_.setSlotLoaded(i, false);
+    }
     scenes_[static_cast<std::size_t>(currentScene_)].used = false;
 }
 
