@@ -56,6 +56,8 @@ juce_add_gui_app(SaxFXLive
     NEEDS_MIDI_INPUT  TRUE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT    FALSE
+    ICON_BIG         "${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.png"
+    ICON_SMALL       "${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.png"
 )
 
 # Code source
