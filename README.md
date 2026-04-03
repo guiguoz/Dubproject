@@ -260,6 +260,17 @@ projet-dub/
 | **Sprint 13** | Done | UI overhaul: NeonButton, waveform preview, playhead, design system, solo, sample editor |
 | **Sprint 14** | Done | Web companion: SceneManager + Scheduler + SceneSelectorUI (Web Audio API) |
 | **Sprint 15** | Done | Save/load v6: bar counts per track, scrollbar, DubEngine rebrand + logo |
+| **Sprint 16** | Done | Quantized scene transitions: glitch-free scene switching synced to bar boundaries |
+
+### Sprint 16 — Quantized Scene Transitions
+
+| Feature | Description |
+|---------|-------------|
+| Pending scene | `navigateScene()` queues target in `pendingScene_` (atomic) instead of switching immediately |
+| Bar-end detection | `StepSequencer::sceneEndFlag_` set by audio thread when longest track completes a full cycle |
+| Glitch-free apply | `timerCallback()` polls `consumeSceneEnd()` and calls `applyScene()` only at cycle boundary |
+| Skip reload | `applyScene()` skips `loadSampleIntoSlot()` when file path is unchanged → no playback stop |
+| UI feedback | Label shows `Scene 1 → 2` during the pending period |
 
 ### Sprint 15 — Save/Load v6 + Scrollbar + Rebrand
 

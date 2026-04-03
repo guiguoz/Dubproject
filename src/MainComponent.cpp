@@ -1597,6 +1597,20 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    // Transition de scène quantisée : appliquée à la fin du cycle du séquenceur
+    if (pendingScene_.load(std::memory_order_relaxed) >= 0
+        && stepSequencer_.consumeSceneEnd())
+    {
+        const int target = pendingScene_.exchange(-1, std::memory_order_relaxed);
+        if (target >= 0)
+        {
+            captureCurrentScene();
+            currentScene_ = target;
+            applyScene(currentScene_);
+            updateSceneLabel();
+        }
+    }
+
     dspPipeline_.getEffectChain().collectGarbage();
 
     // AI status animation while busy
@@ -1717,24 +1731,39 @@ void MainComponent::applyScene(int idx)
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 8; ++i)
     {
-        const std::size_t idx = static_cast<std::size_t>(i);
-        const int barCount    = sc.trackBarCounts[idx];
-        const int numSteps    = barCount * 16;
+        const std::size_t sidx    = static_cast<std::size_t>(i);
+        const int barCount        = sc.trackBarCounts[sidx];
+        const int numSteps        = barCount * 16;
+        const std::string& newPath     = sc.filePaths[i];
+        const std::string  currentPath = stepSeqPanel_.getSlotFilePath(i);
 
         stepSequencer_.setTrackBarCount(i, barCount);
 
-        if (!sc.filePaths[i].empty())
+        if (!newPath.empty() && newPath != currentPath)
         {
-            loadSampleIntoSlot(i, sc.filePaths[i]);
-            stepSeqPanel_.setSlotFilePath(i, sc.filePaths[i]);
-            samplerEngine_.setSlotFilePath(i, sc.filePaths[i]);
+            // Sample différent : rechargement nécessaire
+            loadSampleIntoSlot(i, newPath);
+            stepSeqPanel_.setSlotFilePath(i, newPath);
+            samplerEngine_.setSlotFilePath(i, newPath);
         }
+        else if (newPath.empty() && !currentPath.empty())
+        {
+            // Slot doit être vidé
+            dspPipeline_.getSampler().clearSlot(i);
+            stepSeqPanel_.setSlotFilePath(i, "");
+        }
+        else if (!newPath.empty())
+        {
+            // Même fichier déjà chargé : skip reload → pas de coupure audio
+            samplerEngine_.setSlotFilePath(i, newPath);
+        }
+
         dspPipeline_.getSampler().setSlotMuted(i, sc.mutes[i]);
-        dspPipeline_.getSampler().setSlotGain (i, sc.gains[idx]);
+        dspPipeline_.getSampler().setSlotGain (i, sc.gains[sidx]);
         stepSeqPanel_.setSlotMuted(i, sc.mutes[i]);
         for (int s = 0; s < numSteps; ++s)
         {
-            const bool active = sc.steps[idx][static_cast<std::size_t>(s)];
+            const bool active = sc.steps[sidx][static_cast<std::size_t>(s)];
             stepSequencer_.setStep(i, s, active);
             stepSeqPanel_.setStepState(i, s, active);
         }
@@ -1743,10 +1772,25 @@ void MainComponent::applyScene(int idx)
 
 void MainComponent::navigateScene(int delta)
 {
-    captureCurrentScene();
-    currentScene_ = juce::jlimit(0, kMaxScenes - 1, currentScene_ + delta);
-    applyScene(currentScene_);
-    updateSceneLabel();
+    const int target = juce::jlimit(0, kMaxScenes - 1, currentScene_ + delta);
+    if (target == currentScene_) return;
+
+    if (!stepSequencer_.isPlaying())
+    {
+        // Séquenceur arrêté : changement immédiat, sans risque de coupure
+        captureCurrentScene();
+        currentScene_ = target;
+        applyScene(currentScene_);
+        updateSceneLabel();
+        return;
+    }
+
+    // Séquenceur en lecture : on met la cible en attente.
+    // applyScene() sera appelé dans timerCallback() à la fin du cycle courant.
+    pendingScene_.store(target, std::memory_order_relaxed);
+    sceneNumLabel_.setText("Scene " + juce::String(currentScene_ + 1) +
+                           " \xe2\x86\x92 " + juce::String(target + 1),  // →
+                           juce::dontSendNotification);
 }
 
 void MainComponent::resetCurrentScene()

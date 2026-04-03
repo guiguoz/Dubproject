@@ -164,11 +164,26 @@ public:
                 if (steps_[track][trackStep])
                     sampler.trigger(track);
             }
+
+            // Detect end of scene: when the longest track has completed a full cycle.
+            // Signal the GUI thread so it can apply any pending scene change.
+            int maxSteps = 1;
+            for (int t = 0; t < kTracks; ++t)
+                if (trackStepCount_[t] > maxSteps) maxSteps = trackStepCount_[t];
+            if (globalAfter % maxSteps == 0)
+                sceneEndFlag_.store(true, std::memory_order_release);
         }
 
         // Wrap phase to avoid double-precision drift
         if (phase_ >= 4096.0)
             phase_ -= 4096.0;
+    }
+
+    /// Consumes the scene-end signal (returns true once per cycle boundary).
+    /// Call from the GUI thread (e.g. timerCallback) to check for pending scene transitions.
+    bool consumeSceneEnd() noexcept
+    {
+        return sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
     }
 
 private:
@@ -178,9 +193,10 @@ private:
     double phase_      = 0.0;    // audio thread only
     double sampleRate_ = 44100.0;
 
-    std::atomic<float> bpm_        { 0.f };
-    std::atomic<bool>  playing_    { false };
-    std::atomic<int>   stepAtomic_ { 0 };
+    std::atomic<float> bpm_         { 0.f };
+    std::atomic<bool>  playing_     { false };
+    std::atomic<int>   stepAtomic_  { 0 };
+    std::atomic<bool>  sceneEndFlag_{ false };
 };
 
 } // namespace dsp

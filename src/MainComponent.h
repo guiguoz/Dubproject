@@ -138,6 +138,7 @@ private:
 
     std::array<SceneData, kMaxScenes> scenes_;
     int currentScene_ { 0 };
+    std::atomic<int>  pendingScene_ { -1 };  // -1 = aucune transition en attente
 
     //==========================================================================
     // Background task management
