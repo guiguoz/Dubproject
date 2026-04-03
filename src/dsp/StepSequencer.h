@@ -131,6 +131,15 @@ public:
         }
     }
 
+    /// Remet la phase à zéro (step 0) sans arrêter la lecture.
+    /// Appeler depuis le thread GUI juste avant d'appliquer une nouvelle scène,
+    /// pour que les patterns de la nouvelle scène partent toujours du step 0.
+    void resetPhase() noexcept
+    {
+        phase_ = 0.0;
+        stepAtomic_.store(0, std::memory_order_relaxed);
+    }
+
     // ── Audio thread ─────────────────────────────────────────────────────────
 
     /// Call from getNextAudioBlock() BEFORE dspPipeline_.process().
@@ -165,12 +174,10 @@ public:
                     sampler.trigger(track);
             }
 
-            // Detect end of scene: when the longest track has completed a full cycle.
-            // Signal the GUI thread so it can apply any pending scene change.
-            int maxSteps = 1;
-            for (int t = 0; t < kTracks; ++t)
-                if (trackStepCount_[t] > maxSteps) maxSteps = trackStepCount_[t];
-            if (globalAfter % maxSteps == 0)
+            // Detect end of scene using the length frozen at navigation time (GUI thread).
+            // pendingTransLen_ == 0 means no transition pending → skip detection.
+            const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
+            if (transLen > 0 && globalAfter % transLen == 0)
                 sceneEndFlag_.store(true, std::memory_order_release);
         }
 
@@ -179,11 +186,21 @@ public:
             phase_ -= 4096.0;
     }
 
+    /// Fige la longueur de scène utilisée pour détecter la fin de cycle.
+    /// Appeler depuis navigateScene() AVANT de stocker pendingScene_.
+    /// steps = max des trackStepCount_ courants. 0 = désactive la détection.
+    void setPendingTransitionLen(int steps) noexcept
+    {
+        pendingTransLen_.store(steps, std::memory_order_release);
+    }
+
     /// Consumes the scene-end signal (returns true once per cycle boundary).
-    /// Call from the GUI thread (e.g. timerCallback) to check for pending scene transitions.
+    /// Resets pendingTransLen_ so the detection doesn't re-fire on the next play.
     bool consumeSceneEnd() noexcept
     {
-        return sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
+        const bool fired = sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
+        if (fired) pendingTransLen_.store(0, std::memory_order_relaxed);
+        return fired;
     }
 
 private:
@@ -193,10 +210,11 @@ private:
     double phase_      = 0.0;    // audio thread only
     double sampleRate_ = 44100.0;
 
-    std::atomic<float> bpm_         { 0.f };
-    std::atomic<bool>  playing_     { false };
-    std::atomic<int>   stepAtomic_  { 0 };
-    std::atomic<bool>  sceneEndFlag_{ false };
+    std::atomic<float> bpm_             { 0.f };
+    std::atomic<bool>  playing_         { false };
+    std::atomic<int>   stepAtomic_      { 0 };
+    std::atomic<bool>  sceneEndFlag_    { false };
+    std::atomic<int>   pendingTransLen_ { 0 };   // longueur de scène figée pour la transition (0 = inactif)
 };
 
 } // namespace dsp

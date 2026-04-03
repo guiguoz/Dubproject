@@ -283,7 +283,19 @@ MainComponent::MainComponent()
     stepSeqPanel_.onPlayChanged = [this](bool playing)
     {
         if (!playing)
+        {
             dspPipeline_.getSampler().stopAllSlots();
+            // Appliquer toute transition en attente immédiatement au stop
+            const int pending = pendingScene_.exchange(-1, std::memory_order_relaxed);
+            if (pending >= 0)
+            {
+                captureCurrentScene();
+                currentScene_ = pending;
+                applyScene(currentScene_);
+                updateSceneLabel();
+                stepSequencer_.setPendingTransitionLen(0);
+            }
+        }
     };
 
     // Volume per slot
@@ -1728,6 +1740,10 @@ void MainComponent::applyScene(int idx)
     stepSeqPanel_.setBpm(sc.bpm);
     updateSidebarBpm(sc.bpm);
 
+    // Remettre le séquenceur au step 0 → nouvelle scène part toujours du début
+    if (stepSequencer_.isPlaying())
+        stepSequencer_.resetPhase();
+
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 8; ++i)
     {
@@ -1786,7 +1802,13 @@ void MainComponent::navigateScene(int delta)
     }
 
     // Séquenceur en lecture : on met la cible en attente.
-    // applyScene() sera appelé dans timerCallback() à la fin du cycle courant.
+    // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
+    // pour que la détection de fin de cycle soit stable dans le thread audio.
+    int sceneLen = 1;
+    for (int i = 0; i < 8; ++i)
+        sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
+    stepSequencer_.setPendingTransitionLen(sceneLen);
+
     pendingScene_.store(target, std::memory_order_relaxed);
     sceneNumLabel_.setText("Scene " + juce::String(currentScene_ + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
