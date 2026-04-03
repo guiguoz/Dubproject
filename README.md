@@ -78,7 +78,7 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 - Neon green primary (#4CDFA8) with per-effect accent colours
 - App logo embedded via `juce_add_binary_data`, displayed in header
 - Dark metal rotary knobs with neon value arcs and glow
-- **NeonButton**: glow multi-pass (3 concentric layers) + 150 ms cubic-out hover animation
+- **NeonButton**: glow multi-pass (3 concentric layers) + configurable hover animation (80 ms fade-in; per-instance fade-out: 60 ms default, 0 ms instant for Edit/Mute/Solo)
 - **Waveform preview** in each loaded slot: peak envelope (200 bins), gradient cyan→green, symmetric vertical bars
 - **Playhead animation**: white vertical line tracking sample read position in real time
 - VU meter with exponential smoothing (attack 0.3, release 0.05)
@@ -207,7 +207,7 @@ projet-dub/
 │   │   ├── SaxFXFonts.h          Typography scale (xxs→huge, mono/sans/bold)
 │   │   ├── SaxFXLayout.h         Spacing, radius, border constants
 │   │   ├── AnimatedValue.h       Cubic-out interpolator for smooth UI transitions
-│   │   ├── NeonButton.h          TextButton + glow + 150 ms hover animation
+│   │   ├── NeonButton.h          TextButton + glow + configurable hover animation (setFadeOutMs)
 │   │   ├── SampleEditorComponent.h Waveform trim dialog (IN/OUT markers, Play/Stop)
 │   │   ├── EffectRackUnit.h      Effect card (icon, name, knobs)
 │   │   ├── PedalboardPanel.h     Drag-and-drop effect chain
@@ -295,7 +295,7 @@ projet-dub/
 
 | Feature | Description |
 |---------|-------------|
-| NeonButton | Custom `TextButton` subclass with 3-layer glow + 150 ms cubic-out hover; per-type accent: Load=green, Edit=cyan, Mute=red, Solo=amber |
+| NeonButton | Custom `TextButton` subclass with 3-layer glow + cubic-out hover (80 ms in, configurable out via `setFadeOutMs`); per-type accent: Load=green, Edit=cyan, Mute=red, Solo=amber; Edit/Mute/Solo snap off instantly |
 | Waveform preview | 200-bin peak envelope drawn in each slot LCD zone; gradient cyan→green, symmetric bars |
 | Playhead animation | `Sampler::getSlotPlayheadRatio()` feeds a white vertical line that tracks sample read position at 30 fps |
 | Design system | `SaxFXFonts.h` (mono/sans/bold scale), `SaxFXLayout.h` (spacing, radii, borders), `AnimatedValue.h` (cubic-out helper) |

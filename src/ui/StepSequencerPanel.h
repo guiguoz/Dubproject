@@ -166,6 +166,7 @@ public:
                 if (onMutedChanged) onMutedChanged(t, muted);
             };
             addAndMakeVisible(muteBtns_[t]);
+            muteBtns_[t].setFadeOutMs(0);
 
             // Edit button — opens waveform/trim editor
             editBtns_[t].setButtonText("ED");
@@ -177,6 +178,7 @@ public:
                 if (onEditPressed) onEditPressed(t);
             };
             addAndMakeVisible(editBtns_[t]);
+            editBtns_[t].setFadeOutMs(0);
 
             // Volume slider
             volSliders_[t].setSliderStyle(juce::Slider::LinearVertical);
@@ -209,6 +211,7 @@ public:
                 if (onSoloChanged) onSoloChanged(t, nowSoloed);
             };
             addAndMakeVisible(soloBtns_[t]);
+            soloBtns_[t].setFadeOutMs(0);
 
             // Step buttons (32 visible at a time; page navigation scrolls through the full pattern)
             for (int s = 0; s < 32; ++s)

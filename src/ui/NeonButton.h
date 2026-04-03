@@ -29,6 +29,7 @@ public:
 
     void setAccentColour(juce::Colour c) noexcept { accent_ = c; }
     void setGlowEnabled(bool e)          noexcept { glowEnabled_ = e; }
+    void setFadeOutMs(int ms)            noexcept { fadeOutMs_ = ms; }
 
     juce::Colour accentColour() const noexcept { return accent_; }
 
@@ -36,15 +37,15 @@ public:
     void mouseEnter(const juce::MouseEvent& e) override
     {
         juce::TextButton::mouseEnter(e);
-        hoverAnim_.setTarget(1.f, 150);
+        hoverAnim_.setTarget(1.f, 80);
         startTimerHz(60);
     }
 
     void mouseExit(const juce::MouseEvent& e) override
     {
         juce::TextButton::mouseExit(e);
-        hoverAnim_.setTarget(0.f, 200);
-        if (!hoverAnim_.isActive()) startTimerHz(60);  // ensure one more tick to finish
+        hoverAnim_.setTarget(0.f, fadeOutMs_);
+        startTimerHz(60);  // always restart — isActive() can be true yet timer stopped
     }
 
     void timerCallback() override
@@ -120,6 +121,7 @@ public:
 private:
     juce::Colour  accent_      { SaxFXColours::aiBadge };
     bool          glowEnabled_ { true };
+    int           fadeOutMs_   { 60 };
     AnimatedValue hoverAnim_   { 0.f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeonButton)
