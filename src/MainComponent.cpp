@@ -288,8 +288,15 @@ MainComponent::MainComponent()
         aiStatusLabel_.setText("IA...", juce::dontSendNotification);
     };
 
-    // Step toggled: already forwarded to stepSequencer_ inside the panel
-    stepSeqPanel_.onStepChanged = [](int, int, bool) {};  // no extra action needed
+    // Step toggled: stop sample immediately if the track has no more active steps
+    stepSeqPanel_.onStepChanged = [this](int track, int /*step*/, bool active)
+    {
+        if (active) return;
+        const int nSteps = stepSequencer_.getTrackStepCount(track);
+        for (int s = 0; s < nSteps; ++s)
+            if (stepSequencer_.getStep(track, s)) return;  // at least one step still on
+        dspPipeline_.getSampler().stop(track);
+    };
 
     // Slot cleared: unload PCM and clear engine path
     stepSeqPanel_.onSlotCleared = [this](int slot)
@@ -1203,10 +1210,8 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                                  [static_cast<std::size_t>(s)];
             }
         }
-        // Restore bar counts for the current scene into the sequencer
-        const auto& curSc = scenes_[static_cast<std::size_t>(currentScene_)];
-        for (int i = 0; i < 8; ++i)
-            stepSequencer_.setTrackBarCount(i, curSc.trackBarCounts[static_cast<std::size_t>(i)]);
+        // Restore bar counts, step patterns and sample paths for the current scene
+        applyScene(currentScene_);
         updateSceneLabel();
     }
 
@@ -1788,6 +1793,7 @@ void MainComponent::applyScene(int idx)
         const std::string  currentPath = stepSeqPanel_.getSlotFilePath(i);
 
         stepSequencer_.setTrackBarCount(i, barCount);
+        stepSeqPanel_.setTrackStepCount(i, numSteps);
 
         if (!newPath.empty() && newPath != currentPath)
         {
