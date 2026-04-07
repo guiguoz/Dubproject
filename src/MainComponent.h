@@ -49,7 +49,18 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     void resized() override;
 
 private:
-    std::unique_ptr<ui::SaxOsLookAndFeel> saxOsLookAndFeel_;
+    std::unique_ptr<ui::SaxOsLookAndFeel>  saxOsLookAndFeel_;
+
+    // Fenêtre non-modale pour l'éditeur de sample (Fix 1)
+    struct SampleEditorWindow : public juce::DocumentWindow
+    {
+        std::function<void()> onClose;
+        SampleEditorWindow(const juce::String& title, juce::Colour bg)
+            : juce::DocumentWindow(title, bg, juce::DocumentWindow::closeButton) {}
+        void closeButtonPressed() override { if (onClose) onClose(); }
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleEditorWindow)
+    };
+    std::unique_ptr<SampleEditorWindow> sampleEditorWindow_;
     juce::Image logoImage_;  // DubEngine logo (embarqué via BinaryData)
     //==========================================================================
     // Timer — mise à jour du VU-mètre et affichage pitch (~30 fps)
@@ -134,6 +145,8 @@ private:
         std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
         std::array<bool, 8>                   mutes         {};
         std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };
+        std::array<int, 8>                    trimStart     { 0,0,0,0,0,0,0,0 };
+        std::array<int, 8>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1 };
         bool                                  used          { false };
     };
 

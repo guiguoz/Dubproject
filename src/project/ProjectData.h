@@ -79,6 +79,8 @@ struct SceneSaveData
     std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
     std::array<bool, 8>                   mutes         {};
     std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };  // v6
+    std::array<int, 8>                    trimStart     { 0,0,0,0,0,0,0,0 };  // v7
+    std::array<int, 8>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
     bool                                  used          { false };
 };
 

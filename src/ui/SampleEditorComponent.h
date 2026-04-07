@@ -21,13 +21,16 @@ namespace ui {
 //   ed->onApply = [](int s, int e){ /* trim */ };
 //   // wrap in DialogWindow::LaunchOptions and call launchAsync()
 // ─────────────────────────────────────────────────────────────────────────────
-class SampleEditorComponent : public juce::Component
+class SampleEditorComponent : public juce::Component, private juce::Timer
 {
 public:
     std::function<void(int startSample, int endSample)> onApply;
     std::function<void()>                               onCancel;
     std::function<void()>                               onPlayRequested;
     std::function<void()>                               onStopRequested;
+    std::function<void()>                               onClose;          // ferme la fenêtre parente
+    std::function<float()>                              getPlayheadRatio; // 0..1 position de lecture
+    std::function<bool()>                               isSlotPlaying;    // true si le slot joue
 
     SampleEditorComponent(std::vector<float> pcm, double sampleRate)
         : pcm_        (std::move(pcm))
@@ -36,6 +39,7 @@ public:
         , endSample_  (static_cast<int>(pcm_.size()))
     {
         buildEnvelope();
+        startTimerHz(30);
 
         playBtn_.setButtonText("Play");
         playBtn_.setClickingTogglesState(true);
@@ -60,8 +64,7 @@ public:
                             juce::Colour(0xFF4CDFA8));
         applyBtn_.onClick = [this] {
             if (onApply) onApply(startSample_, endSample_);
-            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-                dw->exitModalState(0);
+            if (onClose) onClose();
         };
         addAndMakeVisible(applyBtn_);
 
@@ -72,8 +75,7 @@ public:
                              juce::Colour(0xFF6B6E70));
         cancelBtn_.onClick = [this] {
             if (onCancel) onCancel();
-            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-                dw->exitModalState(0);
+            if (onClose) onClose();
         };
         addAndMakeVisible(cancelBtn_);
 
@@ -164,6 +166,15 @@ public:
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(8.f)));
         g.drawText("OUT", static_cast<int>(ex) - 10, static_cast<int>(wb.getY()) + 14,
                    24, 10, juce::Justification::centred);
+
+        // ── Playhead ──────────────────────────────────────────────────────────
+        if (getPlayheadRatio && isSlotPlaying && isSlotPlaying())
+        {
+            const float ratio = getPlayheadRatio();
+            const int px = static_cast<int>(wb.getX() + ratio * wb.getWidth());
+            g.setColour(juce::Colours::white.withAlpha(0.85f));
+            g.drawVerticalLine(px, wb.getY(), wb.getBottom());
+        }
     }
 
     // ── Mouse drag for markers ────────────────────────────────────────────────
@@ -208,6 +219,8 @@ public:
     void mouseUp(const juce::MouseEvent&) override { dragTarget_ = 0; }
 
 private:
+    void timerCallback() override { repaint(); }
+
     std::vector<float>  pcm_;
     double              sampleRate_;
     int                 startSample_;

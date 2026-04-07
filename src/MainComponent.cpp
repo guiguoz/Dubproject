@@ -388,7 +388,7 @@ MainComponent::MainComponent()
         aiStatusLabel_.setText(juce::CharPointer_UTF8("IA \xe2\x9c\x93"), juce::dontSendNotification);  // "IA ✓"
     };
 
-    // onDone : si revert → effacer les tags et désactiver les toggles visuels
+    // onDone : si revert → effacer les tags, désactiver les toggles, re-appliquer trim
     samplerEngine_.onDone = [this]
     {
         if (!samplerEngine_.isMagicActive())
@@ -399,6 +399,27 @@ MainComponent::MainComponent()
             sidebarMagicBtn_.setToggleState(false, juce::dontSendNotification);
             aiStatusLabel_.setText("", juce::dontSendNotification);
             spatialViz_.resetAll();
+
+            // Re-appliquer les trim points (revertToOriginals relit le fichier original)
+            const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+            for (int i = 0; i < 8; ++i)
+            {
+                const std::size_t sidx = static_cast<std::size_t>(i);
+                const int ts = sc.trimStart[sidx];
+                const int te = sc.trimEnd  [sidx];
+                if (ts > 0 || te >= 0)
+                {
+                    auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
+                    const int total = static_cast<int>(snap.size());
+                    if (total > 0)
+                    {
+                        const int s2 = juce::jlimit(0, total - 1, ts);
+                        const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
+                        std::vector<float> t2(snap.begin() + s2, snap.begin() + e2);
+                        dspPipeline_.getSampler().reloadSlotData(i, std::move(t2));
+                    }
+                }
+            }
         }
     };
 
@@ -984,7 +1005,24 @@ void MainComponent::openSampleEditor(int slot)
         const int s = juce::jlimit(0, total - 1, startSample);
         const int e = juce::jlimit(s + 1, total,  endSample);
         std::vector<float> trimmed(snapshot.begin() + s, snapshot.begin() + e);
-        dspPipeline_.getSampler().reloadSlotData(slot, std::move(trimmed));
+
+        // Appliquer au slot courant
+        dspPipeline_.getSampler().reloadSlotData(slot, trimmed);
+
+        // Stocker les trim points dans TOUTES les scènes partageant ce fichier
+        const std::string filePath = stepSeqPanel_.getSlotFilePath(slot);
+        for (int si = 0; si < kMaxScenes; ++si)
+            for (int t = 0; t < 8; ++t)
+                if (scenes_[static_cast<std::size_t>(si)].filePaths[t] == filePath)
+                {
+                    scenes_[static_cast<std::size_t>(si)].trimStart[t] = s;
+                    scenes_[static_cast<std::size_t>(si)].trimEnd  [t] = e;
+                }
+
+        // Appliquer aux autres slots actuellement chargés avec le même fichier
+        for (int t = 0; t < 8; ++t)
+            if (t != slot && stepSeqPanel_.getSlotFilePath(t) == filePath)
+                dspPipeline_.getSampler().reloadSlotData(t, trimmed);
     };
 
     editor->onPlayRequested = [this, slot]()
@@ -997,15 +1035,27 @@ void MainComponent::openSampleEditor(int slot)
         dspPipeline_.getSampler().stop(slot);
     };
 
-    juce::DialogWindow::LaunchOptions opts;
-    opts.content.setOwned(editor);
-    opts.dialogTitle             = title;
-    opts.componentToCentreAround = this;
-    opts.useNativeTitleBar       = false;
-    opts.resizable               = false;
-    opts.dialogBackgroundColour  = juce::Colour(0xFF0A0A0A);
-    opts.content->setSize(720, 280);
-    opts.launchAsync();
+    editor->getPlayheadRatio = [this, slot]() -> float
+    {
+        return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
+    };
+
+    editor->isSlotPlaying = [this, slot]() -> bool
+    {
+        return dspPipeline_.getSampler().isPlaying(slot);
+    };
+
+    editor->onClose = [this]() { sampleEditorWindow_.reset(); };
+
+    // Fix 1 — fenêtre non-modale : le morceau continue de jouer
+    sampleEditorWindow_.reset();
+    sampleEditorWindow_ = std::make_unique<SampleEditorWindow>(title, juce::Colour(0xFF0A0A0A));
+    sampleEditorWindow_->onClose = [this]() { sampleEditorWindow_.reset(); };
+    sampleEditorWindow_->setUsingNativeTitleBar(false);
+    sampleEditorWindow_->setContentOwned(editor, true);
+    sampleEditorWindow_->setResizable(false, false);
+    sampleEditorWindow_->centreWithSize(720, 300);
+    sampleEditorWindow_->setVisible(true);
 }
 
 void MainComponent::saveProject()
@@ -1074,12 +1124,14 @@ void MainComponent::saveProject()
             {
                 const auto& src = scenes_[static_cast<std::size_t>(si)];
                 auto& dst       = data.scenes[static_cast<std::size_t>(si)];
-                dst.used          = src.used;
-                dst.bpm           = src.bpm;
-                dst.filePaths     = src.filePaths;
-                dst.mutes         = src.mutes;
-                dst.gains         = src.gains;
+                dst.used           = src.used;
+                dst.bpm            = src.bpm;
+                dst.filePaths      = src.filePaths;
+                dst.mutes          = src.mutes;
+                dst.gains          = src.gains;
                 dst.trackBarCounts = src.trackBarCounts;
+                dst.trimStart      = src.trimStart;
+                dst.trimEnd        = src.trimEnd;
                 for (int t = 0; t < 8; ++t)
                 {
                     const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1198,12 +1250,14 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         {
             const auto& src = data.scenes[static_cast<std::size_t>(si)];
             auto& dst       = scenes_    [static_cast<std::size_t>(si)];
-            dst.used          = src.used;
-            dst.bpm           = src.bpm;
-            dst.filePaths     = src.filePaths;
-            dst.mutes         = src.mutes;
-            dst.gains         = src.gains;
+            dst.used           = src.used;
+            dst.bpm            = src.bpm;
+            dst.filePaths      = src.filePaths;
+            dst.mutes          = src.mutes;
+            dst.gains          = src.gains;
             dst.trackBarCounts = src.trackBarCounts;
+            dst.trimStart      = src.trimStart;
+            dst.trimEnd        = src.trimEnd;
             for (int t = 0; t < 8; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1822,6 +1876,24 @@ void MainComponent::applyScene(int idx)
             const bool active = sc.steps[sidx][static_cast<std::size_t>(s)];
             stepSequencer_.setStep(i, s, active);
             stepSeqPanel_.setStepState(i, s, active);
+        }
+
+        // v7 — re-appliquer le trim si défini pour ce slot/scène
+        {
+            const int ts = sc.trimStart[sidx];
+            const int te = sc.trimEnd  [sidx];
+            if (ts > 0 || te >= 0)
+            {
+                auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
+                const int total = static_cast<int>(snap.size());
+                if (total > 0)
+                {
+                    const int s2 = juce::jlimit(0, total - 1, ts);
+                    const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
+                    std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
+                    dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
+                }
+            }
         }
     }
 }

@@ -225,6 +225,17 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                                     static_cast<bool>((*stArr)[s]);
                     }
                 }
+
+                // v7 — trim points (default 0/-1 = pas de trim pour compat v6)
+                if (const auto* tsArr = entry["trimStart"].getArray())
+                    for (int i = 0; i < 8 && i < tsArr->size(); ++i)
+                        sc.trimStart[static_cast<std::size_t>(i)] =
+                            static_cast<int>((*tsArr)[i]);
+
+                if (const auto* teArr = entry["trimEnd"].getArray())
+                    for (int i = 0; i < 8 && i < teArr->size(); ++i)
+                        sc.trimEnd[static_cast<std::size_t>(i)] =
+                            static_cast<int>((*teArr)[i]);
             }
         }
     }
@@ -238,7 +249,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     6);  // always write latest format
+    root->setProperty("version",     7);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -375,6 +386,16 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                 tracksArr.add(stArr);
             }
             entry->setProperty("steps", tracksArr);
+
+            // v7 — trim points
+            juce::Array<juce::var> trimStartArr, trimEndArr;
+            for (int i = 0; i < 8; ++i)
+            {
+                trimStartArr.add(sc.trimStart[static_cast<std::size_t>(i)]);
+                trimEndArr  .add(sc.trimEnd  [static_cast<std::size_t>(i)]);
+            }
+            entry->setProperty("trimStart", trimStartArr);
+            entry->setProperty("trimEnd",   trimEndArr);
 
             scenesArr.add(juce::var(entry.get()));
         }
