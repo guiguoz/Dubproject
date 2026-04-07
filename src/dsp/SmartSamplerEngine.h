@@ -64,6 +64,18 @@ public:
     std::function<void()>                                     onDone;
     std::function<void()>                                     onTypesDetected;
 
+    // ── Vue globale de l'arrangement (toutes les scènes) ─────────────────────
+    struct SceneSnapshot {
+        std::array<bool, 8> slotActive {};  // slot a des steps actifs et non-mutés
+        int                 activeCount { 0 };
+    };
+
+    void setArrangement(const std::array<SceneSnapshot, 8>& scenes, int currentScene) noexcept
+    {
+        arrangement_             = scenes;
+        currentArrangementScene_ = currentScene;
+    }
+
     explicit SmartSamplerEngine(::dsp::Sampler& sampler, double sampleRate = 44100.0)
         : sampler_(sampler), sampleRate_(sampleRate)
     {}
@@ -496,44 +508,56 @@ private:
     // Applies well-known mixing EQ curves to the PCM vector in-place.
     // Called once from the original (clean) PCM — never cumulative.
 
+    // EQ orienté dub techno — références : Basic Channel, Maurizio, Deepchord
     static void applyRoleEQ(std::vector<float>& pcm, ContentType type, double sr)
     {
         switch (type)
         {
             case ContentType::KICK:
                 applyBiquad(pcm, makeHP(30.f, sr));
-                applyBiquad(pcm, makeLowShelf(60.f, 3.f, sr));          // sub body
-                applyBiquad(pcm, makePeaking(300.f, -2.f, 1.5f, sr));   // cut mud
-                applyBiquad(pcm, makePeaking(3000.f, 2.f, 2.f, sr));    // click
+                applyBiquad(pcm, makeLowShelf(45.f,  6.f, sr));        // sub dominant
+                applyBiquad(pcm, makePeaking (80.f,  2.f, 1.0f, sr)); // body rond
+                applyBiquad(pcm, makePeaking (300.f,-4.f, 1.5f, sr)); // coupe mud
+                applyBiquad(pcm, makeLP(1800.f, sr));                  // sombre, pas de click
                 break;
             case ContentType::SNARE:
-                applyBiquad(pcm, makeHP(60.f, sr));
-                applyBiquad(pcm, makePeaking(200.f, 2.f, 1.5f, sr));    // body
-                applyBiquad(pcm, makePeaking(5000.f, 3.f, 2.f, sr));    // snap
+                applyBiquad(pcm, makeHP(80.f, sr));
+                applyBiquad(pcm, makePeaking(200.f,  2.f, 1.5f, sr)); // corps
+                applyBiquad(pcm, makePeaking(4000.f, 1.f, 2.0f, sr)); // snap discret
+                applyBiquad(pcm, makeHighShelf(8000.f, -3.f, sr));     // sombre
                 break;
             case ContentType::HIHAT:
-                applyBiquad(pcm, makeHP(300.f, sr));
-                applyBiquad(pcm, makeHighShelf(9000.f, 2.f, sr));        // air
+                applyBiquad(pcm, makeHP(600.f, sr));
+                applyBiquad(pcm, makePeaking(3000.f, -2.f, 1.5f, sr)); // moins agressif
+                applyBiquad(pcm, makeHighShelf(8000.f, -4.f, sr));      // étouffé, lointain
+                applyBiquad(pcm, makeLP(11000.f, sr));
                 break;
             case ContentType::BASS:
-                applyBiquad(pcm, makeHP(30.f, sr));
-                applyBiquad(pcm, makeLowShelf(80.f, 2.f, sr));          // warmth
-                applyBiquad(pcm, makePeaking(1000.f, -2.f, 1.5f, sr)); // clarity
+                applyBiquad(pcm, makeHP(25.f, sr));
+                applyBiquad(pcm, makeLowShelf(60.f,  5.f, sr));        // sub chaud
+                applyBiquad(pcm, makePeaking (120.f, 2.f, 1.0f, sr)); // corps
+                applyBiquad(pcm, makePeaking (250.f,-2.f, 1.5f, sr)); // anti-mud
+                applyBiquad(pcm, makeLP(5500.f, sr));                  // garde la graine, coupe les hauts
                 break;
             case ContentType::SYNTH:
-                applyBiquad(pcm, makeHP(100.f, sr));
-                applyBiquad(pcm, makePeaking(400.f, -1.f, 1.5f, sr));  // cut mud
+                applyBiquad(pcm, makeHP(80.f, sr));
+                applyBiquad(pcm, makePeaking(400.f,  1.f, 1.5f, sr)); // warmth
+                applyBiquad(pcm, makePeaking(1200.f,-1.f, 1.5f, sr)); // anti-nasal
+                applyBiquad(pcm, makeHighShelf(3500.f, -5.f, sr));     // très filtré, atmosphérique
                 break;
             case ContentType::PAD:
-                applyBiquad(pcm, makeHP(80.f, sr));
-                applyBiquad(pcm, makePeaking(300.f, -2.f, 1.5f, sr));  // cut mud
+                applyBiquad(pcm, makeHP(50.f, sr));
+                applyBiquad(pcm, makePeaking(200.f, 3.f, 1.0f, sr)); // warmth analogique
+                applyBiquad(pcm, makeHighShelf(2500.f, -7.f, sr));    // très sombre
                 break;
             case ContentType::PERC:
-                applyBiquad(pcm, makeHP(80.f, sr));
-                applyBiquad(pcm, makePeaking(5000.f, 1.f, 2.f, sr));   // presence
+                applyBiquad(pcm, makeHP(100.f, sr));
+                applyBiquad(pcm, makePeaking(5000.f, -1.f, 2.f, sr)); // presence réduite
+                applyBiquad(pcm, makeHighShelf(7000.f, -3.f, sr));    // sombre
                 break;
             case ContentType::OTHER:
                 applyBiquad(pcm, makeHP(60.f, sr));
+                applyBiquad(pcm, makeHighShelf(6000.f, -3.f, sr));
                 break;
         }
     }
@@ -602,19 +626,41 @@ private:
 
     // ── Target gain per instrument type ───────────────────────────────────────
 
+    // Gains orientés dub techno : sub dominant, hihat quasi-inaudible, pads en fond
     static float targetGainForType(ContentType type) noexcept
     {
         switch (type)
         {
-            case ContentType::KICK:  return 0.75f;  // −2.5 dBFS — punch/headroom
-            case ContentType::SNARE: return 0.60f;  // −4.4 dBFS
-            case ContentType::HIHAT: return 0.30f;  // −10.5 dBFS — always discreet
-            case ContentType::BASS:  return 0.55f;  // −5.2 dBFS
-            case ContentType::SYNTH: return 0.45f;  // −7.0 dBFS
-            case ContentType::PAD:   return 0.38f;  // −8.4 dBFS
-            case ContentType::PERC:  return 0.55f;  // −5.2 dBFS
-            default:                 return 0.50f;  // −6.0 dBFS
+            case ContentType::KICK:  return 0.80f;  // −2.0 dBFS — dominant
+            case ContentType::SNARE: return 0.42f;  // −7.5 dBFS — discret
+            case ContentType::HIHAT: return 0.18f;  // −15 dBFS  — signature dub : quasi-inaudible
+            case ContentType::BASS:  return 0.65f;  // −3.7 dBFS — sub présent
+            case ContentType::SYNTH: return 0.32f;  // −9.9 dBFS — très en retrait, atmosphérique
+            case ContentType::PAD:   return 0.38f;  // −8.4 dBFS — fond sombre
+            case ContentType::PERC:  return 0.38f;  // −8.4 dBFS
+            default:                 return 0.45f;  // −7.0 dBFS
         }
+    }
+
+    // ── Echo dub rythmique (appliqué offline sur le PCM) ─────────────────────
+    //
+    // Ajoute une répétition atténuée calée sur le BPM (divisions = 4 → noire, 8 → croche).
+    // Donne le caractère "échos rythmiques" caractéristique du dub techno.
+    static void applyDubEcho(std::vector<float>& pcm, double bpm, double sr,
+                              float feedback, int divisions)
+    {
+        if (bpm <= 0.0 || pcm.empty()) return;
+        const int delaySamples = static_cast<int>((60.0 / bpm) * sr * (4.0 / divisions));
+        if (delaySamples <= 0 || delaySamples >= static_cast<int>(pcm.size())) return;
+
+        std::vector<float> out(pcm.size(), 0.f);
+        for (int i = 0; i < static_cast<int>(pcm.size()); ++i)
+        {
+            out[i] = pcm[i];
+            if (i >= delaySamples)
+                out[i] += pcm[i - delaySamples] * feedback;
+        }
+        pcm = std::move(out);
     }
 
     // ── Neutron-inspired magic mix ─────────────────────────────────────────────
@@ -750,6 +796,19 @@ private:
         if (!usedAi)
         {
             // ── Heuristic mix path (fallback / ONNX disabled / toggle off) ───
+
+            // Densité de la scène courante → scale de gain adaptatif
+            const int activeInScene = arrangement_[static_cast<std::size_t>(
+                juce::jlimit(0, 7, currentArrangementScene_))].activeCount;
+            const float densityScale = (activeInScene >= 6) ? 0.95f   // drop
+                                     : (activeInScene >= 4) ? 1.05f   // build-up
+                                     :                        1.10f;  // breakdown
+
+            // Compensation d'absence de bass : si aucun slot BASS, boost mid-lows PAD/SYNTH
+            bool bassPresent = false;
+            for (int i = 0; i < kSamplerSlots; ++i)
+                if (loaded[i] && types[i] == ContentType::BASS) bassPresent = true;
+
             for (int i = 0; i < kSamplerSlots; ++i)
             {
                 if (thread && thread->threadShouldExit()) return;
@@ -763,6 +822,11 @@ private:
                 // Apply role EQ preset (from clean original PCM)
                 applyRoleEQ(pcms[i], effectiveType, sampleRate_);
 
+                // Compensation bass absente → boost mid-lows des pads/synths
+                if (!bassPresent &&
+                    (effectiveType == ContentType::PAD || effectiveType == ContentType::SYNTH))
+                    applyBiquad(pcms[i], makeLowShelf(150.f, 2.f, sampleRate_));
+
                 // Apply inter-track unmasking cuts (using effective types array)
                 ContentType effectiveTypes[kSamplerSlots];
                 for (int j = 0; j < kSamplerSlots; ++j)
@@ -771,10 +835,22 @@ private:
                         : types[j];
                 applyUnmasking(pcms[i], i, effectiveTypes, sampleRate_);
 
-                // Gain calibration: true-peak (4× oversample) + -3dBFS headroom
+                // Echo dub rythmique (PAD, SYNTH, PERC)
+                if (musicCtx_.bpm > 0.f)
+                {
+                    if (effectiveType == ContentType::PAD)
+                        applyDubEcho(pcms[i], musicCtx_.bpm, sampleRate_, 0.35f, 4);
+                    else if (effectiveType == ContentType::SYNTH)
+                        applyDubEcho(pcms[i], musicCtx_.bpm, sampleRate_, 0.25f, 8);
+                    else if (effectiveType == ContentType::PERC)
+                        applyDubEcho(pcms[i], musicCtx_.bpm, sampleRate_, 0.20f, 8);
+                }
+
+                // Gain calibration: true-peak (4× oversample) + densityScale + -3dBFS headroom
                 const float truePeak = calculateTruePeak(pcms[i]);
                 const float gain = juce::jlimit(0.f, 1.5f,
-                    (targetGainForType(effectiveType) * 0.707f) / std::max(truePeak, 0.001f));
+                    (targetGainForType(effectiveType) * densityScale * 0.707f)
+                    / std::max(truePeak, 0.001f));
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));
                 sampler_.setSlotGain(i, gain);
@@ -1284,6 +1360,8 @@ private:
     MusicContext                             musicCtx_;
     bool                                     useAiMix_   = true;   // AI mix on by default
     std::array<std::string, kSamplerSlots>   filePaths_ {};
+    std::array<SceneSnapshot, 8>             arrangement_ {};
+    int                                      currentArrangementScene_ { 0 };
     std::atomic<bool>                        busy_        { false };
     std::atomic<bool>                        magicActive_ { false };
     ContentType detectedTypes_[kSamplerSlots] {};

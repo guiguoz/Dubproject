@@ -189,6 +189,7 @@ private:
     static juce::String frequencyToNoteName(float hz);
 
     // Scene management
+    ::dsp::SmartSamplerEngine::SceneSnapshot buildSceneSnapshot(int si) const;
     void captureCurrentScene();
     void applyScene(int idx);
     void navigateScene(int delta);

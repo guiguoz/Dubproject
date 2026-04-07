@@ -21,7 +21,7 @@ struct MusicContext
     int   keyRoot = 0;     // 0=C … 11=B ; -1 = unknown
     bool  isMajor = true;
 
-    enum class Style { None, Jazz, Funk, Rock, Electro };
+    enum class Style { None, Jazz, Funk, Rock, Electro, DubTechno };
     Style style = Style::None;
 };
 
@@ -354,6 +354,31 @@ private:
             case EffectType::Reverb:
                 fx.setParam(0, 0.85f); // huge space
                 fx.setParam(3, 0.45f);
+                break;
+            default: break;
+            }
+            break;
+
+        // ── Dub Techno ────────────────────────────────────────────────────────
+        case MusicContext::Style::DubTechno:
+            switch (fx.type())
+            {
+            case EffectType::Reverb:
+                fx.setParam(0, 0.92f); // très long decay — caverneux
+                fx.setParam(3, 0.55f); // mix plus présent
+                break;
+            case EffectType::Delay:
+            {
+                const float quarterMs = 60000.f / bpm;
+                fx.setParam(0, quarterMs < 2000.f ? quarterMs : 2000.f);
+                fx.setParam(1, 0.50f); // feedback moyen — échos rythmiques
+                fx.setParam(2, 0.35f); // mix discret
+                break;
+            }
+            case EffectType::Flanger:
+                fx.setParam(0, 0.15f); // très lent — sweep atmosphérique
+                fx.setParam(1, 0.4f);
+                fx.setParam(3, 0.3f);
                 break;
             default: break;
             }

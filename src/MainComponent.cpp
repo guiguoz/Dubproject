@@ -215,7 +215,17 @@ MainComponent::MainComponent()
     sidebarMagicBtn_.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFFFFCC44));
     sidebarMagicBtn_.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFFFFEE88));
     sidebarMagicBtn_.setAccentColour(juce::Colour(0xFFFFAA00));  // amber glow
-    sidebarMagicBtn_.onClick = [this] { samplerEngine_.toggleMagicMix(); };
+    sidebarMagicBtn_.onClick = [this]
+    {
+        if (!samplerEngine_.isMagicActive())
+        {
+            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
+            for (int si = 0; si < kMaxScenes; ++si)
+                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
+            samplerEngine_.setArrangement(arr, currentScene_);
+        }
+        samplerEngine_.toggleMagicMix();
+    };
 
     // AI status indicator
     aiStatusLabel_.setText("", juce::dontSendNotification);
@@ -284,6 +294,12 @@ MainComponent::MainComponent()
         autoMatchSampleAsync(slot, std::move(pcm), fileSr);
 
         // Auto-trigger AI mix analysis as soon as a sample is loaded
+        {
+            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
+            for (int si = 0; si < kMaxScenes; ++si)
+                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
+            samplerEngine_.setArrangement(arr, currentScene_);
+        }
         samplerEngine_.applyMagicMix();
         aiStatusLabel_.setText("IA...", juce::dontSendNotification);
     };
@@ -346,7 +362,13 @@ MainComponent::MainComponent()
     {
         dspPipeline_.getSampler().setSlotMuted(slot, muted);
         if (samplerEngine_.isMagicActive())
+        {
+            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
+            for (int si = 0; si < kMaxScenes; ++si)
+                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
+            samplerEngine_.setArrangement(arr, currentScene_);
             samplerEngine_.applyMagicMix();
+        }
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -1798,6 +1820,27 @@ void MainComponent::updateSceneLabel()
     sceneNumLabel_.setText("Scene " + juce::String(currentScene_ + 1) +
                            " / " + juce::String(kMaxScenes),
                            juce::dontSendNotification);
+}
+
+::dsp::SmartSamplerEngine::SceneSnapshot MainComponent::buildSceneSnapshot(int si) const
+{
+    ::dsp::SmartSamplerEngine::SceneSnapshot snap;
+    const auto& sc = scenes_[static_cast<std::size_t>(si)];
+    for (int t = 0; t < 8; ++t)
+    {
+        if (sc.mutes[static_cast<std::size_t>(t)]) continue;
+        const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
+        for (int s = 0; s < numSteps; ++s)
+        {
+            if (sc.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s)])
+            {
+                snap.slotActive[static_cast<std::size_t>(t)] = true;
+                ++snap.activeCount;
+                break;
+            }
+        }
+    }
+    return snap;
 }
 
 void MainComponent::captureCurrentScene()
