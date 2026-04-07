@@ -181,6 +181,19 @@ public:
         return lastMixState_[static_cast<std::size_t>(slot)];
     }
 
+    /// Restore cached mix state after project load (so depth/pan/width are
+    /// available to getSlotMixState() without running magic mix again).
+    void restoreSlotMixState(int slot, float gain, float pan, float width, float depth) noexcept
+    {
+        if (slot < 0 || slot >= kSamplerSlots) return;
+        auto& ms = lastMixState_[static_cast<std::size_t>(slot)];
+        ms.gain   = gain;
+        ms.pan    = pan;
+        ms.width  = width;
+        ms.depth  = depth;
+        ms.active = true;
+    }
+
     // ── Public spatial query (for UI display after magic mix) ─────────────────
 
     struct SpatialQuery { float pan, width, depth; };
@@ -617,47 +630,33 @@ private:
 
     void applyNeutronMix(juce::Thread* thread)
     {
-        juce::AudioFormatManager fmt;
-        fmt.registerBasicFormats();
-
         ContentType           types    [kSamplerSlots] {};
         float                 centroids[kSamplerSlots] {};  // spectral centroid (Hz)
         std::vector<float>    pcms     [kSamplerSlots];
         bool                  loaded   [kSamplerSlots] {};
         int                   numLoaded = 0;
 
-        // Phase 1: read original files + detect content type
+        // Phase 1: read PCM from RAM + detect content type.
+        // Muted slots are excluded — the mix will be computed only for active slots,
+        // so gain staging and spatialization adapt to the current mute state.
         for (int i = 0; i < kSamplerSlots; ++i)
         {
             if (thread && thread->threadShouldExit()) return;
+            if (!sampler_.isLoaded(i) || sampler_.isSlotMuted(i)) continue;
 
-            const auto& path = filePaths_[static_cast<std::size_t>(i)];
-            if (path.empty() || !sampler_.isLoaded(i)) continue;
-
-            juce::File file(path);
-            if (!file.existsAsFile()) continue;
-
-            auto reader = std::unique_ptr<juce::AudioFormatReader>(
-                fmt.createReaderFor(file));
-            if (!reader) continue;
-
-            const int n = static_cast<int>(reader->lengthInSamples);
-            if (n <= 0) continue;
-
-            juce::AudioBuffer<float> buf(1, n);
-            reader->read(&buf, 0, n, 0, true, false);
-            pcms[i].assign(buf.getReadPointer(0), buf.getReadPointer(0) + n);
+            pcms[i] = sampler_.getSlotPcmSnapshot(i);
+            if (pcms[i].empty()) continue;
 
             // Use AI classifier if available, fallback to heuristic
             #ifdef SAXFX_HAS_ONNX
             static AiContentClassifier classifier(
                 "models/content_classifier.onnx",
                 "models/content_classifier_norm.bin");
-            types[i] = static_cast<ContentType>(classifier.classify(pcms[i], reader->sampleRate));
+            types[i] = static_cast<ContentType>(classifier.classify(pcms[i], sampleRate_));
             #else
-            types[i]  = detectContentType(pcms[i], reader->sampleRate);
+            types[i]  = detectContentType(pcms[i], sampleRate_);
             #endif
-            centroids[i] = estimateSpectralCentroid(pcms[i], reader->sampleRate);
+            centroids[i] = estimateSpectralCentroid(pcms[i], sampleRate_);
             loaded[i] = true;
             ++numLoaded;
         }

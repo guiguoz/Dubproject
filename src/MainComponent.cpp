@@ -305,9 +305,10 @@ MainComponent::MainComponent()
         samplerEngine_.setSlotFilePath(slot, "");
     };
 
-    // BPM changed: update DSP + sidebar label
+    // BPM changed: update sequencer + DSP + sidebar label
     stepSeqPanel_.onBpmChanged = [this](float bpm)
     {
+        stepSequencer_.setBpm(bpm);
         dspPipeline_.setBpm(bpm);
         auto ctx = effectChainEditor_.getMusicContext();
         ctx.bpm  = bpm;
@@ -340,10 +341,12 @@ MainComponent::MainComponent()
         dspPipeline_.getSampler().setSlotGain(slot, gain);
     };
 
-    // Mute per slot
+    // Mute per slot — re-run magic mix if active so gain/pan adapt to new mute state
     stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
     {
         dspPipeline_.getSampler().setSlotMuted(slot, muted);
+        if (samplerEngine_.isMagicActive())
+            samplerEngine_.applyMagicMix();
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -1183,6 +1186,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             const int haasSamples = static_cast<int>(
                 sm.width * 0.025 * currentSampleRate_);
             sampler.setSlotHaasDelay(i, haasSamples);
+            samplerEngine_.restoreSlotMixState(i, sm.gain, sm.pan, sm.width, sm.depth);
         }
     }
 
@@ -1773,11 +1777,7 @@ void MainComponent::applyScene(int idx)
         return;
     }
 
-    // Restore BPM
-    stepSequencer_.setBpm(sc.bpm);
-    dspPipeline_.setBpm(sc.bpm);
-    stepSeqPanel_.setBpm(sc.bpm);
-    updateSidebarBpm(sc.bpm);
+    // BPM is global (master clock) — not overridden by scene data
 
     // Remettre le séquenceur au step 0 → nouvelle scène part toujours du début
     if (stepSequencer_.isPlaying())
