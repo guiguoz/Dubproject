@@ -989,6 +989,10 @@ void MainComponent::openSampleEditor(int slot)
     auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
     if (pcm.empty()) return;
 
+    // Arrêter le morceau pour permettre d'écouter le sample en isolation
+    if (stepSequencer_.isPlaying())
+        stepSeqPanel_.triggerPlay();
+
     const juce::String fileName =
         juce::File(stepSeqPanel_.getSlotFilePath(slot))
             .getFileNameWithoutExtension();
