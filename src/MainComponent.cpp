@@ -1841,6 +1841,18 @@ void MainComponent::applyScene(int idx)
     if (stepSequencer_.isPlaying())
         stepSequencer_.resetPhase();
 
+    // Couper les slots sans step actif dans la nouvelle scène
+    // (évite qu'un one-shot de la scène précédente continue de jouer)
+    for (int i = 0; i < 8; ++i)
+    {
+        const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(i)] * 16;
+        bool hasActiveStep = false;
+        for (int s = 0; s < numSteps && !hasActiveStep; ++s)
+            hasActiveStep = sc.steps[static_cast<std::size_t>(i)][static_cast<std::size_t>(s)];
+        if (!hasActiveStep)
+            dspPipeline_.getSampler().stop(i);
+    }
+
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 8; ++i)
     {
