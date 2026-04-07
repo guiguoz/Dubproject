@@ -167,6 +167,31 @@ private:
     std::array<double,             8> rawSrForRetry_{};           // value-initialised to 0
 
     //==========================================================================
+    // Clipboard (copy/paste track)
+    //==========================================================================
+    struct TrackClipboard {
+        std::array<bool, 512> steps {};
+        int         barCount { 1 };
+        std::string filePath;
+        float       gain     { 1.f };
+        bool        muted    { false };
+        bool        valid    { false };
+    };
+    TrackClipboard trackClipboard_;
+
+    //==========================================================================
+    // Crossfade entre scènes
+    //==========================================================================
+    struct CrossfadeState {
+        bool  active      { false };
+        int   elapsedMs   { 0 };
+        int   durationMs  { 300 };
+        std::array<float, 8> startGains  {};
+        std::array<float, 8> targetGains {};
+    };
+    CrossfadeState crossfade_;
+
+    //==========================================================================
     // State
     //==========================================================================
     std::atomic<float> currentRmsLevel_{0.0f};

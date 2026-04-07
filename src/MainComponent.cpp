@@ -458,6 +458,63 @@ MainComponent::MainComponent()
     // Éditeur de sample (bouton [ED])
     stepSeqPanel_.onEditPressed = [this](int slot) { openSampleEditor(slot); };
 
+    // ── Clipboard track ───────────────────────────────────────────────────────
+    stepSeqPanel_.onTrackCopyRequest = [this](int slot)
+    {
+        auto& cb = trackClipboard_;
+        cb.steps    = {};
+        const int numSteps = stepSequencer_.getTrackStepCount(slot);
+        for (int s = 0; s < numSteps; ++s)
+            cb.steps[static_cast<std::size_t>(s)] = stepSequencer_.getStep(slot, s);
+        cb.barCount = stepSequencer_.getTrackBarCount(slot);
+        cb.filePath = stepSeqPanel_.getSlotFilePath(slot);
+        cb.gain     = dspPipeline_.getSampler().getSlotGain(slot);
+        cb.muted    = dspPipeline_.getSampler().isSlotMuted(slot);
+        cb.valid    = true;
+        stepSeqPanel_.hasPasteData = true;
+    };
+
+    stepSeqPanel_.onTrackPasteRequest = [this](int slot)
+    {
+        if (!trackClipboard_.valid) return;
+        captureCurrentScene();
+        const auto& cb = trackClipboard_;
+
+        // Pattern
+        stepSequencer_.setTrackBarCount(slot, cb.barCount);
+        stepSeqPanel_.setTrackStepCount(slot, cb.barCount * 16);
+        const int numSteps = cb.barCount * 16;
+        for (int s = 0; s < numSteps; ++s)
+        {
+            stepSequencer_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
+            stepSeqPanel_.setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
+        }
+
+        // Gain + mute
+        dspPipeline_.getSampler().setSlotGain(slot, cb.gain);
+        dspPipeline_.getSampler().setSlotMuted(slot, cb.muted);
+        stepSeqPanel_.setSlotMuted(slot, cb.muted);
+
+        // Sample (si différent)
+        if (!cb.filePath.empty() && cb.filePath != stepSeqPanel_.getSlotFilePath(slot))
+        {
+            loadSampleIntoSlot(slot, cb.filePath);
+            stepSeqPanel_.setSlotFilePath(slot, cb.filePath);
+            samplerEngine_.setSlotFilePath(slot, cb.filePath);
+        }
+
+        // Mettre à jour la scène courante en mémoire
+        auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+        for (int s = 0; s < numSteps; ++s)
+            sc.steps[static_cast<std::size_t>(slot)][static_cast<std::size_t>(s)] =
+                cb.steps[static_cast<std::size_t>(s)];
+        sc.gains          [static_cast<std::size_t>(slot)] = cb.gain;
+        sc.mutes          [static_cast<std::size_t>(slot)] = cb.muted;
+        sc.trackBarCounts [static_cast<std::size_t>(slot)] = cb.barCount;
+        if (!cb.filePath.empty())
+            sc.filePaths  [static_cast<std::size_t>(slot)] = cb.filePath;
+    };
+
     // Changement de longueur de pattern via le menu pageLabel_
     stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
     {
@@ -1748,6 +1805,28 @@ void MainComponent::timerCallback()
 
     dspPipeline_.getEffectChain().collectGarbage();
 
+    // Crossfade entre scènes : interpolation de gains sur ~300ms
+    if (crossfade_.active)
+    {
+        constexpr int kTickMs = 33; // ~30Hz
+        crossfade_.elapsedMs += kTickMs;
+        const float t = juce::jlimit(0.f, 1.f,
+            static_cast<float>(crossfade_.elapsedMs)
+            / static_cast<float>(crossfade_.durationMs));
+        for (int i = 0; i < 8; ++i)
+        {
+            const float gain = crossfade_.startGains[i]
+                + (crossfade_.targetGains[i] - crossfade_.startGains[i]) * t;
+            dspPipeline_.getSampler().setSlotGain(i, gain);
+        }
+        if (crossfade_.elapsedMs >= crossfade_.durationMs)
+        {
+            crossfade_.active = false;
+            for (int i = 0; i < 8; ++i)
+                dspPipeline_.getSampler().setSlotGain(i, crossfade_.targetGains[i]);
+        }
+    }
+
     // AI status animation while busy
     if (samplerEngine_.isBusy())
     {
@@ -1864,6 +1943,11 @@ void MainComponent::captureCurrentScene()
 
 void MainComponent::applyScene(int idx)
 {
+    // Capturer les gains courants avant d'appliquer la nouvelle scène (pour le crossfade)
+    std::array<float, 8> gainsBeforeScene {};
+    for (int i = 0; i < 8; ++i)
+        gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
+
     const auto& sc = scenes_[static_cast<std::size_t>(idx)];
 
     if (!sc.used)
@@ -1954,6 +2038,19 @@ void MainComponent::applyScene(int idx)
                 }
             }
         }
+    }
+
+    // Crossfade : si le séquenceur joue, ramper les gains depuis l'ancienne scène
+    if (stepSequencer_.isPlaying())
+    {
+        for (int i = 0; i < 8; ++i)
+            crossfade_.targetGains[i] = dspPipeline_.getSampler().getSlotGain(i);
+        // Réinitialiser les gains au départ
+        for (int i = 0; i < 8; ++i)
+            dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
+        crossfade_.startGains = gainsBeforeScene;
+        crossfade_.elapsedMs  = 0;
+        crossfade_.active     = true;
     }
 }
 

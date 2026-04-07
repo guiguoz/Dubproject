@@ -46,6 +46,9 @@ public:
     /// Called when user right-clicks a slot indicator and picks a type override.
     /// typeIndex = 0-7 (maps to ContentType enum), or -1 = clear override.
     std::function<void(int slot, int typeIndex)>          onTypeOverrideChanged;
+    std::function<void(int slot)>                         onTrackCopyRequest;
+    std::function<void(int slot)>                         onTrackPasteRequest;
+    bool                                                  hasPasteData { false };
     /// Called when user clicks the [ED] edit button for a slot.
     std::function<void(int slot)>                         onEditPressed;
     /// Returns the playhead ratio [0..1] for a slot (for waveform animation).
@@ -945,11 +948,16 @@ private:
         menu.addItem(1, "Load file...");
         if (!slotFilePaths_[static_cast<std::size_t>(slot)].empty())
             menu.addItem(2, "Clear slot");
+        menu.addSeparator();
+        menu.addItem(3, "Copy track");
+        menu.addItem(4, "Paste track", hasPasteData);
         menu.showMenuAsync(juce::PopupMenu::Options{},
             [this, slot](int result)
             {
-                if (result == 1) openFileDialog(slot);
+                if      (result == 1) openFileDialog(slot);
                 else if (result == 2) clearSlot(slot);
+                else if (result == 3 && onTrackCopyRequest)  onTrackCopyRequest(slot);
+                else if (result == 4 && onTrackPasteRequest) onTrackPasteRequest(slot);
             });
     }
 
