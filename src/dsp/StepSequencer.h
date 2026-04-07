@@ -136,7 +136,7 @@ public:
     /// pour que les patterns de la nouvelle scène partent toujours du step 0.
     void resetPhase() noexcept
     {
-        phase_ = 0.0;
+        phase_ = -1e-9;  // juste avant 0 → le 1er process() franchit step 0 et le déclenche
         stepAtomic_.store(0, std::memory_order_relaxed);
     }
 
