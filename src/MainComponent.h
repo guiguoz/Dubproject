@@ -12,6 +12,7 @@
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
 #include "ui/SaxStaffPanel.h"
+#include "ui/PixelCloudComponent.h"
 #include "ui/SampleEditorComponent.h"
 #include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
@@ -119,12 +120,11 @@ private:
     // ── Sidebar upper: already covered by audioSettingsButton_, mainMixSlider_ ──
 
     // ── Sidebar lower — transport (moved from StepSequencerPanel) ─────────────
-    juce::TextButton sidebarPlayBtn_;
-    juce::TextButton sidebarTapBtn_;
-    juce::Label      sidebarBpmLabel_;
-    ui::NeonButton   sidebarMagicBtn_;
-    juce::Label      aiStatusLabel_;
-    int              aiAnimFrame_ { 0 };
+    juce::TextButton        sidebarPlayBtn_;
+    juce::TextButton        sidebarTapBtn_;
+    juce::Label             sidebarBpmLabel_;
+    ui::PixelCloudComponent aiCloud_;
+    void                    triggerAI();
 
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;

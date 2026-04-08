@@ -207,37 +207,10 @@ MainComponent::MainComponent()
         }
     };
 
-    sidebarMagicBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x9a\xa1"));  // ⚡
-    sidebarMagicBtn_.setTooltip("Re-analyser le mix IA (re-clic = annuler)");
-    sidebarMagicBtn_.setClickingTogglesState(true);
-    sidebarMagicBtn_.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF2A1C00));
-    sidebarMagicBtn_.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(0xFF886600));
-    sidebarMagicBtn_.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFFFFCC44));
-    sidebarMagicBtn_.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFFFFEE88));
-    sidebarMagicBtn_.setAccentColour(juce::Colour(0xFFFFAA00));  // amber glow
-    sidebarMagicBtn_.onClick = [this]
-    {
-        if (!samplerEngine_.isMagicActive())
-        {
-            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
-            for (int si = 0; si < kMaxScenes; ++si)
-                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-            samplerEngine_.setArrangement(arr, currentScene_);
-        }
-        samplerEngine_.toggleMagicMix();
-    };
-
-    // AI status indicator
-    aiStatusLabel_.setText("", juce::dontSendNotification);
-    aiStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f).withStyle("Bold")));
-    aiStatusLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFF4CDFA8));
-    aiStatusLabel_.setJustificationType(juce::Justification::centred);
-
     addAndMakeVisible(sidebarPlayBtn_);
     addAndMakeVisible(sidebarTapBtn_);
     addAndMakeVisible(sidebarBpmLabel_);
-    addAndMakeVisible(sidebarMagicBtn_);
-    addAndMakeVisible(aiStatusLabel_);
+    addAndMakeVisible(aiCloud_);
 
     // ── Project buttons ───────────────────────────────────────────────────────
     saveProjectButton_.setButtonText("SAVE PROJECT");
@@ -301,7 +274,6 @@ MainComponent::MainComponent()
             samplerEngine_.setArrangement(arr, currentScene_);
         }
         samplerEngine_.applyMagicMix();
-        aiStatusLabel_.setText("IA...", juce::dontSendNotification);
     };
 
     // Step toggled: stop sample immediately if the track has no more active steps
@@ -406,8 +378,6 @@ MainComponent::MainComponent()
         }
         spatialViz_.setSaxActive(true);
         stepSeqPanel_.setMagicActive(true);
-        sidebarMagicBtn_.setToggleState(true, juce::dontSendNotification);
-        aiStatusLabel_.setText(juce::CharPointer_UTF8("IA \xe2\x9c\x93"), juce::dontSendNotification);  // "IA ✓"
     };
 
     // onDone : si revert → effacer les tags, désactiver les toggles, re-appliquer trim
@@ -418,8 +388,6 @@ MainComponent::MainComponent()
             for (int i = 0; i < 8; ++i)
                 stepSeqPanel_.setSlotContentType(i, "");
             stepSeqPanel_.setMagicActive(false);
-            sidebarMagicBtn_.setToggleState(false, juce::dontSendNotification);
-            aiStatusLabel_.setText("", juce::dontSendNotification);
             spatialViz_.resetAll();
 
             // Re-appliquer les trim points (revertToOriginals relit le fichier original)
@@ -643,6 +611,9 @@ MainComponent::MainComponent()
     // Initial BPM
     stepSequencer_.setBpm(120.f);
     dspPipeline_.setBpm(120.f);
+
+    // Auto-lancement IA au démarrage (après init audio)
+    juce::MessageManager::callAsync([this] { triggerAI(); });
 
     setSize(1280, 900);
     setAudioChannels(1, 2);
@@ -1357,6 +1328,20 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     }
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
+
+    // Re-lancer l'IA après chargement de projet
+    juce::MessageManager::callAsync([this] { triggerAI(); });
+}
+
+//==============================================================================
+void MainComponent::triggerAI()
+{
+    if (samplerEngine_.isBusy()) return;
+    std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
+    for (int si = 0; si < kMaxScenes; ++si)
+        arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
+    samplerEngine_.setArrangement(arr, currentScene_);
+    samplerEngine_.applyMagicMix();
 }
 
 //==============================================================================
@@ -1620,10 +1605,11 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 498, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // Labels mirroring resized() bottom-up layout:
-        // magicY=H-58, aiStatus=H-76, play=H-144, viewBtn=H-176, masterKey=H-210
-        const int masterKeyY_p = H - 210;
-        const int viewBtnY_p   = H - 176;
+        // Labels pour KEY et VIEW — positions miroir de resized() (après COPY)
+        // kHeaderH + 637 + 8 = kHeaderH + 645 → KEY
+        // kHeaderH + 645 + 30 = kHeaderH + 675 → VIEW
+        const int masterKeyY_p = kHeaderH + 645;
+        const int viewBtnY_p   = kHeaderH + 675;
         g.drawText("KEY",  sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
         g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
@@ -1743,26 +1729,30 @@ void MainComponent::resized()
         y += 25;
         sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);
 
-        // ── Bottom section (pinned, bottom-up) ──────────────────────────
-        // magicY   = H-58 | aiStatus = H-76 | play = H-144
-        // viewBtn  = H-176 | masterKey = H-210
-        const int magicY     = H - kStatusH - kPad - 26;  // 26px ⚡
-        const int aiStatusY  = magicY - 18;                // 16px AI label
-        const int playY      = aiStatusY - kPad - 60;      // 60px PLAY
-        const int viewBtnY   = playY - kPad - 24;          // 24px 🎹🎼
-        const int masterKeyY = viewBtnY - kPad - 26;       // 26px KEY
-
-        sidebarPlayBtn_ .setBounds(sbBtnX, playY,     sbBtnW, 60);
-        aiStatusLabel_  .setBounds(sbBtnX, aiStatusY, sbBtnW, 16);
-        sidebarMagicBtn_.setBounds(sbBtnX, magicY,    sbBtnW, 26);
+        // ── Section sous COPY : KEY/MODE, clavier/portée, PLAY, nuage IA ──
+        // sceneCopyBtn_ se termine à kHeaderH + 512 + 103 + 22 = kHeaderH + 637
+        int yFlow = kHeaderH + 637 + 8;   // +8 gap après COPY
 
         const int halfW = sbBtnW / 2 - 2;
-        viewKeyboardBtn_.setBounds(sbBtnX,             viewBtnY, halfW, 24);
-        viewStaffBtn_   .setBounds(sbBtnX + halfW + 4, viewBtnY, halfW, 24);
+
+        // KEY + MODE
+        masterKeyCombo_    .setBounds(sbBtnX,             yFlow, halfW, 26);
+        masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4, yFlow, halfW, 26);
+        yFlow += 30;  // 26 + 4 gap
+
+        // Clavier / Portée
+        viewKeyboardBtn_.setBounds(sbBtnX,             yFlow, halfW, 24);
+        viewStaffBtn_   .setBounds(sbBtnX + halfW + 4, yFlow, halfW, 24);
+        yFlow += 30;  // 24 + 6 gap
+
+        // PLAY (50px)
+        sidebarPlayBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 50);
+        yFlow += 58;  // 50 + 8 gap
+
+        // Nuage IA (80px, pleine largeur sidebar)
+        aiCloud_.setBounds(sidebarX, yFlow, kSidebarW, 80);
 
         globalScaleCombo_.setBounds(0, 0, 0, 0);           // supprimé — doublon
-        masterKeyCombo_    .setBounds(sbBtnX,             masterKeyY, halfW, 26);
-        masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4, masterKeyY, halfW, 26);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1827,14 +1817,13 @@ void MainComponent::timerCallback()
         }
     }
 
-    // AI status animation while busy
+    // Mise à jour état nuage IA
     if (samplerEngine_.isBusy())
-    {
-        static const char* kFrames[] = { "IA \xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f\xe2\x97\x8f", "IA \xe2\x97\x8f\xe2\x97\x8f" };
-        aiStatusLabel_.setText(juce::CharPointer_UTF8(kFrames[aiAnimFrame_ % 4]),
-                               juce::dontSendNotification);
-        ++aiAnimFrame_;
-    }
+        aiCloud_.setState(ui::PixelCloudComponent::State::Working);
+    else if (samplerEngine_.isMagicActive())
+        aiCloud_.setState(ui::PixelCloudComponent::State::Active);
+    else
+        aiCloud_.setState(ui::PixelCloudComponent::State::Disabled);
 
     // Sync play button text with sequencer state
     sidebarPlayBtn_.setButtonText(
