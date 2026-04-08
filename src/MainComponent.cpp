@@ -1347,6 +1347,22 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 void MainComponent::triggerAI()
 {
     if (samplerEngine_.isBusy()) return;
+
+    // Rôles fixes par piste — skip classification ONNX, EQ/gain toujours cohérents
+    using CT = ::dsp::SmartSamplerEngine::ContentType;
+    static constexpr CT kSlotRoles[8] = {
+        CT::SYNTH,   // 0: MASTER  — loop mélodique, référence tonale
+        CT::BASS,    // 1: BASS
+        CT::KICK,    // 2: KICK
+        CT::SNARE,   // 3: SNARE
+        CT::HIHAT,   // 4: HIHAT
+        CT::PAD,     // 5: PAD
+        CT::SYNTH,   // 6: SYNTH
+        CT::PERC,    // 7: PERC
+    };
+    for (int i = 0; i < 8; ++i)
+        samplerEngine_.setTypeOverride(i, kSlotRoles[i]);
+
     std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
     for (int si = 0; si < kMaxScenes; ++si)
         arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);

@@ -108,12 +108,13 @@ public:
         // Per-track controls
         for (int t = 0; t < 8; ++t)
         {
-            // Slot label — large bold track number for visibility
-            slotLabels_[t].setText(juce::String(t + 1),
-                                   juce::dontSendNotification);
-            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(16.f).withStyle("Bold")));
-            slotLabels_[t].setColour(juce::Label::textColourId,
-                                     trackColour(t));
+            // Slot label — rôle fixe de la piste
+            static constexpr const char* kRoleNames[8] = {
+                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC"
+            };
+            slotLabels_[t].setText(kRoleNames[t], juce::dontSendNotification);
+            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
+            slotLabels_[t].setColour(juce::Label::textColourId, trackColour(t));
             slotLabels_[t].setJustificationType(juce::Justification::centred);
             addAndMakeVisible(slotLabels_[t]);
 
