@@ -1749,8 +1749,10 @@ void MainComponent::resized()
         sidebarPlayBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 50);
         yFlow += 58;  // 50 + 8 gap
 
-        // Nuage IA (80px, pleine largeur sidebar)
-        aiCloud_.setBounds(sidebarX, yFlow, kSidebarW, 80);
+        // Nuage IA — remplit l'espace restant jusqu'en bas de la sidebar
+        const int cloudBottom = H - kStatusH - kPad;
+        const int cloudH      = juce::jmax(40, cloudBottom - yFlow);
+        aiCloud_.setBounds(sidebarX, yFlow, kSidebarW, cloudH);
 
         globalScaleCombo_.setBounds(0, 0, 0, 0);           // supprimé — doublon
     }
