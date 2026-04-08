@@ -113,7 +113,7 @@ public:
                 "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC"
             };
             slotLabels_[t].setText(kRoleNames[t], juce::dontSendNotification);
-            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
+            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(12.f).withStyle("Bold")));
             slotLabels_[t].setColour(juce::Label::textColourId, trackColour(t));
             slotLabels_[t].setJustificationType(juce::Justification::centred);
             addAndMakeVisible(slotLabels_[t]);
@@ -478,10 +478,10 @@ public:
             const int ry     = rowAreaY + t * rowH;
             const int nSteps = trackStepCounts_[t];
 
-            slotLabels_[t]      .setBounds(kPad,           ry,      22, rowH);
-            loadBtns_[t]        .setBounds(kPad + 24,      ry + 2,  36, rowH - 4);
-            loadedIndicators_[t].setBounds(kPad + 62,      ry,      12, rowH);
-            sampleNameLabels_[t].setBounds(kPad + 76,  ry + 2, 60, rowH - 4);  // réduit 76→60
+            slotLabels_[t]      .setBounds(kPad,           ry,      38, rowH);
+            loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
+            loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
+            sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
             editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);  // nouveau
             muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);  // décalé
             soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);  // décalé
