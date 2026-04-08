@@ -1920,22 +1920,33 @@ void MainComponent::updateSceneLabel()
 
 ::dsp::SmartSamplerEngine::SceneSnapshot MainComponent::buildSceneSnapshot(int si) const
 {
+    using CT = ::dsp::SmartSamplerEngine::ContentType;
+    static constexpr CT kSlotRoles[8] = {
+        CT::SYNTH, CT::BASS, CT::KICK, CT::SNARE,
+        CT::HIHAT, CT::PAD,  CT::SYNTH, CT::PERC,
+    };
+
     ::dsp::SmartSamplerEngine::SceneSnapshot snap;
     const auto& sc = scenes_[static_cast<std::size_t>(si)];
     for (int t = 0; t < 8; ++t)
     {
-        if (sc.mutes[static_cast<std::size_t>(t)]) continue;
-        const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
+        const std::size_t tidx = static_cast<std::size_t>(t);
+        snap.slotTypes[tidx] = kSlotRoles[t];
+
+        if (sc.mutes[tidx]) continue;
+        const int numSteps = sc.trackBarCounts[tidx] * 16;
         for (int s = 0; s < numSteps; ++s)
         {
-            if (sc.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s)])
+            if (sc.steps[tidx][static_cast<std::size_t>(s)])
             {
-                snap.slotActive[static_cast<std::size_t>(t)] = true;
+                snap.slotActive[tidx] = true;
                 ++snap.activeCount;
                 break;
             }
         }
     }
+    snap.isBreakdown = (snap.activeCount <= 2);
+    snap.isDrop      = (snap.activeCount >= 6);
     return snap;
 }
 

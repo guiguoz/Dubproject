@@ -66,8 +66,11 @@ public:
 
     // ── Vue globale de l'arrangement (toutes les scènes) ─────────────────────
     struct SceneSnapshot {
-        std::array<bool, 8> slotActive {};  // slot a des steps actifs et non-mutés
-        int                 activeCount { 0 };
+        std::array<bool,        8> slotActive {};  // piste active (steps + non-muté)
+        std::array<ContentType, 8> slotTypes  {};  // rôle fixe de chaque piste
+        int  activeCount  { 0 };
+        bool isBreakdown  { false };  // <= 2 pistes actives
+        bool isDrop       { false };  // >= 6 pistes actives
     };
 
     void setArrangement(const std::array<SceneSnapshot, 8>& scenes, int currentScene) noexcept
@@ -798,16 +801,19 @@ private:
             // ── Heuristic mix path (fallback / ONNX disabled / toggle off) ───
 
             // Densité de la scène courante → scale de gain adaptatif
-            const int activeInScene = arrangement_[static_cast<std::size_t>(
-                juce::jlimit(0, 7, currentArrangementScene_))].activeCount;
-            const float densityScale = (activeInScene >= 6) ? 0.95f   // drop
-                                     : (activeInScene >= 4) ? 1.05f   // build-up
-                                     :                        1.10f;  // breakdown
+            const auto& curSnap     = arrangement_[static_cast<std::size_t>(
+                juce::jlimit(0, 7, currentArrangementScene_))];
+            const float densityScale = curSnap.isDrop       ? 0.95f   // drop dense
+                                     : curSnap.isBreakdown  ? 1.15f   // breakdown : plus d'espace
+                                     : (curSnap.activeCount >= 4) ? 1.05f  // build-up
+                                     :                              1.10f;
 
-            // Compensation d'absence de bass : si aucun slot BASS, boost mid-lows PAD/SYNTH
+            // Compensation d'absence de bass : si aucun slot BASS actif dans la scène courante
             bool bassPresent = false;
             for (int i = 0; i < kSamplerSlots; ++i)
-                if (loaded[i] && types[i] == ContentType::BASS) bassPresent = true;
+                if (curSnap.slotActive[static_cast<std::size_t>(i)]
+                    && curSnap.slotTypes[static_cast<std::size_t>(i)] == ContentType::BASS)
+                    bassPresent = true;
 
             for (int i = 0; i < kSamplerSlots; ++i)
             {
