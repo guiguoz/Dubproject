@@ -266,14 +266,16 @@ MainComponent::MainComponent()
         samplerEngine_.setSlotFilePath(slot, path);
         autoMatchSampleAsync(slot, std::move(pcm), fileSr);
 
-        // Auto-trigger AI mix analysis as soon as a sample is loaded
+        // Auto-trigger IA — si le mix est déjà actif, revert d'abord (évite de mixer du PCM traité)
+        if (samplerEngine_.isMagicActive())
         {
-            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
-            for (int si = 0; si < kMaxScenes; ++si)
-                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-            samplerEngine_.setArrangement(arr, currentScene_);
+            reloadPending_ = true;          // onDone relancera triggerAI()
+            samplerEngine_.toggleMagicMix(); // déclenche revertToOriginals()
         }
-        samplerEngine_.applyMagicMix();
+        else
+        {
+            triggerAI();
+        }
     };
 
     // Step toggled: stop sample immediately if the track has no more active steps
@@ -380,7 +382,7 @@ MainComponent::MainComponent()
         stepSeqPanel_.setMagicActive(true);
     };
 
-    // onDone : si revert → effacer les tags, désactiver les toggles, re-appliquer trim
+    // onDone : si revert → effacer les tags, re-appliquer trim, relancer IA si reload en attente
     samplerEngine_.onDone = [this]
     {
         if (!samplerEngine_.isMagicActive())
@@ -389,6 +391,14 @@ MainComponent::MainComponent()
                 stepSeqPanel_.setSlotContentType(i, "");
             stepSeqPanel_.setMagicActive(false);
             spatialViz_.resetAll();
+
+            // Reload déclenché pendant mix actif → relancer l'IA sur PCM propres
+            if (reloadPending_)
+            {
+                reloadPending_ = false;
+                triggerAI();
+                return;
+            }
 
             // Re-appliquer les trim points (revertToOriginals relit le fichier original)
             const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];

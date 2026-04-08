@@ -125,6 +125,7 @@ private:
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
+    bool                    reloadPending_ { false };  // sample chargé pendant mix actif
 
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;
