@@ -125,7 +125,8 @@ private:
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
-    bool                    reloadPending_ { false };  // sample chargé pendant mix actif
+    bool                    reloadPending_ { false };       // sample chargé pendant mix actif
+    std::array<bool, 8>     manualTypeOverride_ {};         // clic droit → type prioritaire sur rôle fixe
 
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;

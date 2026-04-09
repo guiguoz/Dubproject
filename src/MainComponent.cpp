@@ -426,11 +426,20 @@ MainComponent::MainComponent()
     // Override manuel du type par slot (right-click sur l'indicateur)
     stepSeqPanel_.onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
+        const std::size_t sidx = static_cast<std::size_t>(slot);
         if (typeIndex < 0)
+        {
+            manualTypeOverride_[sidx] = false;  // retour au rôle fixe
             samplerEngine_.clearTypeOverride(slot);
+        }
         else
+        {
+            manualTypeOverride_[sidx] = true;   // choix manuel prioritaire
             samplerEngine_.setTypeOverride(
                 slot, static_cast<::dsp::SmartSamplerEngine::ContentType>(typeIndex));
+        }
+        // Re-lancer l'IA avec le nouveau type
+        triggerAI();
     };
 
     // Éditeur de sample (bouton [ED])
@@ -1348,7 +1357,7 @@ void MainComponent::triggerAI()
 {
     if (samplerEngine_.isBusy()) return;
 
-    // Rôles fixes par piste — skip classification ONNX, EQ/gain toujours cohérents
+    // Rôles fixes par piste — appliqués seulement si pas d'override manuel (clic droit)
     using CT = ::dsp::SmartSamplerEngine::ContentType;
     static constexpr CT kSlotRoles[8] = {
         CT::SYNTH,   // 0: MASTER  — loop mélodique, référence tonale
@@ -1361,7 +1370,8 @@ void MainComponent::triggerAI()
         CT::PERC,    // 7: PERC
     };
     for (int i = 0; i < 8; ++i)
-        samplerEngine_.setTypeOverride(i, kSlotRoles[i]);
+        if (!manualTypeOverride_[static_cast<std::size_t>(i)])
+            samplerEngine_.setTypeOverride(i, kSlotRoles[i]);
 
     std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
     for (int si = 0; si < kMaxScenes; ++si)

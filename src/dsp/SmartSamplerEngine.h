@@ -42,7 +42,7 @@ class SmartSamplerEngine
 {
 public:
     // ── Instrument content type (public for UI override) ───────────────────────
-    enum class ContentType { KICK, SNARE, HIHAT, BASS, SYNTH, PAD, PERC, OTHER };
+    enum class ContentType { KICK, SNARE, HIHAT, BASS, SYNTH, PAD, PERC, LOOP, OTHER };
 
     static std::string contentTypeName(ContentType t)
     {
@@ -55,6 +55,7 @@ public:
             case ContentType::SYNTH: return "SYN";
             case ContentType::PAD:   return "PAD";
             case ContentType::PERC:  return "PRC";
+            case ContentType::LOOP:  return "LOOP";
             default:                 return "???";
         }
     }
@@ -230,6 +231,7 @@ public:
             case ContentType::PAD:   pan=0.f;  width=0.8f; depth=0.6f; break;
             case ContentType::SYNTH: pan=0.f;  width=0.4f; depth=0.3f; break;
             case ContentType::PERC:  pan=0.3f; width=0.2f; depth=0.2f; break;
+            case ContentType::LOOP:  pan=0.f;  width=0.3f; depth=0.2f; break;
             default:                 pan=0.f;  width=0.2f; depth=0.2f; break;
         }
         return { pan, width, depth };
@@ -558,6 +560,12 @@ private:
                 applyBiquad(pcm, makePeaking(5000.f, -1.f, 2.f, sr)); // presence réduite
                 applyBiquad(pcm, makeHighShelf(7000.f, -3.f, sr));    // sombre
                 break;
+            case ContentType::LOOP:
+                // Loop de drums complète (kick+hihat) — EQ neutre, préserve toute la bande
+                applyBiquad(pcm, makeHP(30.f, sr));
+                applyBiquad(pcm, makeLowShelf(80.f, 1.f, sr));      // légère chaleur sub
+                applyBiquad(pcm, makeHighShelf(8000.f, -2.f, sr));  // douceur sur le haut
+                break;
             case ContentType::OTHER:
                 applyBiquad(pcm, makeHP(60.f, sr));
                 applyBiquad(pcm, makeHighShelf(6000.f, -3.f, sr));
@@ -641,6 +649,7 @@ private:
             case ContentType::SYNTH: return 0.32f;  // −9.9 dBFS — très en retrait, atmosphérique
             case ContentType::PAD:   return 0.38f;  // −8.4 dBFS — fond sombre
             case ContentType::PERC:  return 0.38f;  // −8.4 dBFS
+            case ContentType::LOOP:  return 0.55f;  // −5.2 dBFS — loop complète, modéré
             default:                 return 0.45f;  // −7.0 dBFS
         }
     }

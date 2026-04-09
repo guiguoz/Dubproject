@@ -1063,22 +1063,23 @@ private:
 
     void showTypeMenu(int slot)
     {
-        static const std::array<const char*, 8> kNames {
+        // Ordre doit correspondre à ContentType enum : KICK=0..PERC=6, LOOP=7, OTHER=8
+        static const std::array<const char*, 9> kNames {
             "KICK", "SNR (Snare)", "HAT (Hi-hat)", "BASS",
-            "SYN (Synth)", "PAD", "PRC (Perc)", "??? (Other)"
+            "SYN (Synth)", "PAD", "PRC (Perc)", "LOOP (Drum loop)", "??? (Other)"
         };
         juce::PopupMenu menu;
         menu.addSectionHeader("Forcer le type (slot S" + juce::String(slot + 1) + ")");
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < static_cast<int>(kNames.size()); ++i)
             menu.addItem(i + 1, kNames[static_cast<std::size_t>(i)]);
         menu.addSeparator();
-        menu.addItem(9, "Auto-detect (annuler l'override)");
+        menu.addItem(10, "Rôle fixe (annuler l'override)");
         menu.showMenuAsync(juce::PopupMenu::Options{},
             [this, slot](int result)
             {
                 if (result == 0) return;
                 if (onTypeOverrideChanged)
-                    onTypeOverrideChanged(slot, result == 9 ? -1 : result - 1);
+                    onTypeOverrideChanged(slot, result == 10 ? -1 : result - 1);
             });
     }
 
