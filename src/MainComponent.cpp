@@ -337,7 +337,7 @@ MainComponent::MainComponent()
         dspPipeline_.getSampler().setSlotMuted(slot, muted);
         if (samplerEngine_.isMagicActive())
         {
-            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
+            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};  // 8 scenes, not slots
             for (int si = 0; si < kMaxScenes; ++si)
                 arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
             samplerEngine_.setArrangement(arr, currentScene_);
@@ -352,14 +352,15 @@ MainComponent::MainComponent()
     samplerEngine_.onTypesDetected = [this]
     {
         // Per-slot content-type accent colours (mirrors StepSequencerPanel::trackColour)
-        static const juce::Colour kSlotColours[8] = {
+        static const juce::Colour kSlotColours[9] = {
             juce::Colour { 0xFF4CDFA8 }, juce::Colour { 0xFF06B6D4 },
             juce::Colour { 0xFFC8C7C7 }, juce::Colour { 0xFF8B5CF6 },
             juce::Colour { 0xFFF97316 }, juce::Colour { 0xFFF43F5E },
             juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
+            juce::Colour { 0xFFFF6B35 },  // deep-orange (DRM)
         };
 
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
         {
             const auto type = samplerEngine_.getDetectedType(i);
             const bool loaded = dspPipeline_.getSampler().isLoaded(i);
@@ -387,7 +388,7 @@ MainComponent::MainComponent()
     {
         if (!samplerEngine_.isMagicActive())
         {
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 stepSeqPanel_.setSlotContentType(i, "");
             stepSeqPanel_.setMagicActive(false);
             spatialViz_.resetAll();
@@ -402,7 +403,7 @@ MainComponent::MainComponent()
 
             // Re-appliquer les trim points (revertToOriginals relit le fichier original)
             const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
             {
                 const std::size_t sidx = static_cast<std::size_t>(i);
                 const int ts = sc.trimStart[sidx];
@@ -1085,7 +1086,7 @@ void MainComponent::openSampleEditor(int slot)
         // Stocker les trim points dans TOUTES les scènes partageant ce fichier
         const std::string filePath = stepSeqPanel_.getSlotFilePath(slot);
         for (int si = 0; si < kMaxScenes; ++si)
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
                 if (scenes_[static_cast<std::size_t>(si)].filePaths[t] == filePath)
                 {
                     scenes_[static_cast<std::size_t>(si)].trimStart[t] = s;
@@ -1093,7 +1094,7 @@ void MainComponent::openSampleEditor(int slot)
                 }
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
             if (t != slot && stepSeqPanel_.getSlotFilePath(t) == filePath)
                 dspPipeline_.getSampler().reloadSlotData(t, trimmed);
     };
@@ -1161,7 +1162,7 @@ void MainComponent::saveProject()
 
             // ── Sampler slots + step patterns ─────────────────────────────
             auto& sampler = dspPipeline_.getSampler();
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
             {
                 auto& sc    = data.samples[static_cast<std::size_t>(i)];
                 sc.filePath = stepSeqPanel_.getSlotFilePath(i);
@@ -1175,7 +1176,7 @@ void MainComponent::saveProject()
             }
 
             // ── AI mix states (gain, pan, width, depth) ───────────────────
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
             {
                 const auto ms = samplerEngine_.getSlotMixState(i);
                 auto& sm      = data.slotMix[static_cast<std::size_t>(i)];
@@ -1205,7 +1206,7 @@ void MainComponent::saveProject()
                 dst.trackBarCounts = src.trackBarCounts;
                 dst.trimStart      = src.trimStart;
                 dst.trimEnd        = src.trimEnd;
-                for (int t = 0; t < 8; ++t)
+                for (int t = 0; t < 9; ++t)
                 {
                     const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                     for (int s = 0; s < numSteps; ++s)
@@ -1238,7 +1239,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     stepSeqPanel_.setBpm(bpm);
 
     // Load samples and restore step patterns
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const auto& sc = data.samples[static_cast<std::size_t>(i)];
 
@@ -1302,7 +1303,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     if (data.version >= 5)
     {
         auto& sampler = dspPipeline_.getSampler();
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
         {
             const auto& sm = data.slotMix[static_cast<std::size_t>(i)];
             if (!sm.applied) continue;
@@ -1331,7 +1332,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.trackBarCounts = src.trackBarCounts;
             dst.trimStart      = src.trimStart;
             dst.trimEnd        = src.trimEnd;
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                 for (int s = 0; s < numSteps; ++s)
@@ -1359,7 +1360,7 @@ void MainComponent::triggerAI()
 
     // Rôles fixes par piste — appliqués seulement si pas d'override manuel (clic droit)
     using CT = ::dsp::SmartSamplerEngine::ContentType;
-    static constexpr CT kSlotRoles[8] = {
+    static constexpr CT kSlotRoles[9] = {
         CT::SYNTH,   // 0: MASTER  — loop mélodique, référence tonale
         CT::BASS,    // 1: BASS
         CT::KICK,    // 2: KICK
@@ -1368,8 +1369,9 @@ void MainComponent::triggerAI()
         CT::PAD,     // 5: PAD
         CT::SYNTH,   // 6: SYNTH
         CT::PERC,    // 7: PERC
+        CT::LOOP,    // 8: DRM — drum loop complète (EQ neutre)
     };
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
         if (!manualTypeOverride_[static_cast<std::size_t>(i)])
             samplerEngine_.setTypeOverride(i, kSlotRoles[i]);
 
@@ -1841,7 +1843,7 @@ void MainComponent::timerCallback()
         const float t = juce::jlimit(0.f, 1.f,
             static_cast<float>(crossfade_.elapsedMs)
             / static_cast<float>(crossfade_.durationMs));
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
         {
             const float gain = crossfade_.startGains[i]
                 + (crossfade_.targetGains[i] - crossfade_.startGains[i]) * t;
@@ -1850,7 +1852,7 @@ void MainComponent::timerCallback()
         if (crossfade_.elapsedMs >= crossfade_.durationMs)
         {
             crossfade_.active = false;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 dspPipeline_.getSampler().setSlotGain(i, crossfade_.targetGains[i]);
         }
     }
@@ -1931,14 +1933,14 @@ void MainComponent::updateSceneLabel()
 ::dsp::SmartSamplerEngine::SceneSnapshot MainComponent::buildSceneSnapshot(int si) const
 {
     using CT = ::dsp::SmartSamplerEngine::ContentType;
-    static constexpr CT kSlotRoles[8] = {
+    static constexpr CT kSlotRoles[9] = {
         CT::SYNTH, CT::BASS, CT::KICK, CT::SNARE,
-        CT::HIHAT, CT::PAD,  CT::SYNTH, CT::PERC,
+        CT::HIHAT, CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
     };
 
     ::dsp::SmartSamplerEngine::SceneSnapshot snap;
     const auto& sc = scenes_[static_cast<std::size_t>(si)];
-    for (int t = 0; t < 8; ++t)
+    for (int t = 0; t < 9; ++t)
     {
         const std::size_t tidx = static_cast<std::size_t>(t);
         snap.slotTypes[tidx] = kSlotRoles[t];
@@ -1966,7 +1968,7 @@ void MainComponent::captureCurrentScene()
     sc.bpm  = stepSequencer_.getBpm();
     sc.used = true;
     auto& sampler = dspPipeline_.getSampler();
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const std::size_t idx  = static_cast<std::size_t>(i);
         const int numSteps     = stepSequencer_.getTrackStepCount(i);
@@ -1982,8 +1984,8 @@ void MainComponent::captureCurrentScene()
 void MainComponent::applyScene(int idx)
 {
     // Capturer les gains courants avant d'appliquer la nouvelle scène (pour le crossfade)
-    std::array<float, 8> gainsBeforeScene {};
-    for (int i = 0; i < 8; ++i)
+    std::array<float, 9> gainsBeforeScene {};
+    for (int i = 0; i < 9; ++i)
         gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
 
     const auto& sc = scenes_[static_cast<std::size_t>(idx)];
@@ -1991,7 +1993,7 @@ void MainComponent::applyScene(int idx)
     if (!sc.used)
     {
         // Empty scene: clear all step patterns, keep BPM
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
             {
                 stepSequencer_.setStep(i, s, false);
@@ -2008,7 +2010,7 @@ void MainComponent::applyScene(int idx)
 
     // Couper les slots sans step actif dans la nouvelle scène
     // (évite qu'un one-shot de la scène précédente continue de jouer)
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(i)] * 16;
         bool hasActiveStep = false;
@@ -2019,7 +2021,7 @@ void MainComponent::applyScene(int idx)
     }
 
     // Restore samples, bar counts and step patterns
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const std::size_t sidx    = static_cast<std::size_t>(i);
         const int barCount        = sc.trackBarCounts[sidx];
@@ -2081,10 +2083,10 @@ void MainComponent::applyScene(int idx)
     // Crossfade : si le séquenceur joue, ramper les gains depuis l'ancienne scène
     if (stepSequencer_.isPlaying())
     {
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
             crossfade_.targetGains[i] = dspPipeline_.getSampler().getSlotGain(i);
         // Réinitialiser les gains au départ
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
         crossfade_.startGains = gainsBeforeScene;
         crossfade_.elapsedMs  = 0;
@@ -2111,7 +2113,7 @@ void MainComponent::navigateScene(int delta)
     // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
     // pour que la détection de fin de cycle soit stable dans le thread audio.
     int sceneLen = 1;
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
         sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
     stepSequencer_.setPendingTransitionLen(sceneLen);
 
@@ -2124,7 +2126,7 @@ void MainComponent::navigateScene(int delta)
 void MainComponent::resetCurrentScene()
 {
     // Clear step patterns only — keep samples loaded
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const int numSteps = stepSequencer_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
@@ -2139,7 +2141,7 @@ void MainComponent::resetCurrentScene()
 void MainComponent::resetCurrentSceneFull()
 {
     // Clear patterns (all steps)
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const int numSteps = stepSequencer_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
@@ -2150,7 +2152,7 @@ void MainComponent::resetCurrentSceneFull()
     }
     // Unload all samples
     auto& sampler = dspPipeline_.getSampler();
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         sampler.clearSlot(i);
         stepSeqPanel_.setSlotFilePath(i, "");

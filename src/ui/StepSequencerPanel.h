@@ -106,11 +106,11 @@ public:
         tapBtn_ .setVisible(false);
 
         // Per-track controls
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             // Slot label — rôle fixe de la piste
-            static constexpr const char* kRoleNames[8] = {
-                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC"
+            static constexpr const char* kRoleNames[9] = {
+                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC", "DRM"
             };
             slotLabels_[t].setText(kRoleNames[t], juce::dontSendNotification);
             slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(12.f).withStyle("Bold")));
@@ -210,7 +210,7 @@ public:
             {
                 const bool nowSoloed = soloBtns_[t].getToggleState();
                 // Désactiver tous les autres boutons solo
-                for (int i = 0; i < 8; ++i)
+                for (int i = 0; i < 9; ++i)
                     if (i != t) soloBtns_[i].setToggleState(false, juce::dontSendNotification);
                 if (onSoloChanged) onSoloChanged(t, nowSoloed);
             };
@@ -278,7 +278,7 @@ public:
 
     void setStepState(int track, int step, bool active)
     {
-        if (track < 0 || track >= 8) return;
+        if (track < 0 || track >= 9) return;
         // Only update the button if this step is in the current visible page
         const int visIdx = step - viewOffsetSteps_;
         if (visIdx >= 0 && visIdx < 32)
@@ -287,7 +287,7 @@ public:
 
     void setTrackStepCount(int track, int count)
     {
-        if (track < 0 || track >= 8) return;
+        if (track < 0 || track >= 9) return;
         trackStepCounts_[track] = juce::jlimit(1, ::dsp::StepSequencer::kMaxSteps, count);
         refreshStepButtons();
         resized();
@@ -302,7 +302,7 @@ public:
 
     void setSlotMuted(int slot, bool muted)
     {
-        if (slot >= 0 && slot < 8)
+        if (slot >= 0 && slot < 9)
             muteBtns_[slot].setToggleState(muted, juce::dontSendNotification);
     }
 
@@ -315,7 +315,7 @@ public:
 
     void setSlotFilePath(int slot, const std::string& path)
     {
-        if (slot >= 0 && slot < 8)
+        if (slot >= 0 && slot < 9)
         {
             slotFilePaths_[static_cast<std::size_t>(slot)] = path;
             setSlotSampleName(slot, path);
@@ -326,7 +326,7 @@ public:
     /// Pass empty string to restore the normal ●/○ indicator.
     void setSlotContentType(int slot, const std::string& typeName)
     {
-        if (slot < 0 || slot >= 8) return;
+        if (slot < 0 || slot >= 9) return;
         if (typeName.empty())
         {
             // Restore normal indicator — check if loaded
@@ -359,7 +359,7 @@ public:
 
     void setSlotLoaded(int slot, bool loaded)
     {
-        if (slot >= 0 && slot < 8)
+        if (slot >= 0 && slot < 9)
         {
             editBtns_[slot].setEnabled(loaded);
             loadedIndicators_[slot].setText(
@@ -378,7 +378,7 @@ public:
     /// Called from MainComponent after sample load. Thread: GUI only.
     void setSlotWaveform(int slot, std::vector<float> envelope) noexcept
     {
-        if (slot < 0 || slot >= 8) return;
+        if (slot < 0 || slot >= 9) return;
         slotEnvelopes_[static_cast<std::size_t>(slot)] = std::move(envelope);
         repaint();
     }
@@ -388,7 +388,7 @@ public:
     ///   confidence ≥ 0.7 → neon green ✓ ; ≥ 0.5 → orange ~ ; < 0.5 → red ?
     void setSlotBpm(int slot, float bpm, float confidence) noexcept
     {
-        if (slot < 0 || slot >= 8) return;
+        if (slot < 0 || slot >= 9) return;
         const auto idx = static_cast<std::size_t>(slot);
 
         const juce::String bpmStr = (bpm > 0.f)
@@ -425,7 +425,7 @@ public:
 
     void setSlotSampleName(int slot, const std::string& path)
     {
-        if (slot < 0 || slot >= 8) return;
+        if (slot < 0 || slot >= 9) return;
         if (path.empty())
         {
             sampleNameLabels_[slot].setText("--------", juce::dontSendNotification);
@@ -469,11 +469,11 @@ public:
 
         const int rowAreaY = kTopH + kPad;
         const int rowAreaH = H - rowAreaY - kScrollH - kPad * 2;
-        const int rowH     = rowAreaH / 8;
+        const int rowH     = rowAreaH / 9;
         const int gridW    = W - kLeftW - kRightW - 2 * kPad;
         const int stepW    = gridW / kViewSteps;
 
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             const int ry     = rowAreaY + t * rowH;
             const int nSteps = trackStepCounts_[t];
@@ -525,11 +525,11 @@ public:
         const int W     = getWidth();
         const int H     = getHeight();
         const int gridW = W - kLeftW - kRightW - 2 * kPad;
-        const int rowH  = (H - kTopH - kPad - kScrollH - kPad * 2) / 8;
+        const int rowH  = (H - kTopH - kPad - kScrollH - kPad * 2) / 9;
         const int gridY = kTopH + kPad;
 
         // ── Waveform preview + playhead (behind LCD label, in slot left zone) ──
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             const auto& env = slotEnvelopes_[static_cast<std::size_t>(t)];
             if (env.empty()) continue;
@@ -587,7 +587,7 @@ public:
         }
 
         // ── Per-track VU bars ──────────────────────────────────────────────
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             const int ry    = gridY + t * rowH + 1;
             const int barH  = rowH - 2;
@@ -638,7 +638,7 @@ public:
         }
 
         // ── Drag-and-drop highlight overlay ──────────────────────────────────
-        if (dragHighlightTrack_ >= 0 && dragHighlightTrack_ < 8)
+        if (dragHighlightTrack_ >= 0 && dragHighlightTrack_ < 9)
         {
             const int ry   = gridY + dragHighlightTrack_ * rowH;
             const juce::Colour dropCol = trackColour(dragHighlightTrack_);
@@ -666,7 +666,7 @@ public:
 
         // Per-track playhead (each track has its own step count)
         const int tStepW = gridW / kViewSteps;  // fixed 32-step window
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             const int nSteps    = trackStepCounts_[t];
             const int trackStep = globalStep % nSteps;
@@ -767,7 +767,7 @@ public:
         dragHighlightTrack_ = -1;
         repaint();
 
-        if (track < 0 || track >= 8) return;
+        if (track < 0 || track >= 9) return;
 
         // Take the first valid audio file from the drop
         for (const auto& f : files)
@@ -798,7 +798,7 @@ public:
         }
 
         if (!e.mods.isRightButtonDown()) return;
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             if (e.eventComponent == &loadBtns_[t])
             {
@@ -835,7 +835,7 @@ private:
         // Update VU: use real output peak when available, fallback to bool playing flag.
         if (getSlotLevel)
         {
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
             {
                 const float level = juce::jlimit(0.f, 1.f, getSlotLevel(t));
                 if (level > vuLevels_[t])
@@ -846,7 +846,7 @@ private:
         }
         else if (isSlotPlaying)
         {
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
             {
                 const bool playing = isSlotPlaying(t);
                 vuLevels_[t] = playing ? 1.0f : vuLevels_[t] * 0.82f;
@@ -972,13 +972,13 @@ private:
     void setGlobalStepCount(int newSteps)
     {
         const int newBars = newSteps / ::dsp::StepSequencer::kStepsPerBar;
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
         {
             trackStepCounts_[t] = newSteps;
             seq_.setTrackStepCount(t, newSteps);
         }
         if (onTrackBarCountChanged)
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
                 onTrackBarCountChanged(t, newBars);
 
         if (viewOffsetSteps_ >= newSteps)
@@ -993,7 +993,7 @@ private:
     void navigatePage(int delta)
     {
         int maxSteps = 16;
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
             maxSteps = std::max(maxSteps, trackStepCounts_[t]);
         const int maxOffset = ((maxSteps - 1) / 32) * 32;
         viewOffsetSteps_ = juce::jlimit(0, maxOffset, viewOffsetSteps_ + delta * 32);
@@ -1006,7 +1006,7 @@ private:
     void updateScrollBar()
     {
         int maxSteps = 16;
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
             maxSteps = std::max(maxSteps, trackStepCounts_[t]);
         hScrollBar_.setRangeLimits(0.0, static_cast<double>(maxSteps), juce::dontSendNotification);
         hScrollBar_.setCurrentRange(static_cast<double>(viewOffsetSteps_), 32.0,
@@ -1017,7 +1017,7 @@ private:
 
     void refreshStepButtons()
     {
-        for (int t = 0; t < 8; ++t)
+        for (int t = 0; t < 9; ++t)
             for (int s = 0; s < 32; ++s)
             {
                 const int actualStep = viewOffsetSteps_ + s;
@@ -1094,12 +1094,12 @@ private:
         const int rowAreaY = kTopH + kPad;
         const int rowAreaH = getHeight() - rowAreaY - kScrollH - kPad * 2;
         if (rowAreaH <= 0) return -1;
-        const int rowH = rowAreaH / 8;
+        const int rowH = rowAreaH / 9;
         if (rowH <= 0) return -1;
         const int rel = y - rowAreaY;
         if (rel < 0) return -1;
         const int track = rel / rowH;
-        return (track >= 0 && track < 8) ? track : -1;
+        return (track >= 0 && track < 9) ? track : -1;
     }
 
     static constexpr float kMinBpm = 40.f;
@@ -1107,17 +1107,18 @@ private:
 
     static juce::Colour trackColour(int t) noexcept
     {
-        static const juce::Colour kColours[8] = {
-            juce::Colour { 0xFF4CDFA8 }, // primary green (kick)
-            juce::Colour { 0xFF06B6D4 }, // cyan-500 (snare)
-            juce::Colour { 0xFFC8C7C7 }, // tertiary (hat)
-            juce::Colour { 0xFF8B5CF6 }, // violet-500 (synth)
-            juce::Colour { 0xFFF97316 }, // orange-500
-            juce::Colour { 0xFFF43F5E }, // rose-500
-            juce::Colour { 0xFFEAB308 }, // yellow-500
-            juce::Colour { 0xFF38BDF8 }, // sky-400
+        static const juce::Colour kColours[9] = {
+            juce::Colour { 0xFF4CDFA8 }, // primary green  (MST)
+            juce::Colour { 0xFF06B6D4 }, // cyan-500       (BASS)
+            juce::Colour { 0xFFC8C7C7 }, // tertiary       (KICK)
+            juce::Colour { 0xFF8B5CF6 }, // violet-500     (SNR)
+            juce::Colour { 0xFFF97316 }, // orange-500     (HAT)
+            juce::Colour { 0xFFF43F5E }, // rose-500       (PAD)
+            juce::Colour { 0xFFEAB308 }, // yellow-500     (SYN)
+            juce::Colour { 0xFF38BDF8 }, // sky-400        (PRC)
+            juce::Colour { 0xFFFF6B35 }, // deep-orange    (DRM)
         };
-        return kColours[t % 8];
+        return kColours[t % 9];
     }
 
     // ── ScrollBar listener ────────────────────────────────────────────────────
@@ -1145,16 +1146,16 @@ private:
     juce::TextButton magicBtn_;
     float            currentBpm_ = 120.f;
 
-    std::array<juce::Label,      8> slotLabels_;
-    std::array<NeonButton,       8> loadBtns_;
-    std::array<juce::Label,      8> loadedIndicators_;
-    std::array<juce::Label,      8> sampleNameLabels_;
-    std::array<NeonButton,       8> editBtns_;        // opens waveform editor
-    std::array<NeonButton,       8> muteBtns_;
-    std::array<juce::Slider,     8> volSliders_;
-    std::array<NeonButton,       8> soloBtns_;        // solo: seule piste audible
-    int trackStepCounts_[8] = { 16,16,16,16,16,16,16,16 };
-    juce::TextButton stepBtns_[8][32];
+    std::array<juce::Label,      9> slotLabels_;
+    std::array<NeonButton,       9> loadBtns_;
+    std::array<juce::Label,      9> loadedIndicators_;
+    std::array<juce::Label,      9> sampleNameLabels_;
+    std::array<NeonButton,       9> editBtns_;        // opens waveform editor
+    std::array<NeonButton,       9> muteBtns_;
+    std::array<juce::Slider,     9> volSliders_;
+    std::array<NeonButton,       9> soloBtns_;        // solo: seule piste audible
+    int trackStepCounts_[9] = { 16,16,16,16,16,16,16,16,16 };
+    juce::TextButton stepBtns_[9][32];
 
     // Page navigation
     juce::TextButton prevPageBtn_;
@@ -1163,16 +1164,16 @@ private:
     juce::ScrollBar  hScrollBar_ { false };  // horizontal
     int              viewOffsetSteps_ = 0;
 
-    std::array<std::string, 8>  slotFilePaths_;
+    std::array<std::string, 9>  slotFilePaths_;
     std::vector<juce::int64>    tapTimes_;
-    float                       vuLevels_[8] = {};
+    float                       vuLevels_[9] = {};
     int                         dragHighlightTrack_ = -1;  // -1 = no drag active
     float                       wheelAccumulator_ = 0.f;
     float                       duckingLevel_ = 1.0f; // Smoothed for display
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     // Waveform preview data — 200-bin peak envelopes, set via setSlotWaveform()
-    std::array<std::vector<float>, 8> slotEnvelopes_;
+    std::array<std::vector<float>, 9> slotEnvelopes_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
 };

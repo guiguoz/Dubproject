@@ -74,13 +74,13 @@ struct SlotMixData
 struct SceneSaveData
 {
     float                                 bpm           { 120.f };
-    std::array<std::string, 8>            filePaths     {};
-    std::array<std::array<bool, 512>, 8>  steps         {};   // up to 32 bars × 16 steps
-    std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-    std::array<bool, 8>                   mutes         {};
-    std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };  // v6
-    std::array<int, 8>                    trimStart     { 0,0,0,0,0,0,0,0 };  // v7
-    std::array<int, 8>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
+    std::array<std::string, 9>            filePaths     {};
+    std::array<std::array<bool, 512>, 9>  steps         {};   // up to 32 bars × 16 steps
+    std::array<float, 9>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+    std::array<bool, 9>                   mutes         {};
+    std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };  // v6
+    std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };  // v7
+    std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
     bool                                  used          { false };
 };
 
@@ -93,13 +93,13 @@ struct ProjectData
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;
-    std::array<SampleConfig, 8> samples {};
+    std::array<SampleConfig, 9> samples {};
     std::vector<MidiMapping>    midiMappings;
     MusicContextData            musicContext;
     // v5 — new fields
     int                              masterKeyRoot  { 0 };     // 0=C … 11=B
     bool                             masterKeyMajor { true };
-    std::array<SlotMixData, 8>       slotMix        {};        // AI mix results
+    std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
     int                              currentScene   { 0 };
 };

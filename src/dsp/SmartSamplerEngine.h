@@ -67,8 +67,8 @@ public:
 
     // ── Vue globale de l'arrangement (toutes les scènes) ─────────────────────
     struct SceneSnapshot {
-        std::array<bool,        8> slotActive {};  // piste active (steps + non-muté)
-        std::array<ContentType, 8> slotTypes  {};  // rôle fixe de chaque piste
+        std::array<bool,        9> slotActive {};  // piste active (steps + non-muté)
+        std::array<ContentType, 9> slotTypes  {};  // rôle fixe de chaque piste
         int  activeCount  { 0 };
         bool isBreakdown  { false };  // <= 2 pistes actives
         bool isDrop       { false };  // >= 6 pistes actives
@@ -239,7 +239,7 @@ public:
 
 private:
     // ─────────────────────────────────────────────────────────────────────────
-    static constexpr int kSamplerSlots = 8;   // S1–S8 only (master has its own analysis)
+    static constexpr int kSamplerSlots = 9;   // S1–S8 + Drum loop (slot 8)
 
     // ── Parameters for per-slot DSP ───────────────────────────────────────────
 
@@ -755,15 +755,17 @@ private:
 
             if (aiMix)
             {
-                std::array<MixFeatures, kSamplerSlots> slotFeatures {};
-                for (int i = 0; i < kSamplerSlots; ++i)
+                // ONNX model trained on exactly 8 slots — slot 8 (DRM) handled by heuristic path
+                static constexpr int kAiSlots = AiMixEngine::kSlots;  // 8
+                std::array<MixFeatures, kAiSlots> slotFeatures {};
+                for (int i = 0; i < kAiSlots; ++i)
                     if (loaded[i])
                         slotFeatures[static_cast<std::size_t>(i)] =
                             FeatureExtractor::extract(pcms[i], sampleRate_);
 
                 const auto decisions = aiMix->predict(slotFeatures);
 
-                for (int i = 0; i < kSamplerSlots; ++i)
+                for (int i = 0; i < kAiSlots; ++i)
                 {
                     if (thread && thread->threadShouldExit()) return;
                     if (!loaded[i]) continue;
@@ -800,6 +802,22 @@ private:
                     });
                 }
                 usedAi = true;
+
+                // Slot 8 (DRM loop) — beyond ONNX model range, process with heuristic
+                for (int i = kAiSlots; i < kSamplerSlots; ++i)
+                {
+                    if (!loaded[i]) continue;
+                    const ContentType effectiveType = hasOverride_[static_cast<std::size_t>(i)]
+                        ? overrideTypes_[static_cast<std::size_t>(i)]
+                        : ContentType::LOOP;  // DRM slot always LOOP
+                    applyRoleEQ(pcms[i], effectiveType, sampleRate_);
+                    const float truePeak = calculateTruePeak(pcms[i]);
+                    const float gain = juce::jlimit(0.f, 1.5f,
+                        (targetGainForType(effectiveType) * 0.707f)
+                        / std::max(truePeak, 0.001f));
+                    sampler_.reloadSlotData(i, std::move(pcms[i]));
+                    sampler_.setSlotGain(i, gain);
+                }
             }
             // If aiMix failed to load, fall through to heuristic below
         }

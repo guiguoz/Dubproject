@@ -114,7 +114,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         for (const auto& entry : *samplesArr)
         {
             const int slot = static_cast<int>(entry.getProperty("slot", -1));
-            if (slot < 0 || slot >= 8) continue;
+            if (slot < 0 || slot >= 9) continue;
             auto& sc    = data.samples[static_cast<std::size_t>(slot)];
             sc.filePath = getString(entry, "path");
             sc.gain     = getFloat(entry,  "gain",    1.0f);
@@ -171,7 +171,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
             for (const auto& entry : *mixArr)
             {
                 const int slot = static_cast<int>(entry.getProperty("slot", -1));
-                if (slot < 0 || slot >= 8) continue;
+                if (slot < 0 || slot >= 9) continue;
                 auto& sm    = data.slotMix[static_cast<std::size_t>(slot)];
                 sm.gain     = getFloat(entry, "gain",    1.f);
                 sm.pan      = getFloat(entry, "pan",     0.f);
@@ -187,35 +187,35 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
             for (const auto& entry : *scenesArr)
             {
                 const int si = static_cast<int>(entry.getProperty("index", -1));
-                if (si < 0 || si >= 8) continue;
+                if (si < 0 || si >= 8) continue;  // max 8 scenes (kMaxScenes)
                 auto& sc  = data.scenes[static_cast<std::size_t>(si)];
                 sc.bpm    = getFloat(entry, "bpm", 120.f);
                 sc.used   = getBool(entry,  "used", false);
 
                 // v6 — bar counts per track (default 1 for v5 compat)
                 if (const auto* bcArr = entry["trackBarCounts"].getArray())
-                    for (int i = 0; i < 8 && i < bcArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < bcArr->size(); ++i)
                         sc.trackBarCounts[static_cast<std::size_t>(i)] =
                             juce::jlimit(1, 32, static_cast<int>((*bcArr)[i]));
 
                 if (const auto* pathsArr = entry["filePaths"].getArray())
-                    for (int i = 0; i < 8 && i < pathsArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < pathsArr->size(); ++i)
                         sc.filePaths[static_cast<std::size_t>(i)] =
                             (*pathsArr)[i].toString().toStdString();
 
                 if (const auto* muteArr = entry["mutes"].getArray())
-                    for (int i = 0; i < 8 && i < muteArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < muteArr->size(); ++i)
                         sc.mutes[static_cast<std::size_t>(i)] =
                             static_cast<bool>((*muteArr)[i]);
 
                 if (const auto* gainArr = entry["gains"].getArray())
-                    for (int i = 0; i < 8 && i < gainArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < gainArr->size(); ++i)
                         sc.gains[static_cast<std::size_t>(i)] =
                             static_cast<float>(static_cast<double>((*gainArr)[i]));
 
                 if (const auto* tracksArr = entry["steps"].getArray())
                 {
-                    for (int t = 0; t < 8 && t < tracksArr->size(); ++t)
+                    for (int t = 0; t < 9 && t < tracksArr->size(); ++t)
                     {
                         const int maxSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                         if (const auto* stArr = (*tracksArr)[t].getArray())
@@ -228,12 +228,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 
                 // v7 — trim points (default 0/-1 = pas de trim pour compat v6)
                 if (const auto* tsArr = entry["trimStart"].getArray())
-                    for (int i = 0; i < 8 && i < tsArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < tsArr->size(); ++i)
                         sc.trimStart[static_cast<std::size_t>(i)] =
                             static_cast<int>((*tsArr)[i]);
 
                 if (const auto* teArr = entry["trimEnd"].getArray())
-                    for (int i = 0; i < 8 && i < teArr->size(); ++i)
+                    for (int i = 0; i < 9 && i < teArr->size(); ++i)
                         sc.trimEnd[static_cast<std::size_t>(i)] =
                             static_cast<int>((*teArr)[i]);
             }
@@ -249,7 +249,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     7);  // always write latest format
+    root->setProperty("version",     8);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -273,7 +273,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 
     // ── Samples ───────────────────────────────────────────────────────────────
     juce::Array<juce::var> samplesArr;
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 9; ++i)
     {
         const auto& sc = data.samples[static_cast<std::size_t>(i)];
         if (sc.filePath.empty()) continue;
@@ -327,7 +327,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     // ── v5 — slot mix states ──────────────────────────────────────────────────
     {
         juce::Array<juce::var> mixArr;
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < 9; ++i)
         {
             const auto& sm = data.slotMix[static_cast<std::size_t>(i)];
             if (!sm.applied) continue;
@@ -356,27 +356,27 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             entry->setProperty("used",  sc.used);
 
             juce::Array<juce::var> barCountsArr;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 barCountsArr.add(sc.trackBarCounts[static_cast<std::size_t>(i)]);
             entry->setProperty("trackBarCounts", barCountsArr);
 
             juce::Array<juce::var> pathsArr;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 pathsArr.add(juce::String(sc.filePaths[static_cast<std::size_t>(i)]));
             entry->setProperty("filePaths", pathsArr);
 
             juce::Array<juce::var> muteArr;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 muteArr.add(sc.mutes[static_cast<std::size_t>(i)]);
             entry->setProperty("mutes", muteArr);
 
             juce::Array<juce::var> gainArr;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
                 gainArr.add(static_cast<double>(sc.gains[static_cast<std::size_t>(i)]));
             entry->setProperty("gains", gainArr);
 
             juce::Array<juce::var> tracksArr;
-            for (int t = 0; t < 8; ++t)
+            for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(t)] * 16;
                 juce::Array<juce::var> stArr;
@@ -389,7 +389,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 
             // v7 — trim points
             juce::Array<juce::var> trimStartArr, trimEndArr;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 9; ++i)
             {
                 trimStartArr.add(sc.trimStart[static_cast<std::size_t>(i)]);
                 trimEndArr  .add(sc.trimEnd  [static_cast<std::size_t>(i)]);

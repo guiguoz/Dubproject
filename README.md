@@ -5,7 +5,7 @@ Designed for dub techno live sets with a neon dark interface.
 
 **Input** : Focusrite Scarlett Solo 2nd gen (ASIO / WASAPI fallback)
 **Effects** : 12 effect types with drag-and-drop effect chain
-**Sampler** : 8-track step sequencer with AI-assisted mixing
+**Sampler** : 9-track step sequencer with AI-assisted mixing
 **Control** : MIDI pedalboard (e.g. Behringer FCB1010)
 **Target latency** : <= 20 ms
 
@@ -46,12 +46,33 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 
 ### Sampler & Step Sequencer
 
-- 8 sample slots with WAV loading (drag-and-drop from Explorer / Sononym)
+- **9 sample slots** with WAV loading (drag-and-drop from Explorer / Sononym)
 - Up to 32-bar patterns per track (512 steps), variable per scene
 - Horizontal scrollbar for pattern navigation + ◀/▶ page buttons + mousewheel
 - BPM sync (master clock global, indépendant des scènes), swing, per-track mute/solo
 - Muter une piste relance automatiquement le magic mix si ⚡ est actif
 - AI content classification (ONNX) for automatic sample categorization
+
+#### Fixed Track Roles (slots 0–8)
+
+Each slot has a **fixed semantic role** — the AI uses these directly without classifying the
+sample, which makes EQ/gain decisions faster and more consistent across scenes.
+
+| Slot | Label | Role | Content type | AI EQ |
+|------|-------|------|-------------|-------|
+| 0 | MST | Master loop | SYNTH | Reference for key/tonality |
+| 1 | BSS | Bass | BASS | Sub-boost, LP@180Hz |
+| 2 | KCK | Kick | KICK | Punch EQ, LP@1800Hz |
+| 3 | SNR | Snare | SNARE | Mid presence boost |
+| 4 | HAT | Hi-hat | HIHAT | HP@600Hz, air shelf |
+| 5 | PAD | Pad | PAD | Wide/deep stereo, long reverb tail |
+| 6 | SYN | Synth | SYNTH | Harmonic shelf |
+| 7 | PRC | Perc | PERC | Transient-focused mid EQ |
+| 8 | DRM | Drum loop | LOOP | Neutral EQ — bypasses 8-slot ONNX model |
+
+**Slot 8 (DRM) is special**: the ONNX mix model is trained on 8 slots and cannot be extended
+without retraining. Slot 8 uses a heuristic path: `ContentType::LOOP` EQ preset
+(HP 30Hz | LowShelf 80Hz +1 dB | HighShelf 8kHz -2 dB), gain normalized by true-peak.
 - **Auto-Match** on load: BPM + key detected, sample time-stretched + pitch-shifted to project tempo/key
   - 3-method BPM detection with confidence score (RMS autocorrelation, onset-strength, comb-filter)
   - Hermite 4-point interpolation resample for high-quality tempo alignment
@@ -68,10 +89,15 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 
 ### AI / ONNX Integration
 
-- **AiContentClassifier**: Neural network sample classifier (KICK, SNARE, HIHAT, BASS, PAD, SYNTH, PERC)
-- **AiMixEngine**: ML-driven EQ + gain optimization across 8 slots
+- **AiContentClassifier**: Neural network sample classifier (KICK, SNARE, HIHAT, BASS, PAD, SYNTH, PERC, LOOP)
+- **AiMixEngine**: ML-driven EQ + gain optimization — operates on **slots 0–7** only (8-slot ONNX model)
+- **Slot 8 (DRM)**: heuristic path using `ContentType::LOOP` — not sent to the ONNX model
 - **FeatureExtractor**: Real-time spectral analysis (RMS, centroid, crest factor)
 - **InferenceThread**: Lock-free async inference with < 5 ms latency
+- **SceneSnapshot**: per-scene metadata (`slotActive[9]`, `slotTypes[9]`, `isBreakdown`, `isDrop`)
+  used to give the AI a global view of the arrangement (8 scenes)
+- **Manual type overrides**: clic droit → type menu; overrides persist across AI re-runs
+  (`manualTypeOverride_[9]` in `MainComponent`); "Auto-detect" reverts to fixed role
 - Fallback to heuristic rules when ONNX models unavailable
 
 ### UI: DubEngine Neon Dark Theme
@@ -95,13 +121,14 @@ Full pitch-tracking synthesizer that follows the saxophone input:
 - **Play / Stop** toggle previews the sample in isolation
 - Apply trims by reloading only the selected PCM range into the sampler slot
 
-### Project Save/Load (format v6)
+### Project Save/Load (format v8)
 
-- `.saxfx` JSON format, fully versioned with backward compatibility (v1–v5 auto-migrated)
-- Saves per-scene: 8 sample paths, gains, mutes, step patterns, **bar counts per track** (up to 512 steps)
+- `.saxfx` JSON format, fully versioned with backward compatibility (v1–v7 auto-migrated)
+- Saves per-scene: **9 sample paths**, gains, mutes, step patterns, **bar counts per track** (up to 512 steps)
 - Master clock BPM saved globally (not per-scene) — scene navigation never overrides tempo
 - AI mix states (gain, pan, width, depth) fully restored on project load
 - Bar counts and steps 16-511 correctly restored on project open
+- Slot guard: `slot >= 9` rejected on load (was `>= 8` in v7)
 
 ---
 
@@ -192,14 +219,15 @@ projet-dub/
 │   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
 │   │   ├── [12 more effects]     Reverb, Flanger, Harmonizer, etc.
 │   │   ├── DspPipeline.h/.cpp    Audio processing pipeline
-│   │   ├── Sampler.h/.cpp        8-slot sample player
-│   │   ├── StepSequencer.h       Up-to-512-step sequencer (32 bars)
+│   │   ├── Sampler.h/.cpp        9-slot sample player (kFadeInLen=88, kFadeOutLen=256, tanh limiter)
+│   │   ├── StepSequencer.h       Up-to-512-step sequencer, 9 tracks (kTracks=9, kMaxSteps=512)
 │   │   ├── BpmDetector.h/.cpp    Tempo detection
 │   │   ├── KeyDetector.h/.cpp    Key/scale detection
 │   │   ├── YinPitchTracker.cpp   YIN pitch detection
 │   │   ├── WsolaShifter.h/.cpp   WSOLA pitch shifting
 │   │   ├── AiContentClassifier   ONNX sample classifier
-│   │   ├── AiMixEngine.h/.cpp    ONNX mix optimizer
+│   │   ├── AiMixEngine.h/.cpp    ONNX mix optimizer (8-slot model, slot 8 uses heuristic path)
+│   │   ├── MasterLimiter.h       tanh soft-clipper (unity gain < threshold, no 1.5× boost)
 │   │   ├── FeatureExtractor      Spectral feature extraction
 │   │   ├── OnnxInference.h       ONNX Runtime wrapper
 │   │   └── InferenceThread.h     Async inference thread
@@ -265,6 +293,22 @@ projet-dub/
 | **Sprint 15** | Done | Save/load v6: bar counts per track, scrollbar, DubEngine rebrand + logo |
 | **Sprint 16** | Done | Quantized scene transitions: glitch-free scene switching synced to bar boundaries |
 | **Sprint 17** | Done | UX & AI fixes: instant hover off, step inertia fix, BPM global, AI mix mute-reactive + RAM-based |
+| **Sprint 18** | Done | 9th DRM track + audio quality overhaul (crossfade, limiter fix, step-0 trigger) |
+
+### Sprint 18 — 9th DRM Track + Audio Quality Overhaul
+
+| Feature | Description |
+|---------|-------------|
+| Piste DRM (slot 8) | 9ème slot dédié aux drum loops — label "DRM", rôle `ContentType::LOOP` |
+| Heuristique ONNX | Slot 8 bypasse le modèle 8-slot — traitement EQ neutre + gain par true-peak |
+| `StepSequencer::kTracks = 9` | Correction OOB : arrays `steps_[]` et `trackStepCount_[]` portés à 9 entités |
+| `SceneSnapshot[9]` | `slotActive[9]` et `slotTypes[9]` — plus d'accès hors-bornes dans `buildSceneSnapshot()` |
+| Step 0 au démarrage | `setPlaying(true)` met `phase_ = -1e-9` → transition détectée dès le premier buffer |
+| Crossfade loop-end | Fade-out linéaire sur les derniers 256 samples avant le restart de boucle |
+| Retrigger fade-out | Re-trigger d'un sample en cours → fade-out 256 samples avant de repartir à 0 |
+| MasterLimiter tanh | Formule cubique `* 1.5` remplacée par `tanh(x/T)*T` — plus de boost 50% sur petits signaux |
+| Séparation kFadeInLen/kFadeOutLen | 88 samples (2 ms) pour le fade-in, 256 samples (6 ms) pour fade-out/loop |
+| Format projet v8 | Arrays 9 slots, slot guard `>= 9`, version bumped v7→v8 |
 
 ### Sprint 17 — UX & AI Fixes
 
@@ -293,7 +337,7 @@ projet-dub/
 
 | Feature | Description |
 |---------|-------------|
-| Project format v6 | `trackBarCounts[8]` per scene, `steps[8][512]`, bug fix version écrite=4→6 |
+| Project format v6 | `trackBarCounts[8]` per scene, `steps[8][512]`, bug fix version écrite=4→6 (→v8 en Sprint 18) |
 | Scrollbar | `juce::ScrollBar` horizontal sous la grille, snap mesure, auto-hide ≤ 32 steps |
 | Pattern length | Menu pageLabel_ → 1/2/4/8/16/32 mesures, notifie `MainComponent` via `onTrackBarCountChanged` |
 | DubEngine rebrand | Titre, status bar, `juce_add_binary_data` logo embarqué, affiché dans le header |

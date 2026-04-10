@@ -292,12 +292,16 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             }
         }
 
+        static constexpr int kFadeInLen  =  88; // ~2 ms  — attack transient stays snappy
+        static constexpr int kFadeOutLen = 256; // ~6 ms  — retrigger/loop-end, safe for all sample lengths
+
         // Handle stop request first.
         if (ps.stopPending.load(std::memory_order_acquire))
         {
             ps.stopPending.store(false, std::memory_order_relaxed);
             ps.quantTrigPending.store(false, std::memory_order_relaxed);
             ps.playing.store(false, std::memory_order_relaxed);
+            ps.retriggering = false;
             ps.readPos = 0;
         }
 
@@ -307,9 +311,19 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             ps.triggerPending.store(false, std::memory_order_relaxed);
             if (sl.loaded.load(std::memory_order_acquire))
             {
-                ps.readPos = 0;
-                ps.fadeIn  = 0;   // restart fade-in envelope
-                ps.playing.store(true, std::memory_order_relaxed);
+                if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
+                {
+                    // Sample already playing — fade out before restarting to avoid click
+                    ps.fadeOut      = kFadeOutLen;
+                    ps.retriggering = true;
+                }
+                else
+                {
+                    ps.readPos      = 0;
+                    ps.fadeIn       = 0;
+                    ps.retriggering = false;
+                    ps.playing.store(true, std::memory_order_relaxed);
+                }
             }
         }
 
@@ -333,12 +347,36 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         const bool  soloMuted = (solo >= 0 && v != solo);
         const int   totalSamp = sl.sampleCount;
 
-        // Fade-in length: ~2 ms at 44.1 kHz (scales with actual sample rate)
-        static constexpr int kFadeLen = 88;
-
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
+            // Retrigger fade-out: apply decreasing gain to outgoing signal, then restart
+            if (ps.retriggering)
+            {
+                if (ps.fadeOut > 0 && !muted && !soloMuted)
+                {
+                    const float fadeOutGain = static_cast<float>(ps.fadeOut)
+                                             / static_cast<float>(kFadeOutLen);
+                    const int   safePos = std::min(ps.readPos, totalSamp - 1);
+                    const float s = sidechainGains_[static_cast<std::size_t>(v)]
+                                    * gain * fadeOutGain
+                                    * sl.data[static_cast<std::size_t>(safePos)];
+                    buffer[i] += s;
+                    slotPeaks_[static_cast<std::size_t>(v)] =
+                        std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s));
+                    blockPeak = std::max(blockPeak, std::abs(s));
+                }
+                --ps.fadeOut;
+                ++ps.readPos;
+                if (ps.fadeOut <= 0)
+                {
+                    ps.retriggering = false;
+                    ps.readPos      = 0;
+                    ps.fadeIn       = 0;
+                }
+                continue;
+            }
+
             if (ps.readPos >= totalSamp)
             {
                 if (loop)
@@ -357,15 +395,24 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             {
                 // Exponential fade-in to eliminate click/pop at trigger onset
                 float fadeGain = 1.0f;
-                if (ps.fadeIn < kFadeLen)
+                if (ps.fadeIn < kFadeInLen)
                 {
-                    fadeGain = 1.0f - std::exp(-5.0f * ps.fadeIn / static_cast<float>(kFadeLen));
+                    fadeGain = 1.0f - std::exp(-5.0f * ps.fadeIn / static_cast<float>(kFadeInLen));
                     ++ps.fadeIn;
                 }
 
-                const float s = gain * fadeGain * sl.data[static_cast<std::size_t>(ps.readPos)];
+                // Loop-end crossfade: fade out last kFadeOutLen samples before restart
+                float loopEndGain = 1.0f;
+                if (loop)
+                {
+                    const int remain = totalSamp - ps.readPos;
+                    if (remain > 0 && remain <= kFadeOutLen)
+                        loopEndGain = static_cast<float>(remain) / static_cast<float>(kFadeOutLen);
+                }
+
+                const float s = gain * fadeGain * loopEndGain
+                                * sl.data[static_cast<std::size_t>(ps.readPos)];
                 buffer[i] += sidechainGains_[static_cast<std::size_t>(v)] * s;
-                // Track peak for sidechain source envelope
                 slotPeaks_[static_cast<std::size_t>(v)] =
                     std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s));
                 blockPeak = std::max(blockPeak, std::abs(s));
@@ -502,7 +549,8 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
     }
 
     // ── Per-slot playback ─────────────────────────────────────────────────────
-    static constexpr int kFadeLen = 88; // ~2 ms @ 44.1 kHz — must match process()
+    static constexpr int kFadeInLen  =  88; // ~2 ms  — attack transient stays snappy
+    static constexpr int kFadeOutLen = 256; // ~6 ms  — retrigger/loop-end, safe for all sample lengths
     for (int v = 0; v < kMaxSlots; ++v)
     {
         const auto  idx    = static_cast<std::size_t>(v);
@@ -514,13 +562,24 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         {
             ps.playing.store(false, std::memory_order_relaxed);
             ps.stopPending.store(false, std::memory_order_release);
+            ps.retriggering = false;
         }
         if (ps.triggerPending.load(std::memory_order_acquire))
         {
-            ps.readPos = 0;
-            ps.fadeIn  = 0;
-            ps.playing.store(true,  std::memory_order_relaxed);
             ps.triggerPending.store(false, std::memory_order_release);
+            if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
+            {
+                // Sample already playing — fade out before restarting to avoid click
+                ps.fadeOut      = kFadeOutLen;
+                ps.retriggering = true;
+            }
+            else
+            {
+                ps.readPos      = 0;
+                ps.fadeIn       = 0;
+                ps.retriggering = false;
+                ps.playing.store(true, std::memory_order_relaxed);
+            }
         }
 
         if (!ps.playing.load(std::memory_order_relaxed)) continue;
@@ -542,6 +601,32 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
+            // Retrigger fade-out: apply decreasing gain to outgoing signal, then restart
+            if (ps.retriggering)
+            {
+                if (ps.fadeOut > 0 && !muted && !soloMuted)
+                {
+                    const float fadeOutGain = static_cast<float>(ps.fadeOut)
+                                             / static_cast<float>(kFadeOutLen);
+                    const int   safePos = std::min(ps.readPos, totalSamp - 1);
+                    const float s = sidechainGains_[idx] * gain * fadeOutGain
+                                    * sl.data[static_cast<std::size_t>(safePos)];
+                    if (haasOnLeft) { left[i] += applyHaasDelay(v, s) * gL; right[i] += s * gR; }
+                    else            { left[i] += s * gL; right[i] += applyHaasDelay(v, s) * gR; }
+                    slotPeaks_[idx] = std::max(slotPeaks_[idx], std::abs(s));
+                    blockPeak        = std::max(blockPeak, std::abs(s));
+                }
+                --ps.fadeOut;
+                ++ps.readPos;
+                if (ps.fadeOut <= 0)
+                {
+                    ps.retriggering = false;
+                    ps.readPos      = 0;
+                    ps.fadeIn       = 0;
+                }
+                continue;
+            }
+
             if (ps.readPos >= totalSamp)
             {
                 if (loop) { ps.readPos = 0; ps.fadeIn = 0; }
@@ -551,14 +636,23 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
             if (!muted && !soloMuted)
             {
                 float fadeGain = 1.f;
-                if (ps.fadeIn < kFadeLen)
+                if (ps.fadeIn < kFadeInLen)
                 {
                     fadeGain = 1.f - std::exp(-5.f * ps.fadeIn
-                                              / static_cast<float>(kFadeLen));
+                                              / static_cast<float>(kFadeInLen));
                     ++ps.fadeIn;
                 }
 
-                const float s = sidechainGains_[idx] * gain * fadeGain
+                // Loop-end crossfade: fade out last kFadeOutLen samples before restart
+                float loopEndGain = 1.f;
+                if (loop)
+                {
+                    const int remain = totalSamp - ps.readPos;
+                    if (remain > 0 && remain <= kFadeOutLen)
+                        loopEndGain = static_cast<float>(remain) / static_cast<float>(kFadeOutLen);
+                }
+
+                const float s = sidechainGains_[idx] * gain * fadeGain * loopEndGain
                                 * sl.data[static_cast<std::size_t>(ps.readPos)];
 
                 if (haasOnLeft)

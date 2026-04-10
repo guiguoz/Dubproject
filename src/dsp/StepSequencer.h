@@ -23,7 +23,7 @@ namespace dsp
 class StepSequencer
 {
 public:
-    static constexpr int kTracks        = 8;
+    static constexpr int kTracks        = 9;
     static constexpr int kMaxSteps      = 512;  // up to 32 bars (32 × 16 steps)
     static constexpr int kStepsPerBar   = 16;   // 1/16th-note resolution, 4/4 time
     static constexpr int kSteps         = 16;   // kept for legacy compat
@@ -52,7 +52,12 @@ public:
 
     void setPlaying(bool play) noexcept
     {
-        if (!play)
+        if (play)
+        {
+            phase_ = -1e-9;  // juste avant 0 → 1er process() franchit step 0 et le déclenche
+            stepAtomic_.store(0, std::memory_order_relaxed);
+        }
+        else
         {
             phase_ = 0.0;
             stepAtomic_.store(0, std::memory_order_relaxed);
@@ -206,7 +211,8 @@ public:
 private:
     bool   steps_[kTracks][kMaxSteps] {};
     int    trackStepCount_[kTracks]   = { kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
-                                          kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar };
+                                          kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
+                                          kStepsPerBar };
     double phase_      = 0.0;    // audio thread only
     double sampleRate_ = 44100.0;
 

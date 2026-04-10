@@ -44,7 +44,7 @@ public:
     void setSlotState(int slot, float pan, float width, float depth,
                       bool active, juce::Colour colour)
     {
-        if (slot < 0 || slot >= 8) return;
+        if (slot < 0 || slot >= 9) return;
         slots_[static_cast<std::size_t>(slot)] = { pan, width, depth, active, colour };
         repaint();
     }
@@ -91,8 +91,8 @@ public:
 
         // ── Draw slot circles (back-to-front by depth so front slots are on top)
         // Sort indices by descending depth (paint deepest first)
-        int order[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
-        std::sort(order, order + 8, [this](int a, int b) {
+        int order[9] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
+        std::sort(order, order + 9, [this](int a, int b) {
             return slots_[static_cast<std::size_t>(a)].depth
                  > slots_[static_cast<std::size_t>(b)].depth;
         });
@@ -153,7 +153,7 @@ public:
     }
 
 private:
-    std::array<SlotState, 8> slots_ {};
+    std::array<SlotState, 9> slots_ {};
     bool                     saxActive_ { false };
 
     static float panToX(float pan, float w) noexcept

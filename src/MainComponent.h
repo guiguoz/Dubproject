@@ -126,7 +126,7 @@ private:
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
     bool                    reloadPending_ { false };       // sample chargé pendant mix actif
-    std::array<bool, 8>     manualTypeOverride_ {};         // clic droit → type prioritaire sur rôle fixe
+    std::array<bool, 9>     manualTypeOverride_ {};         // clic droit → type prioritaire sur rôle fixe
 
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;
@@ -142,13 +142,13 @@ private:
     struct SceneData
     {
         float                                 bpm           { 120.f };
-        std::array<std::string, 8>            filePaths     {};
-        std::array<std::array<bool, 512>, 8>  steps         {};
-        std::array<float, 8>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-        std::array<bool, 8>                   mutes         {};
-        std::array<int, 8>                    trackBarCounts{ 1,1,1,1,1,1,1,1 };
-        std::array<int, 8>                    trimStart     { 0,0,0,0,0,0,0,0 };
-        std::array<int, 8>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1 };
+        std::array<std::string, 9>            filePaths     {};
+        std::array<std::array<bool, 512>, 9>  steps         {};
+        std::array<float, 9>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+        std::array<bool, 9>                   mutes         {};
+        std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };
+        std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };
+        std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };
         bool                                  used          { false };
     };
 
@@ -160,13 +160,13 @@ private:
     // Background task management
     //==========================================================================
     std::atomic<bool>                               shutdownFlag_{ false };
-    std::array<std::atomic<bool>, 8>                processingSlot_{};
+    std::array<std::atomic<bool>, 9>                processingSlot_{};
     std::vector<std::future<void>>                  backgroundTasks_;
 
     // Réserve #3 — BPM override + raw-PCM retry storage (GUI thread only)
     float                           overrideBpm_{ 0.f };          // consumed by next async run
-    std::array<std::vector<float>, 8> rawPcmForRetry_{};
-    std::array<double,             8> rawSrForRetry_{};           // value-initialised to 0
+    std::array<std::vector<float>, 9> rawPcmForRetry_{};
+    std::array<double,             9> rawSrForRetry_{};           // value-initialised to 0
 
     //==========================================================================
     // Clipboard (copy/paste track)
@@ -188,8 +188,8 @@ private:
         bool  active      { false };
         int   elapsedMs   { 0 };
         int   durationMs  { 300 };
-        std::array<float, 8> startGains  {};
-        std::array<float, 8> targetGains {};
+        std::array<float, 9> startGains  {};
+        std::array<float, 9> targetGains {};
     };
     CrossfadeState crossfade_;
 
