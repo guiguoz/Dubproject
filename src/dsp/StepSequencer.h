@@ -179,10 +179,8 @@ public:
             {
                 sceneEndFlag_.store(true, std::memory_order_release);
                 // We are waiting for the GUI thread to switch scenes. 
-                // Stop all tracks gracefully and DO NOT trigger old patterns 
-                // to prevent double-trigger leaking.
-                for (int track = 0; track < kTracks; ++track)
-                    sampler.stop(track);
+                // Do NOT trigger old patterns on this boundary to prevent 
+                // double-trigger leaking. Let existing sounds ring out naturally.
             }
             else
             {
