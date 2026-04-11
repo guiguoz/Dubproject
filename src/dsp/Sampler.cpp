@@ -295,20 +295,21 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         static constexpr int kFadeInLen  =  88; // ~2 ms  — attack transient stays snappy
         static constexpr int kFadeOutLen = 256; // ~6 ms  — retrigger/loop-end, safe for all sample lengths
 
-        // Handle stop request first.
+        // Handle stop / trigger requests
         if (ps.stopPending.load(std::memory_order_acquire))
         {
-            ps.stopPending.store(false, std::memory_order_relaxed);
-            ps.quantTrigPending.store(false, std::memory_order_relaxed);
-            ps.playing.store(false, std::memory_order_relaxed);
-            ps.retriggering = false;
-            ps.readPos = 0;
+            ps.stopPending.store(false, std::memory_order_release);
+            if (ps.playing.load(std::memory_order_relaxed))
+            {
+                ps.fadeOut = kFadeOutLen;
+                ps.retriggering = true;
+                ps.stopAfterFadeOut = true;
+            }
         }
-
-        // Handle trigger request.
         if (ps.triggerPending.load(std::memory_order_acquire))
         {
-            ps.triggerPending.store(false, std::memory_order_relaxed);
+            ps.triggerPending.store(false, std::memory_order_release);
+            ps.stopAfterFadeOut = false; // Cancel any pending stop
             if (sl.loaded.load(std::memory_order_acquire))
             {
                 if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
@@ -373,6 +374,11 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                     ps.retriggering = false;
                     ps.readPos      = 0;
                     ps.fadeIn       = 0;
+                    if (ps.stopAfterFadeOut)
+                    {
+                        ps.stopAfterFadeOut = false;
+                        ps.playing.store(false, std::memory_order_relaxed);
+                    }
                 }
                 continue;
             }
@@ -560,13 +566,18 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         // Handle stop / trigger requests
         if (ps.stopPending.load(std::memory_order_acquire))
         {
-            ps.playing.store(false, std::memory_order_relaxed);
             ps.stopPending.store(false, std::memory_order_release);
-            ps.retriggering = false;
+            if (ps.playing.load(std::memory_order_relaxed))
+            {
+                ps.fadeOut = kFadeOutLen;
+                ps.retriggering = true;
+                ps.stopAfterFadeOut = true;
+            }
         }
         if (ps.triggerPending.load(std::memory_order_acquire))
         {
             ps.triggerPending.store(false, std::memory_order_release);
+            ps.stopAfterFadeOut = false; // Cancel any pending stop
             if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
             {
                 // Sample already playing — fade out before restarting to avoid click
@@ -623,6 +634,11 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
                     ps.retriggering = false;
                     ps.readPos      = 0;
                     ps.fadeIn       = 0;
+                    if (ps.stopAfterFadeOut)
+                    {
+                        ps.stopAfterFadeOut = false;
+                        ps.playing.store(false, std::memory_order_relaxed);
+                    }
                 }
                 continue;
             }

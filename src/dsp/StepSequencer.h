@@ -171,34 +171,37 @@ public:
         {
             stepAtomic_.store(globalAfter, std::memory_order_relaxed);
 
-            for (int track = 0; track < kTracks; ++track)
-            {
-                const int trackSteps = trackStepCount_[track];
-                const int trackStep  = globalAfter % trackSteps;
-
-                if (steps_[track][trackStep])
-                    sampler.trigger(track);
-            }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             // pendingTransLen_ == 0 means no transition pending → skip detection.
             const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
-            if (transLen > 0 && globalAfter % transLen == 0)
+            const bool atSceneBoundary = (transLen > 0 && globalAfter % transLen == 0);
+
+            if (atSceneBoundary)
+            {
                 sceneEndFlag_.store(true, std::memory_order_release);
+                // We are waiting for the GUI thread to switch scenes. 
+                // Stop all tracks gracefully and DO NOT trigger old patterns 
+                // to prevent double-trigger leaking.
+                for (int track = 0; track < kTracks; ++track)
+                    sampler.stop(track);
+            }
+            else
+            {
+                for (int track = 0; track < kTracks; ++track)
+                {
+                    const int trackSteps = trackStepCount_[track];
+                    const int trackStep  = globalAfter % trackSteps;
+
+                    // Stop the track gracefully when it wraps around its pattern.
+                    // If the step is active, the trigger will immediately override 
+                    // this with a crossfade. If not active, it gracefully fades out 
+                    // instead of bleeding into the next pattern cycle.
+                    if (trackStep == 0)
+                        sampler.stop(track);
+
+                    if (steps_[track][trackStep])
+                        sampler.trigger(track);
+                }
+            }
         }
 
         // Wrap phase to avoid double-precision drift

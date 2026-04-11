@@ -80,10 +80,10 @@ TEST_CASE("EffectFactory -- created effects have non-zero paramCount", "[factory
 // ProjectData structure tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("ProjectData -- default version is 4", "[project]")
+TEST_CASE("ProjectData -- default version is 6", "[project]")
 {
     project::ProjectData data;
-    REQUIRE(data.version == 4);
+    REQUIRE(data.version == 6);
     REQUIRE(data.projectName == "Untitled");
     REQUIRE(data.effectChain.empty());
     REQUIRE(data.midiMappings.empty());

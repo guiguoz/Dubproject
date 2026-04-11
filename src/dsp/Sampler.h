@@ -146,6 +146,7 @@ private:
         int               fadeIn      { 0 };   // counts up to kFadeLen on each trigger
         int               fadeOut     { 0 };   // counts down from kFadeLen on retrigger-while-playing
         bool              retriggering{ false }; // true while fading out before retrigger restart
+        bool              stopAfterFadeOut{ false };
     };
 
     std::array<SampleSlot, kMaxSlots> slots_;
