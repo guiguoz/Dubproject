@@ -191,13 +191,6 @@ public:
                     const int trackSteps = trackStepCount_[track];
                     const int trackStep  = globalAfter % trackSteps;
 
-                    // Stop the track gracefully when it wraps around its pattern.
-                    // If the step is active, the trigger will immediately override 
-                    // this with a crossfade. If not active, it gracefully fades out 
-                    // instead of bleeding into the next pattern cycle.
-                    if (trackStep == 0)
-                        sampler.stop(track);
-
                     if (steps_[track][trackStep])
                         sampler.trigger(track);
                 }
