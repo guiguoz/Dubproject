@@ -15,8 +15,10 @@ namespace dsp {
 // ─────────────────────────────────────────────────────────────────────────────
 struct SampleSlot
 {
-    std::vector<float> data;             // mono PCM, filled by loadSample()
-    int                sampleCount { 0 };
+    std::vector<float> data[2];          // Double buffer for smooth sample changes
+    int                sampleCount[2] { 0, 0 };
+    std::atomic<int>   activeDataIdx{ 0 };
+
     std::atomic<float> gain        { 1.0f };
     std::atomic<bool>  loopEnabled { false };
     std::atomic<bool>  oneShot     { true };
@@ -135,19 +137,27 @@ public:
     void reset() noexcept;
 
 private:
+    struct VoiceState
+    {
+        bool playing{ false };
+        int  dataIdx{ 0 };
+        int  readPos{ 0 };
+        int  fadeIn{ 0 };
+        int  fadeOut{ 0 };
+        int  fadeOutTotal{ 256 };
+        bool retriggering{ false };
+        bool stopAfterFadeOut{ false };
+    };
+
     struct PlayState
     {
-        std::atomic<bool> playing         { false };
         std::atomic<bool> triggerPending  { false };
         std::atomic<bool> stopPending     { false };
         std::atomic<bool> quantTrigPending{ false };
         std::atomic<int>  quantDiv        { static_cast<int>(GridDiv::Quarter) };
-        int               readPos     { 0 };   // only written by audio thread
-        int               fadeIn      { 0 };   // counts up to kFadeLen on each trigger
-        int               fadeOut     { 0 };   // counts down from fadeOutTotal
-        int               fadeOutTotal{ 256 }; // denominator for fadeOutGain
-        bool              retriggering{ false }; // true while fading out before retrigger restart
-        bool              stopAfterFadeOut{ false };
+        
+        VoiceState voices[2];
+        int currentVoice{ 0 };
     };
 
     std::array<SampleSlot, kMaxSlots> slots_;

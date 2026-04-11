@@ -131,14 +131,21 @@ TEST_CASE("Sampler -- stop halts playback", "[sampler]")
 
     // Stop, then process again
     s.stop(0);
-    std::fill(buf.begin(), buf.end(), 0.0f);
-    s.process(buf.data(), kBlockSize); // Fade out occurs over 256 samples here
+    
+    // Process blocks until playback stops (graceful fade-out can take ~350ms)
+    int maxBlocks = 100;
+    while (s.isPlaying(0) && maxBlocks-- > 0)
+    {
+        std::fill(buf.begin(), buf.end(), 0.0f);
+        s.process(buf.data(), kBlockSize);
+    }
 
     REQUIRE_FALSE(s.isPlaying(0));
     
-    // Now it should be silent
+    // Now it should be completely silent
     std::fill(buf.begin(), buf.end(), 0.0f);
     s.process(buf.data(), kBlockSize);
+    
     const float rms = test_helpers::computeRms(buf.data(), kBlockSize);
     REQUIRE_THAT(rms, WithinAbs(0.0f, 1e-5f));
 }

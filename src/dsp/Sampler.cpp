@@ -18,34 +18,24 @@ void Sampler::loadSample(int slot, const float* data, int numSamples,
     if (!data || numSamples <= 0)      return;
 
     auto& s  = slots_[static_cast<std::size_t>(slot)];
-    auto& ps = playStates_[static_cast<std::size_t>(slot)];
 
-    // Stop playback first so the audio thread no longer reads s.data.
-    ps.playing.store(false, std::memory_order_release);
-    ps.triggerPending.store(false, std::memory_order_release);
-    ps.stopPending.store(false, std::memory_order_release);
-    ps.readPos = 0;
-
-    // Mark as unloaded while we modify data (audio thread checks loaded flag).
+    int bgIdx = 1 - s.activeDataIdx.load(std::memory_order_acquire);
+    
     s.loaded.store(false, std::memory_order_release);
 
-    // Swap into a new vector to avoid the audio thread reading a
-    // partially-reallocated buffer.  The old vector is freed here on the
-    // GUI thread, which is safe because playback was stopped above.
     std::vector<float> newData(data, data + numSamples);
-    s.data.swap(newData);
-    s.sampleCount = numSamples;
+    s.data[bgIdx].swap(newData);
+    s.sampleCount[bgIdx] = numSamples;
 
-    // Make data visible to the audio thread before setting the loaded flag.
+    s.activeDataIdx.store(bgIdx, std::memory_order_release);
     s.loaded.store(true, std::memory_order_release);
 }
 
 void Sampler::clearSlot(int slot) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
-    auto& s = slots_[static_cast<std::size_t>(slot)];
-    s.loaded.store(false, std::memory_order_release);
     stop(slot);
+    // We do not set loaded=false immediately so the fadeout can finish!
 }
 
 void Sampler::trigger(int slot) noexcept
@@ -159,7 +149,8 @@ bool Sampler::isLoaded(int slot) const noexcept
 bool Sampler::isPlaying(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return false;
-    return playStates_[static_cast<std::size_t>(slot)].playing.load(std::memory_order_acquire);
+    const auto& ps = playStates_[static_cast<std::size_t>(slot)];
+    return ps.voices[0].playing || ps.voices[1].playing;
 }
 
 bool Sampler::isSlotMuted(int slot) const noexcept
@@ -192,7 +183,8 @@ int Sampler::getSoloSlot() const noexcept
 std::vector<float> Sampler::getSlotPcmSnapshot(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return {};
-    return slots_[static_cast<std::size_t>(slot)].data;
+    auto& s = slots_[static_cast<std::size_t>(slot)];
+    return s.data[s.activeDataIdx.load(std::memory_order_relaxed)];
 }
 
 float Sampler::getSlotOutputPeak(int slot) const noexcept
@@ -207,7 +199,7 @@ float Sampler::getSlotPeakLevel(int slot) const noexcept
     const auto& s = slots_[static_cast<std::size_t>(slot)];
     if (!s.loaded.load(std::memory_order_acquire)) return 0.f;
     float peak = 0.f;
-    for (const float v : s.data)
+    for (const float v : s.data[s.activeDataIdx.load(std::memory_order_relaxed)])
         peak = std::max(peak, std::abs(v));
     return peak;
 }
@@ -215,7 +207,8 @@ float Sampler::getSlotPeakLevel(int slot) const noexcept
 int Sampler::getSlotSampleCount(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0;
-    return slots_[static_cast<std::size_t>(slot)].sampleCount;
+    auto& s = slots_[static_cast<std::size_t>(slot)];
+    return s.sampleCount[s.activeDataIdx.load(std::memory_order_relaxed)];
 }
 
 float Sampler::getSlotPlayheadRatio(int slot) const noexcept
@@ -223,37 +216,35 @@ float Sampler::getSlotPlayheadRatio(int slot) const noexcept
     if (slot < 0 || slot >= kMaxSlots) return 0.f;
     const auto& ps = playStates_[static_cast<std::size_t>(slot)];
     const auto& sl = slots_     [static_cast<std::size_t>(slot)];
-    if (!sl.loaded.load() || sl.sampleCount <= 0) return 0.f;
-    // readPos is written only by the audio thread; reading here is approximate
-    // but safe for display purposes (worst case: one frame stale).
-    return static_cast<float>(ps.readPos)
-           / static_cast<float>(sl.sampleCount);
+    
+    int activeIdx = sl.activeDataIdx.load(std::memory_order_relaxed);
+    if (!sl.loaded.load() || sl.sampleCount[activeIdx] <= 0) return 0.f;
+    
+    // readPos is written only by the audio thread
+    return static_cast<float>(ps.voices[ps.currentVoice].readPos)
+           / static_cast<float>(sl.sampleCount[activeIdx]);
 }
 
 void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
     auto& s  = slots_[static_cast<std::size_t>(slot)];
-    auto& ps = playStates_[static_cast<std::size_t>(slot)];
 
-    ps.playing.store(false, std::memory_order_release);
-    ps.triggerPending.store(false, std::memory_order_release);
-    ps.stopPending.store(false, std::memory_order_release);
-    ps.readPos = 0;
-
+    int bgIdx = 1 - s.activeDataIdx.load(std::memory_order_acquire);
+    
     s.loaded.store(false, std::memory_order_release);
-    s.data.swap(newData);
-    s.sampleCount = static_cast<int>(s.data.size());
+    s.data[bgIdx].swap(newData);
+    s.sampleCount[bgIdx] = static_cast<int>(s.data[bgIdx].size());
+    
+    s.activeDataIdx.store(bgIdx, std::memory_order_release);
     s.loaded.store(true, std::memory_order_release);
 }
 
 void Sampler::process(float* buffer, int numSamples) noexcept
 {
     // ── Sidechain: update gain multipliers from previous block's peaks ────────
-    // Uses 1-block lookahead (imperceptible at typical block sizes).
-    // Compressor model: 4:1 ratio, threshold = 0.25 linear.
-    static constexpr float kSCAttack  = 0.5f;    // fast attack (1 block)
-    static constexpr float kSCRelease = 0.985f;  // ~300 ms @ 44100/512
+    static constexpr float kSCAttack  = 0.5f;
+    static constexpr float kSCRelease = 0.985f;
     static constexpr float kSCThresh  = 0.25f;
     for (int k = 0; k < numSidechains_; ++k)
     {
@@ -265,13 +256,11 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             : sc.envelope * kSCRelease;
         sidechainGains_[static_cast<std::size_t>(sc.target)] =
             (sc.envelope > kSCThresh)
-                ? std::pow(kSCThresh / sc.envelope, 0.75f)  // 4:1 ratio: (T/L)^(1-1/R)
+                ? std::pow(kSCThresh / sc.envelope, 0.75f)
                 : 1.f;
     }
-    // Reset per-slot peaks for this block
     for (auto& p : slotPeaks_) p = 0.f;
 
-    // Advance the beat clock and check for quantized trigger boundaries.
     const double phaseBefore = beatClock_.advance(numSamples);
     const double phaseAfter  = beatClock_.getPhase();
 
@@ -280,11 +269,9 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         auto& ps  = playStates_[static_cast<std::size_t>(v)];
         auto& sl  = slots_[static_cast<std::size_t>(v)];
 
-        // Resolve quantized trigger when a beat boundary is crossed.
         if (ps.quantTrigPending.load(std::memory_order_acquire))
         {
-            const GridDiv div = static_cast<GridDiv>(
-                ps.quantDiv.load(std::memory_order_relaxed));
+            const GridDiv div = static_cast<GridDiv>(ps.quantDiv.load(std::memory_order_relaxed));
             if (BeatClock::crossedBoundary(phaseBefore, phaseAfter, div))
             {
                 ps.quantTrigPending.store(false, std::memory_order_relaxed);
@@ -292,43 +279,77 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             }
         }
 
-        static constexpr int kFadeInLen  =  88; // ~2 ms  — attack transient stays snappy
-        static constexpr int kFadeOutLen = 256; // ~6 ms  — retrigger/loop-end, safe for all sample lengths
+        static constexpr int kFadeInLen  =  88;
+        static constexpr int kRetriggerFadeOutLen = 256;
+        const int kStopFadeOutLen = static_cast<int>(sampleRate_ * 0.35);
 
-        // Handle stop / trigger requests
         if (ps.stopPending.load(std::memory_order_acquire))
         {
             ps.stopPending.store(false, std::memory_order_release);
-            if (ps.playing.load(std::memory_order_relaxed))
+            for (int vi = 0; vi < 2; ++vi)
             {
-                ps.fadeOut = kFadeOutLen;
-                ps.retriggering = true;
-                ps.stopAfterFadeOut = true;
+                if (ps.voices[vi].playing)
+                {
+                    ps.voices[vi].fadeOut      = kStopFadeOutLen;
+                    ps.voices[vi].fadeOutTotal = kStopFadeOutLen;
+                    ps.voices[vi].retriggering = true;
+                    ps.voices[vi].stopAfterFadeOut = true;
+                }
             }
         }
         if (ps.triggerPending.load(std::memory_order_acquire))
         {
             ps.triggerPending.store(false, std::memory_order_release);
-            ps.stopAfterFadeOut = false; // Cancel any pending stop
+            
             if (sl.loaded.load(std::memory_order_acquire))
             {
-                if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
+                int activeDataIdx = sl.activeDataIdx.load(std::memory_order_relaxed);
+                int cv = ps.currentVoice;
+                bool isSameSample = (ps.voices[cv].dataIdx == activeDataIdx);
+                bool isLoop = sl.loopEnabled.load(std::memory_order_relaxed);
+                
+                if (isSameSample && isLoop && ps.voices[cv].playing)
                 {
-                    // Sample already playing — fade out before restarting to avoid click
-                    ps.fadeOut      = kFadeOutLen;
-                    ps.retriggering = true;
+                    // Legato mode: keep playing seamlessly
+                    ps.voices[cv].stopAfterFadeOut = false;
+                    ps.voices[cv].retriggering = false;
                 }
                 else
                 {
-                    ps.readPos      = 0;
-                    ps.fadeIn       = 0;
-                    ps.retriggering = false;
-                    ps.playing.store(true, std::memory_order_relaxed);
+                    if (isSameSample && ps.voices[cv].playing)
+                    {
+                        // Choke/Retrigger same sample
+                        ps.voices[cv].fadeOut      = kRetriggerFadeOutLen;
+                        ps.voices[cv].fadeOutTotal = kRetriggerFadeOutLen;
+                        ps.voices[cv].retriggering = true;
+                        ps.voices[cv].stopAfterFadeOut = false;
+                    }
+                    else
+                    {
+                        // Polyphonic fade-out of current voice
+                        if (ps.voices[cv].playing)
+                        {
+                            ps.voices[cv].fadeOut      = kStopFadeOutLen;
+                            ps.voices[cv].fadeOutTotal = kStopFadeOutLen;
+                            ps.voices[cv].retriggering = true;
+                            ps.voices[cv].stopAfterFadeOut = true;
+                        }
+                        
+                        // Start new voice
+                        ps.currentVoice = 1 - cv;
+                        int nv = ps.currentVoice;
+                        ps.voices[nv].dataIdx = activeDataIdx;
+                        ps.voices[nv].readPos = 0;
+                        ps.voices[nv].fadeIn  = 0;
+                        ps.voices[nv].retriggering = false;
+                        ps.voices[nv].stopAfterFadeOut = false;
+                        ps.voices[nv].playing = true;
+                    }
                 }
             }
         }
 
-        if (!ps.playing.load(std::memory_order_relaxed))
+        if (!ps.voices[0].playing && !ps.voices[1].playing)
         {
             outputPeaks_[static_cast<std::size_t>(v)].store(0.f, std::memory_order_relaxed);
             continue;
@@ -336,7 +357,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
 
         if (!sl.loaded.load(std::memory_order_acquire))
         {
-            ps.playing.store(false, std::memory_order_relaxed);
+            for (int vi=0; vi<2; ++vi) ps.voices[vi].playing = false;
             outputPeaks_[static_cast<std::size_t>(v)].store(0.f, std::memory_order_relaxed);
             continue;
         }
@@ -346,99 +367,104 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
         const int   solo      = soloSlot_.load(std::memory_order_relaxed);
         const bool  soloMuted = (solo >= 0 && v != solo);
-        const int   totalSamp = sl.sampleCount;
 
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
-            // Retrigger fade-out: apply decreasing gain to outgoing signal, then restart
-            if (ps.retriggering)
+            float s_mix = 0.f;
+            
+            for (int vi = 0; vi < 2; ++vi)
             {
-                if (ps.fadeOut > 0 && !muted && !soloMuted)
-                {
-                    const float fadeOutGain = static_cast<float>(ps.fadeOut)
-                                             / static_cast<float>(kFadeOutLen);
-                    const int   safePos = std::min(ps.readPos, totalSamp - 1);
-                    const float s = sidechainGains_[static_cast<std::size_t>(v)]
-                                    * gain * fadeOutGain
-                                    * sl.data[static_cast<std::size_t>(safePos)];
-                    buffer[i] += s;
-                    slotPeaks_[static_cast<std::size_t>(v)] =
-                        std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s));
-                    blockPeak = std::max(blockPeak, std::abs(s));
+                auto& vState = ps.voices[vi];
+                if (!vState.playing) continue;
+                
+                const int totalSamp = sl.sampleCount[vState.dataIdx];
+                if (totalSamp <= 0) {
+                    vState.playing = false;
+                    continue;
                 }
-                --ps.fadeOut;
-                ++ps.readPos;
-                if (ps.fadeOut <= 0)
+
+                if (vState.retriggering)
                 {
-                    ps.retriggering = false;
-                    ps.readPos      = 0;
-                    ps.fadeIn       = 0;
-                    if (ps.stopAfterFadeOut)
+                    if (vState.fadeOut > 0 && !muted && !soloMuted)
                     {
-                        ps.stopAfterFadeOut = false;
-                        ps.playing.store(false, std::memory_order_relaxed);
+                        const float fadeOutGain = static_cast<float>(vState.fadeOut)
+                                                 / static_cast<float>(vState.fadeOutTotal);
+                        const int   safePos = std::min(vState.readPos, totalSamp - 1);
+                        s_mix += gain * fadeOutGain * sl.data[vState.dataIdx][static_cast<std::size_t>(safePos)];
+                    }
+                    --vState.fadeOut;
+                    ++vState.readPos;
+                    if (vState.fadeOut <= 0)
+                    {
+                        vState.retriggering = false;
+                        vState.readPos      = 0;
+                        vState.fadeIn       = 0;
+                        if (vState.stopAfterFadeOut)
+                        {
+                            vState.stopAfterFadeOut = false;
+                            vState.playing = false;
+                        }
+                    }
+                    continue;
+                }
+
+                if (vState.readPos >= totalSamp)
+                {
+                    if (loop)
+                    {
+                        vState.readPos = 0;
+                        vState.fadeIn  = 0;
+                    }
+                    else
+                    {
+                        vState.playing = false;
+                        continue;
                     }
                 }
-                continue;
+
+                if (!muted && !soloMuted)
+                {
+                    float fadeGain = 1.0f;
+                    if (vState.fadeIn < kFadeInLen)
+                    {
+                        fadeGain = 1.0f - std::exp(-5.0f * vState.fadeIn / static_cast<float>(kFadeInLen));
+                        ++vState.fadeIn;
+                    }
+
+                    float loopEndGain = 1.0f;
+                    if (loop)
+                    {
+                        const int remain = totalSamp - vState.readPos;
+                        if (remain > 0 && remain <= kRetriggerFadeOutLen)
+                            loopEndGain = static_cast<float>(remain) / static_cast<float>(kRetriggerFadeOutLen);
+                    }
+
+                    s_mix += gain * fadeGain * loopEndGain * sl.data[vState.dataIdx][static_cast<std::size_t>(vState.readPos)];
+                }
+                ++vState.readPos;
             }
-
-            if (ps.readPos >= totalSamp)
-            {
-                if (loop)
-                {
-                    ps.readPos = 0;
-                    ps.fadeIn  = 0;  // re-apply fade at loop restart
-                }
-                else
-                {
-                    ps.playing.store(false, std::memory_order_relaxed);
-                    break;
-                }
-            }
-
-            if (!muted && !soloMuted)
-            {
-                // Exponential fade-in to eliminate click/pop at trigger onset
-                float fadeGain = 1.0f;
-                if (ps.fadeIn < kFadeInLen)
-                {
-                    fadeGain = 1.0f - std::exp(-5.0f * ps.fadeIn / static_cast<float>(kFadeInLen));
-                    ++ps.fadeIn;
-                }
-
-                // Loop-end crossfade: fade out last kFadeOutLen samples before restart
-                float loopEndGain = 1.0f;
-                if (loop)
-                {
-                    const int remain = totalSamp - ps.readPos;
-                    if (remain > 0 && remain <= kFadeOutLen)
-                        loopEndGain = static_cast<float>(remain) / static_cast<float>(kFadeOutLen);
-                }
-
-                const float s = gain * fadeGain * loopEndGain
-                                * sl.data[static_cast<std::size_t>(ps.readPos)];
-                buffer[i] += sidechainGains_[static_cast<std::size_t>(v)] * s;
-                slotPeaks_[static_cast<std::size_t>(v)] =
-                    std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s));
-                blockPeak = std::max(blockPeak, std::abs(s));
-            }
-            ++ps.readPos;
+            
+            const float s_final = sidechainGains_[static_cast<std::size_t>(v)] * s_mix;
+            buffer[i] += s_final;
+            slotPeaks_[static_cast<std::size_t>(v)] = std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s_final));
+            blockPeak = std::max(blockPeak, std::abs(s_final));
         }
         outputPeaks_[static_cast<std::size_t>(v)].store(blockPeak, std::memory_order_relaxed);
     }
 }
-
 void Sampler::reset() noexcept
 {
     for (int v = 0; v < kMaxSlots; ++v)
     {
         auto& ps = playStates_[static_cast<std::size_t>(v)];
-        ps.playing.store(false, std::memory_order_relaxed);
         ps.triggerPending.store(false, std::memory_order_relaxed);
         ps.quantTrigPending.store(false, std::memory_order_relaxed);
         ps.stopPending.store(false, std::memory_order_relaxed);
-        ps.readPos = 0;
+        for (int vi=0; vi<2; ++vi) {
+            ps.voices[vi].playing = false;
+            ps.voices[vi].readPos = 0;
+        }
     }
     clearSidechain();
     resetSpatial();
@@ -509,7 +535,6 @@ inline float Sampler::applyHaasDelay(int slot, float sample) noexcept
 // ─────────────────────────────────────────────────────────────────────────────
 void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
 {
-    // ── Sidechain update (same as mono process) ───────────────────────────────
     static constexpr float kAttack   = 0.5f;
     static constexpr float kRelease  = 0.985f;
     static constexpr float kThresh   = 0.25f;
@@ -535,7 +560,6 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
     }
     std::fill(slotPeaks_, slotPeaks_ + kMaxSlots, 0.f);
 
-    // ── Beat clock + quantized triggers (same as mono process) ───────────────
     const double phaseBefore = beatClock_.advance(numSamples);
     const double phaseAfter  = beatClock_.getPhase();
 
@@ -554,49 +578,89 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         }
     }
 
-    // ── Per-slot playback ─────────────────────────────────────────────────────
-    static constexpr int kFadeInLen  =  88; // ~2 ms  — attack transient stays snappy
-    static constexpr int kFadeOutLen = 256; // ~6 ms  — retrigger/loop-end, safe for all sample lengths
+    static constexpr int kFadeInLen  =  88;
+    static constexpr int kRetriggerFadeOutLen = 256;
+    const int kStopFadeOutLen = static_cast<int>(sampleRate_ * 0.35);
+
     for (int v = 0; v < kMaxSlots; ++v)
     {
         const auto  idx    = static_cast<std::size_t>(v);
         auto&       ps     = playStates_[idx];
         const auto& sl     = slots_[idx];
 
-        // Handle stop / trigger requests
         if (ps.stopPending.load(std::memory_order_acquire))
         {
             ps.stopPending.store(false, std::memory_order_release);
-            if (ps.playing.load(std::memory_order_relaxed))
+            for (int vi = 0; vi < 2; ++vi)
             {
-                ps.fadeOut = kFadeOutLen;
-                ps.retriggering = true;
-                ps.stopAfterFadeOut = true;
+                if (ps.voices[vi].playing)
+                {
+                    ps.voices[vi].fadeOut      = kStopFadeOutLen;
+                    ps.voices[vi].fadeOutTotal = kStopFadeOutLen;
+                    ps.voices[vi].retriggering = true;
+                    ps.voices[vi].stopAfterFadeOut = true;
+                }
             }
         }
         if (ps.triggerPending.load(std::memory_order_acquire))
         {
             ps.triggerPending.store(false, std::memory_order_release);
-            ps.stopAfterFadeOut = false; // Cancel any pending stop
-            if (ps.playing.load(std::memory_order_relaxed) && ps.readPos > kFadeInLen)
+            
+            if (sl.loaded.load(std::memory_order_acquire))
             {
-                // Sample already playing — fade out before restarting to avoid click
-                ps.fadeOut      = kFadeOutLen;
-                ps.retriggering = true;
-            }
-            else
-            {
-                ps.readPos      = 0;
-                ps.fadeIn       = 0;
-                ps.retriggering = false;
-                ps.playing.store(true, std::memory_order_relaxed);
+                int activeDataIdx = sl.activeDataIdx.load(std::memory_order_relaxed);
+                int cv = ps.currentVoice;
+                bool isSameSample = (ps.voices[cv].dataIdx == activeDataIdx);
+                bool isLoop = sl.loopEnabled.load(std::memory_order_relaxed);
+                
+                if (isSameSample && isLoop && ps.voices[cv].playing)
+                {
+                    // Legato mode
+                    ps.voices[cv].stopAfterFadeOut = false;
+                    ps.voices[cv].retriggering = false;
+                }
+                else
+                {
+                    if (isSameSample && ps.voices[cv].playing)
+                    {
+                        // Choke
+                        ps.voices[cv].fadeOut      = kRetriggerFadeOutLen;
+                        ps.voices[cv].fadeOutTotal = kRetriggerFadeOutLen;
+                        ps.voices[cv].retriggering = true;
+                        ps.voices[cv].stopAfterFadeOut = false;
+                    }
+                    else
+                    {
+                        // Polyphonic switch
+                        if (ps.voices[cv].playing)
+                        {
+                            ps.voices[cv].fadeOut      = kStopFadeOutLen;
+                            ps.voices[cv].fadeOutTotal = kStopFadeOutLen;
+                            ps.voices[cv].retriggering = true;
+                            ps.voices[cv].stopAfterFadeOut = true;
+                        }
+                        
+                        ps.currentVoice = 1 - cv;
+                        int nv = ps.currentVoice;
+                        ps.voices[nv].dataIdx = activeDataIdx;
+                        ps.voices[nv].readPos = 0;
+                        ps.voices[nv].fadeIn  = 0;
+                        ps.voices[nv].retriggering = false;
+                        ps.voices[nv].stopAfterFadeOut = false;
+                        ps.voices[nv].playing = true;
+                    }
+                }
             }
         }
 
-        if (!ps.playing.load(std::memory_order_relaxed)) continue;
-        if (!sl.loaded.load(std::memory_order_acquire))  continue;
+        if (!ps.voices[0].playing && !ps.voices[1].playing) continue;
+        
+        if (!sl.loaded.load(std::memory_order_acquire))
+        {
+            for (int vi=0; vi<2; ++vi) ps.voices[vi].playing = false;
+            continue;
+        }
 
-        const int   totalSamp = sl.sampleCount;
         const float gain      = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
@@ -605,87 +669,93 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
 
         const float gL = panL_[idx].load(std::memory_order_relaxed);
         const float gR = panR_[idx].load(std::memory_order_relaxed);
-        // Haas is applied to the weaker channel:
-        // pan > 0 → L is weaker → delay L; pan ≤ 0 → R is weaker → delay R
         const bool  haasOnLeft = (gL < gR);
 
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
-            // Retrigger fade-out: apply decreasing gain to outgoing signal, then restart
-            if (ps.retriggering)
+            float s_mix = 0.f;
+
+            for (int vi = 0; vi < 2; ++vi)
             {
-                if (ps.fadeOut > 0 && !muted && !soloMuted)
-                {
-                    const float fadeOutGain = static_cast<float>(ps.fadeOut)
-                                             / static_cast<float>(kFadeOutLen);
-                    const int   safePos = std::min(ps.readPos, totalSamp - 1);
-                    const float s = sidechainGains_[idx] * gain * fadeOutGain
-                                    * sl.data[static_cast<std::size_t>(safePos)];
-                    if (haasOnLeft) { left[i] += applyHaasDelay(v, s) * gL; right[i] += s * gR; }
-                    else            { left[i] += s * gL; right[i] += applyHaasDelay(v, s) * gR; }
-                    slotPeaks_[idx] = std::max(slotPeaks_[idx], std::abs(s));
-                    blockPeak        = std::max(blockPeak, std::abs(s));
+                auto& vState = ps.voices[vi];
+                if (!vState.playing) continue;
+
+                const int totalSamp = sl.sampleCount[vState.dataIdx];
+                if (totalSamp <= 0) {
+                    vState.playing = false;
+                    continue;
                 }
-                --ps.fadeOut;
-                ++ps.readPos;
-                if (ps.fadeOut <= 0)
+
+                if (vState.retriggering)
                 {
-                    ps.retriggering = false;
-                    ps.readPos      = 0;
-                    ps.fadeIn       = 0;
-                    if (ps.stopAfterFadeOut)
+                    if (vState.fadeOut > 0 && !muted && !soloMuted)
                     {
-                        ps.stopAfterFadeOut = false;
-                        ps.playing.store(false, std::memory_order_relaxed);
+                        const float fadeOutGain = static_cast<float>(vState.fadeOut)
+                                                 / static_cast<float>(vState.fadeOutTotal);
+                        const int   safePos = std::min(vState.readPos, totalSamp - 1);
+                        s_mix += gain * fadeOutGain * sl.data[vState.dataIdx][static_cast<std::size_t>(safePos)];
                     }
+                    --vState.fadeOut;
+                    ++vState.readPos;
+                    if (vState.fadeOut <= 0)
+                    {
+                        vState.retriggering = false;
+                        vState.readPos      = 0;
+                        vState.fadeIn       = 0;
+                        if (vState.stopAfterFadeOut)
+                        {
+                            vState.stopAfterFadeOut = false;
+                            vState.playing = false;
+                        }
+                    }
+                    continue;
                 }
-                continue;
+
+                if (vState.readPos >= totalSamp)
+                {
+                    if (loop) { vState.readPos = 0; vState.fadeIn = 0; }
+                    else       { vState.playing = false; continue; }
+                }
+
+                if (!muted && !soloMuted)
+                {
+                    float fadeGain = 1.f;
+                    if (vState.fadeIn < kFadeInLen)
+                    {
+                        fadeGain = 1.f - std::exp(-5.f * vState.fadeIn
+                                                  / static_cast<float>(kFadeInLen));
+                        ++vState.fadeIn;
+                    }
+
+                    float loopEndGain = 1.f;
+                    if (loop)
+                    {
+                        const int remain = totalSamp - vState.readPos;
+                        if (remain > 0 && remain <= kRetriggerFadeOutLen)
+                            loopEndGain = static_cast<float>(remain) / static_cast<float>(kRetriggerFadeOutLen);
+                    }
+
+                    s_mix += gain * fadeGain * loopEndGain * sl.data[vState.dataIdx][static_cast<std::size_t>(vState.readPos)];
+                }
+                ++vState.readPos;
             }
 
-            if (ps.readPos >= totalSamp)
+            const float s_final = sidechainGains_[idx] * s_mix;
+
+            if (haasOnLeft)
             {
-                if (loop) { ps.readPos = 0; ps.fadeIn = 0; }
-                else       { ps.playing.store(false, std::memory_order_relaxed); break; }
+                left [i] += applyHaasDelay(v, s_final) * gL;
+                right[i] += s_final * gR;
             }
-
-            if (!muted && !soloMuted)
+            else
             {
-                float fadeGain = 1.f;
-                if (ps.fadeIn < kFadeInLen)
-                {
-                    fadeGain = 1.f - std::exp(-5.f * ps.fadeIn
-                                              / static_cast<float>(kFadeInLen));
-                    ++ps.fadeIn;
-                }
-
-                // Loop-end crossfade: fade out last kFadeOutLen samples before restart
-                float loopEndGain = 1.f;
-                if (loop)
-                {
-                    const int remain = totalSamp - ps.readPos;
-                    if (remain > 0 && remain <= kFadeOutLen)
-                        loopEndGain = static_cast<float>(remain) / static_cast<float>(kFadeOutLen);
-                }
-
-                const float s = sidechainGains_[idx] * gain * fadeGain * loopEndGain
-                                * sl.data[static_cast<std::size_t>(ps.readPos)];
-
-                if (haasOnLeft)
-                {
-                    left [i] += applyHaasDelay(v, s) * gL;
-                    right[i] += s * gR;
-                }
-                else
-                {
-                    left [i] += s * gL;
-                    right[i] += applyHaasDelay(v, s) * gR;
-                }
-
-                slotPeaks_[idx] = std::max(slotPeaks_[idx], std::abs(s));
-                blockPeak        = std::max(blockPeak, std::abs(s));
+                left [i] += s_final * gL;
+                right[i] += applyHaasDelay(v, s_final) * gR;
             }
-            ++ps.readPos;
+
+            slotPeaks_[idx] = std::max(slotPeaks_[idx], std::abs(s_final));
+            blockPeak        = std::max(blockPeak, std::abs(s_final));
         }
         outputPeaks_[idx].store(blockPeak, std::memory_order_relaxed);
     }
