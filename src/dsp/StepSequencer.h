@@ -54,14 +54,14 @@ public:
     {
         if (play)
         {
-            phase_ = -1e-9;  // juste avant 0 → 1er process() franchit step 0 et le déclenche
+            phase_ = -1e-9;
             stepAtomic_.store(0, std::memory_order_relaxed);
         }
         else
         {
             phase_ = 0.0;
             stepAtomic_.store(0, std::memory_order_relaxed);
-        }
+            }
         playing_.store(play, std::memory_order_relaxed);
     }
 
@@ -131,6 +131,7 @@ public:
         for (int t = 0; t < kTracks; ++t)
         {
             trackStepCount_[t] = kSteps;  // default 16
+
             for (int s = 0; s < kMaxSteps; ++s)
                 steps_[t][s] = false;
         }
@@ -179,7 +180,21 @@ public:
                     sampler.trigger(track);
             }
 
-            // Detect end of scene using the length frozen at navigation time (GUI thread).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             // pendingTransLen_ == 0 means no transition pending → skip detection.
             const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
             if (transLen > 0 && globalAfter % transLen == 0)
@@ -213,6 +228,7 @@ private:
     int    trackStepCount_[kTracks]   = { kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
                                           kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
                                           kStepsPerBar };
+
     double phase_      = 0.0;    // audio thread only
     double sampleRate_ = 44100.0;
 

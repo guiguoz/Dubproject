@@ -1,119 +1,124 @@
-# Format de fichier projet SaxFX Live (.saxfx)
+# Format de fichier projet SaxFX Live / DubEngine (`.saxfx`)
 
-Les projets SaxFX Live sont sauvegardés en JSON avec l'extension `.saxfx`.
+Les projets sont des fichiers **JSON** UTF-8 avec l’extension `.saxfx`. La **source de vérité** du schéma est le code : `src/project/ProjectLoader.cpp` (sauvegarde / chargement / migrations) et `src/project/ProjectData.h` (modèle C++).
 
-## Exemple complet
+## Version actuelle (écriture)
+
+À l’enregistrement, le champ racine **`version`** est toujours **`8`** (nombre entier JSON).
+
+Les fichiers plus anciens (1 … 7) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v8.
+
+### Table des versions (résumé)
+
+| Version | Éléments notables |
+|---------|-------------------|
+| 1 | Ancien format plat (`effects`, `harmonizer`, …) — migré vers v2 en mémoire au load |
+| 2 | Tableau `effectChain` |
+| 3 | `aiManaged` par effet ; champs `muted`, `gridDiv` sur les samples ; `musicContext` |
+| 4 | `bpm` racine ; `samples[].steps` (16 booléens) par slot |
+| 5 | `masterKeyRoot`, `masterKeyMajor`, `slotMix`, `scenes` (8 scènes), `currentScene` |
+| 6 | Par scène : `trackBarCounts[9]` (1–32 barres), grilles `steps` jusqu’à 512 booléens par piste |
+| 7 | `trimStart` / `trimEnd` par slot dans chaque scène |
+| 8 | Même schéma que v7 côté champs ; **garde chargement** `slot >= 9` rejeté sur les samples ; numéro de format incrémenté |
+
+## Structure JSON v8 (vue d’ensemble)
+
+Racine :
+
+| Clé | Type | Description |
+|-----|------|-------------|
+| `version` | `number` | Toujours `8` à l’écriture |
+| `projectName` | `string` | Nom du projet |
+| `bpm` | `number` | Tempo **maître** global (float) |
+| `effectChain` | `array` | Effets dans l’ordre de la chaîne |
+| `samples` | `array` | Slots sampler actifs (seulement les entrées avec fichier) |
+| `midiMappings` | `array` | Liaisons note MIDI → slot |
+| `musicContext` | `object` | Contexte musical détecté / style (voir ci-dessous) |
+| `masterKeyRoot` | `number` | 0=C … 11=B |
+| `masterKeyMajor` | `bool` | Mode majeur / mineur |
+| `currentScene` | `number` | Index de scène courante (0–7) |
+| `slotMix` | `array` | États **Magic mix** (un objet par slot concerné, seulement si `applied`) |
+| `scenes` | `array` | Scènes utilisées (`used: true`) |
+
+### `effectChain[]`
+
+| Clé | Type |
+|-----|------|
+| `type` | `string` — nom aligné sur `dsp::effectTypeName()` |
+| `enabled` | `bool` |
+| `aiManaged` | `bool` |
+| `params` | `array` de `number` — un float par index de paramètre |
+
+### `samples[]` (entrées avec `path` non vide)
+
+| Clé | Type |
+|-----|------|
+| `slot` | `number` — **0 … 8** (9 pistes) |
+| `path` | `string` — chemin fichier WAV |
+| `gain`, `loop`, `oneShot`, `muted`, `gridDiv` | types évidents |
+| `steps` | `array` de 16 `bool` — motif “legacy” par slot (voir scènes pour longueur complète) |
+
+### `midiMappings[]`
+
+| Clé | Type |
+|-----|------|
+| `note` | `number` |
+| `slot` | `number` |
+
+### `musicContext`
+
+| Clé | Type |
+|-----|------|
+| `bpm` | `number` (0 = non défini) |
+| `keyRoot` | `number` (-1 = inconnu) |
+| `isMajor` | `bool` |
+| `style` | `number` — cast depuis `SmartMixEngine::Style` |
+
+### `slotMix[]` (slots où le magic mix a été appliqué)
+
+| Clé | Type |
+|-----|------|
+| `slot` | `number` 0–8 |
+| `gain`, `pan`, `width`, `depth` | `number` |
+| `applied` | `bool` |
+
+### `scenes[]`
+
+Chaque élément représente une scène ; seules les scènes marquées `used: true` sont sérialisées.
+
+| Clé | Type |
+|-----|------|
+| `index` | `number` 0–7 |
+| `bpm` | `number` (par scène, peut différer du maître selon usage UI) |
+| `used` | `bool` |
+| `trackBarCounts` | `array` de 9 `number` (1–32) |
+| `filePaths` | `array` de 9 `string` |
+| `mutes` | `array` de 9 `bool` |
+| `gains` | `array` de 9 `number` |
+| `steps` | `array` de 9 tableaux de `bool` — longueur piste `t` = `trackBarCounts[t] * 16` |
+| `trimStart`, `trimEnd` | `array` de 9 `number` (`trimEnd` = -1 signifie pas de trim) |
+
+## Exemple minimal (illustratif)
 
 ```json
 {
-  "version": "1.0",
-  "name": "Mon set live — Jazz Club",
-  "audio": {
-    "sampleRate": 44100,
-    "bufferSize": 128,
-    "inputDevice": "Focusrite USB ASIO",
-    "outputDevice": "Focusrite USB ASIO",
-    "inputChannel": 0,
-    "outputChannels": [0, 1]
-  },
-  "effects": {
-    "reverb": {
-      "enabled": true,
-      "mix": 0.4,
-      "roomSize": 0.6,
-      "damping": 0.5,
-      "width": 1.0
-    },
-    "flanger": {
-      "enabled": false,
-      "rate": 2.0,
-      "depth": 0.5,
-      "feedback": 0.3,
-      "mix": 0.5
-    },
-    "envelope": {
-      "enabled": false,
-      "attack": 0.01,
-      "decay": 0.1,
-      "sustain": 0.8,
-      "release": 0.3
-    }
-  },
-  "harmonizer": {
-    "enabled": false,
-    "mix": 0.5,
-    "voices": [
-      { "interval": 3, "gain": 0.7 },
-      { "interval": 7, "gain": 0.5 }
-    ]
-  },
-  "sampler": {
-    "slots": [
-      {
-        "id": 0,
-        "midiNote": 60,
-        "file": "samples/loop_A.wav",
-        "loop": true,
-        "gain": 1.0,
-        "pitchShift": 0
-      },
-      {
-        "id": 1,
-        "midiNote": 61,
-        "file": "samples/pad_B.wav",
-        "loop": false,
-        "gain": 0.8,
-        "pitchShift": 0
-      }
-    ]
-  },
-  "midi": {
-    "device": "FCB1010",
-    "channel": 0,
-    "mappings": [
-      { "type": "cc",   "number": 1,  "action": "preset_next" },
-      { "type": "cc",   "number": 2,  "action": "preset_prev" },
-      { "type": "note", "number": 60, "action": "sample_trigger", "slot": 0 },
-      { "type": "note", "number": 61, "action": "sample_trigger", "slot": 1 },
-      { "type": "cc",   "number": 7,  "action": "reverb_mix" },
-      { "type": "cc",   "number": 8,  "action": "harmonizer_mix" }
-    ]
-  }
+  "version": 8,
+  "projectName": "Exemple",
+  "bpm": 120.0,
+  "effectChain": [],
+  "samples": [],
+  "midiMappings": [],
+  "musicContext": { "bpm": 0.0, "keyRoot": -1, "isMajor": true, "style": 0 },
+  "masterKeyRoot": 0,
+  "masterKeyMajor": true,
+  "currentScene": 0,
+  "slotMix": [],
+  "scenes": []
 }
 ```
 
-## Champs
+## Ancien format v1 (référence historique)
 
-### `audio`
-| Champ | Type | Valeurs typiques | Description |
-|-------|------|-----------------|-------------|
-| `sampleRate` | int | 44100, 48000 | Fréquence d'échantillonnage |
-| `bufferSize` | int | 64, 128, 256 | Taille du buffer (⚠ < 256 pour ≤ 20 ms) |
-| `inputDevice` | string | — | Nom exact du périphérique ASIO/WASAPI |
-| `outputDevice` | string | — | Nom exact du périphérique de sortie |
+Les premiers projets utilisaient des clés plates du type `effects.reverb`, `harmonizer`, etc. Ce layout n’est plus écrit ; le chargeur **convertit** vers la structure `effectChain` en mémoire. Ne pas s’en servir comme modèle pour de nouveaux fichiers.
 
-### `effects.reverb`
-| Champ | Type | Plage | Description |
-|-------|------|-------|-------------|
-| `mix` | float | 0.0–1.0 | Ratio wet/dry |
-| `roomSize` | float | 0.0–1.0 | Taille de la salle simulée |
-| `damping` | float | 0.0–1.0 | Absorption haute fréquence |
-
-### `harmonizer.voices`
-| Champ | Type | Valeurs | Description |
-|-------|------|---------|-------------|
-| `interval` | int | 1–12 | Intervalle en demi-tons (3 = tierce mineure) |
-| `gain` | float | 0.0–1.0 | Volume de la voix harmonique |
-
-### `midi.mappings.action`
-| Action | Description |
-|--------|-------------|
-| `preset_next` | Charge le preset suivant |
-| `preset_prev` | Charge le preset précédent |
-| `sample_trigger` | Déclenche le sample du slot `slot` |
-| `reverb_mix` | Contrôle le mix réverb (CC → 0–127 mappé 0.0–1.0) |
-| `harmonizer_mix` | Contrôle le mix harmoniseur |
-
-## Versioning
-
-Le champ `version` permet la compatibilité ascendante lors des mises à jour du format.
+Pour toute évolution du format : incrémenter la version, ajouter la migration dans `ProjectLoader::load`, et documenter ici en une phrase.

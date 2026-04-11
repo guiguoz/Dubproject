@@ -46,7 +46,7 @@ class EffectRackUnit : public juce::Component
         powerBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x8f\xbb")); // ⏻
         powerBtn_.setClickingTogglesState(true);
         powerBtn_.setToggleState(effect.enabled.load(), juce::dontSendNotification);
-        powerBtn_.onClick = [this] { effect_.enabled.store(powerBtn_.getToggleState()); };
+        powerBtn_.onClick = [this] { effect_.enabled.store(powerBtn_.getToggleState(), std::memory_order_release); };
         addAndMakeVisible(powerBtn_);
 
         // Preset selector (if the effect provides presets)

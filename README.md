@@ -9,6 +9,8 @@ Designed for dub techno live sets with a neon dark interface.
 **Control** : MIDI pedalboard (e.g. Behringer FCB1010)
 **Target latency** : <= 20 ms
 
+**Onboarding (humains & IA)** : lire **[AGENTS.md](AGENTS.md)** (fil audio, threads, fichiers clés) puis **[docs/project-format.md](docs/project-format.md)** (JSON projet **v8**, aligné sur `ProjectLoader`).
+
 ---
 
 ## Features
@@ -35,12 +37,16 @@ drag-and-drop reordering, and SmartMixEngine auto-optimization.
 
 ### Synth Effect
 
-Full pitch-tracking synthesizer that follows the saxophone input:
+Full pitch-tracking synthesizer that **replaces** the saxophone signal (100% wet — dry sax is always silent when Synth is active):
 
-- **Oscillators**: Saw, Square, Triangle, Sine, SuperSaw (7-voice unison with detune)
-- **Filter**: Moog ladder (4-pole resonant lowpass)
-- **Envelope**: Amplitude envelope follower with attack/release
-- **8 parameters**: Waveform, Octave, Detune, Cutoff, Resonance, Attack, Release, Mix
+- **Oscillators**: Saw, Square, Sine, SubBass (PolyBLEP anti-aliased), SuperSaw (7-voice unison with detune)
+- **Filter**: Moog ladder (4-pole resonant lowpass, self-oscillation at resonance=1.0)
+- **Envelope**: Amplitude envelope follower — synth breathes with the sax input level
+- **Pitch tracking**: YIN detector feeds `currentFreq_` with portamento glide (kGlide=0.05)
+- **8 parameters**: Waveform, Octave, Detune, Cutoff, Resonance, Attack, Release, **Volume**
+  - param 7 = **Volume** (0=silent, 1=full) — NOT a dry/wet mix
+  - `enabled=true` always; set Volume=0 to silence, raise to hear synth
+- **Position in chain**: first — receives raw sax, subsequent effects (Harmonizer, Flanger…) process the synth signal
 - **22 presets**: Dub Techno (sub bass, chord stab, deep pad, dub siren, techno lead),
   Techno (acid bass, reese, hoover, Detroit pad), Leads, Ambient, Percussive, FX/Creative
 
@@ -203,7 +209,8 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ## Project Structure
 
 ```
-projet-dub/
+Dubproject/   (nom du dossier local peut varier)
+├── AGENTS.md                   Guide agents IA / contributeurs (carte du repo)
 ├── src/
 │   ├── logo.png                  App logo (embedded via juce_add_binary_data)
 │   ├── MainComponent.h/.cpp      Main app (audio callback, UI layout)
@@ -257,6 +264,8 @@ projet-dub/
 │       ├── audio/                SceneManager, Scheduler, AudioBufferPool
 │       ├── ui/                   SceneSelectorUI
 │       └── styles/               scene-selector.css (neon dark theme)
+├── docs/
+│   └── project-format.md         Schéma .saxfx v8 (référence JSON)
 ├── tests/                        Catch2 unit tests (180 tests)
 ├── models/                       Trained ONNX models
 │   ├── content_classifier.onnx   Sample classifier
@@ -294,6 +303,70 @@ projet-dub/
 | **Sprint 16** | Done | Quantized scene transitions: glitch-free scene switching synced to bar boundaries |
 | **Sprint 17** | Done | UX & AI fixes: instant hover off, step inertia fix, BPM global, AI mix mute-reactive + RAM-based |
 | **Sprint 18** | Done | 9th DRM track + audio quality overhaul (crossfade, limiter fix, step-0 trigger) |
+| **Sprint 19** | Done | DSP fixes: Synth wet-only, effect chain debug, sampler/sax mix balance |
+
+### Sprint 19 — DSP Fixes: Synth, Effect Chain, Sax/Sampler Mix Balance
+
+| Feature | Description |
+|---------|-------------|
+| Synth wet-only | `SynthEffect::process()` supprime le dry sax — `buf[i] = clipSample(osc) * volume` — le sax disparaît totalement quand le Synth est actif |
+| Synth param 7 renommé | `"Mix"` → `"Volume"` (default 1.0) — contrôle le niveau du synth, pas un dry/wet |
+| Synth pitch snap | `currentFreq_` snappé au premier pitch valide (évite le glide depuis 0 Hz au démarrage) |
+| Synth glide accéléré | `kGlide` 0.005 → 0.05 — réponse ~10× plus rapide au changement de note |
+| Synth position dans la chaîne | Synth placé **en premier** dans la chaîne d'effets — reçoit le sax brut, les effets suivants (Harmonizer, Flanger) traitent le signal synth |
+| Synth enabled par défaut | `enabled = true`, `volume = 0.0` au démarrage — monter le knob Volume pour l'entendre ; évite la fuite du sax brut quand `enabled = false` |
+| Effect chain debug | Flanger confirmé fonctionnel (mix 0.15 → audible en montant le knob) ; Harmonizer idem |
+| `powerBtn_` memory order | `effect_.enabled.store(..., memory_order_release)` dans `EffectRackUnit` |
+| Stereo pipeline fix | Suppression de la copie prématurée L→R avant la chaîne d’effets dans `getNextAudioBlock` — le canal droit ne doit pas porter le sax brut pendant que la chaîne ne traite que le gauche |
+| Post-effets L/R | Après la chaîne : `std::copy(left → right)` dans `DspPipeline::processStereo` — sax traité identique sur les deux canaux (le sampler apporte ensuite la stéréo des loops) |
+| Ducking désactivé par défaut | `duckingEnabled_ = false` — évite le pompage du sampler quand le sax joue fort |
+| Gains AI réduits | `targetGainForType()` réduit de ~3 dB sur tous les slots pour laisser de la place au sax traité dans le mix (ex: KICK 0.80→0.55, BASS 0.65→0.45) |
+| `StepSequencer::setPlaying` fix | Suppression de la boucle `for` incomplète sans corps (erreur C2059 ligne 66) |
+
+### Architecture DSP — Points clés pour l'IA
+
+> **À lire absolument avant de modifier le pipeline audio.**
+
+#### Signal flow (stereo path)
+
+```
+Focusrite Scarlett (mono in)
+  └─► getNextAudioBlock()
+        ├─ RMS input (VU meter LEFT)
+        ├─ StepSequencer::process()       — triggers sampler slots
+        └─ DspPipeline::processStereo(left, right)
+              ├─ 1. YIN pitch tracker     — analyse left, ne modifie pas
+              ├─ 2. BPM detector          — analyse left, ne modifie pas
+              ├─ 3. RMS smoothing         — sur left avant effets
+              ├─ 4. EffectChain::process(left)  — IN-PLACE sur left
+              │     └─ [Synth] → [Harmonizer] → [Flanger] → [Delay] → [Octaver] → ...
+              ├─ 5. ExpressionMapper
+              ├─ 6. std::copy(left → right)     — right = left post-effets
+              ├─ 7. Sampler::processStereo()    — additionné sur left+right
+              └─ 8. MasterLimiter (L+R)
+```
+
+#### Synth Effect — comportement
+
+- **Toujours `enabled = true`** — le volume (param 7) contrôle la présence
+- **100% wet** — `buf[i] = clipSample(osc) * volume` — le sax disparaît complètement
+- **Envelope follower** — le synth "respire" avec le sax (amplitude suit le RMS d'entrée)
+- **Pitch tracking** — YIN détecte la fréquence fondamentale, le synth la suit avec glide
+- **Position** — premier dans la chaîne → reçoit le sax brut → les effets suivants traitent le synth
+- Si `volume = 0` → silence (pas de sax) ; monter le knob pour entendre le synth
+
+#### AI Mix (SmartSamplerEngine) — comportement
+
+- Gains calibrés pour coexister avec un sax live : ~3 dB de headroom réservé
+- Ducking désactivé (`duckingEnabled_ = false`) — pas de pompage
+- ⚡ Magic Mix doit être **relancé** après chaque changement de mute/slot pour recalculer
+- Slot 8 (DRM) bypasse le modèle ONNX 8-slot → heuristic `ContentType::LOOP`
+
+#### Direct monitoring — important
+
+- Le Focusrite Scarlett a un bouton **DIRECT MONITOR** physique
+- Si activé, le sax brut est renvoyé dans les enceintes **en bypass total du logiciel**
+- **Doit être sur OFF** pour n'entendre que le signal traité par DubEngine
 
 ### Sprint 18 — 9th DRM Track + Audio Quality Overhaul
 

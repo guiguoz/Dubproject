@@ -117,7 +117,7 @@ class DspPipeline
     LockFreeQueue<SamplerEvent, 64> midiEventQueue_;
 
     std::atomic<bool> samplerEnabled_{true};
-    std::atomic<bool> duckingEnabled_{true};
+    std::atomic<bool> duckingEnabled_{false};
     std::atomic<float> currentDuckingGain_{1.0f};
 
     float smoothDuck_{ 1.0f };  // EMA-smoothed duck gain (audio thread only)

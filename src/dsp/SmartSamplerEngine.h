@@ -637,20 +637,21 @@ private:
 
     // ── Target gain per instrument type ───────────────────────────────────────
 
-    // Gains orientés dub techno : sub dominant, hihat quasi-inaudible, pads en fond
+    // Gains orientés dub techno avec sax live dans le mix :
+    // headroom réduit de ~3dB sur tous les slots pour laisser de la place au sax traité
     static float targetGainForType(ContentType type) noexcept
     {
         switch (type)
         {
-            case ContentType::KICK:  return 0.80f;  // −2.0 dBFS — dominant
-            case ContentType::SNARE: return 0.42f;  // −7.5 dBFS — discret
-            case ContentType::HIHAT: return 0.18f;  // −15 dBFS  — signature dub : quasi-inaudible
-            case ContentType::BASS:  return 0.65f;  // −3.7 dBFS — sub présent
-            case ContentType::SYNTH: return 0.32f;  // −9.9 dBFS — très en retrait, atmosphérique
-            case ContentType::PAD:   return 0.38f;  // −8.4 dBFS — fond sombre
-            case ContentType::PERC:  return 0.38f;  // −8.4 dBFS
-            case ContentType::LOOP:  return 0.55f;  // −5.2 dBFS — loop complète, modéré
-            default:                 return 0.45f;  // −7.0 dBFS
+            case ContentType::KICK:  return 0.55f;  // −5.2 dBFS
+            case ContentType::SNARE: return 0.30f;  // −10.5 dBFS
+            case ContentType::HIHAT: return 0.13f;  // −17.7 dBFS
+            case ContentType::BASS:  return 0.45f;  // −7.0 dBFS
+            case ContentType::SYNTH: return 0.22f;  // −13.1 dBFS
+            case ContentType::PAD:   return 0.26f;  // −11.7 dBFS
+            case ContentType::PERC:  return 0.26f;  // −11.7 dBFS
+            case ContentType::LOOP:  return 0.38f;  // −8.4 dBFS
+            default:                 return 0.30f;
         }
     }
 

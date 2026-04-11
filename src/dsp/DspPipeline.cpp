@@ -162,13 +162,8 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
     //    That gives left ×0.951, right ×0.309 — audibly left-biased with slight R presence.
     //    We swap to make sax "mostly left" with a hint in right = more natural for live sax.
     //    Implementation: left is the main sax signal; right gets an attenuated copy.
-    static constexpr float kSaxPanL = 0.9511f;  // cos(0.2+1)*π/4)
-    static constexpr float kSaxPanR = 0.3090f;  // sin(...)
-    for (int i = 0; i < numSamples; ++i)
-    {
-        right[i] = left[i] * kSaxPanR;
-        left [i] *= kSaxPanL;
-    }
+    // Copy processed signal to right channel (true stereo from mono source)
+    std::copy(left, left + numSamples, right);
 
     // 7. Sampler (MIDI drain + stereo mix with optional ducking)
     if (samplerEnabled_.load(std::memory_order_acquire))

@@ -21,7 +21,7 @@ static constexpr ParamDescriptor kParams[8] = {
     {"resonance", "Resonance",    0.0f,     1.0f,    0.3f},
     {"attack",    "Attack",       0.001f,   0.5f,  0.005f},
     {"release",   "Release",      0.01f,    2.0f,   0.15f},
-    {"mix",       "Mix",          0.0f,     1.0f,    0.5f},
+    {"mix",       "Volume",          0.0f,     1.0f,    1.0f},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,15 +173,20 @@ void SynthEffect::process(float* buf, int numSamples, float pitchHz) noexcept
 
     // Update target frequency from pitch tracker
     if (pitchHz > 20.0f && pitchHz < 10000.0f)
+    {
         targetFreq_ = pitchHz * std::pow(2.0f, oct);
+        // Snap currentFreq_ on first valid pitch to avoid glide from 0
+        if (currentFreq_ < 20.0f)
+            currentFreq_ = targetFreq_;
+    }
 
     // Detune spread: convert cents to ratio  (e.g. 25 cents → ~1.0145)
     const float detuneRatio = std::pow(2.0f, det / 1200.0f);
 
     for (int i = 0; i < safeN; ++i)
     {
-        // Smooth pitch glide (portamento)
-        constexpr float kGlide = 0.005f;
+        // Smooth pitch glide (portamento) — faster snap for live playing
+        constexpr float kGlide = 0.05f;
         currentFreq_ += kGlide * (targetFreq_ - currentFreq_);
 
         // ── Envelope follower ───────────────────────────────────────────
@@ -209,8 +214,8 @@ void SynthEffect::process(float* buf, int numSamples, float pitchHz) noexcept
         // ── Apply envelope (synth "breathes" with the sax, or keyboard gate) ──
         osc *= std::max(envLevel_, keyGate_.load(std::memory_order_relaxed));
 
-        // ── Mix dry + wet ───────────────────────────────────────────────
-        synthBuf_[i] = buf[i] * (1.0f - mx) + clipSample(osc) * mx;
+        // ── Wet only (dry sax signal discarded) ──────────────────────────
+        synthBuf_[i] = clipSample(osc) * mx;
     }
 
     std::copy(synthBuf_.begin(), synthBuf_.begin() + safeN, buf);

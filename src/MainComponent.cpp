@@ -84,30 +84,30 @@ MainComponent::MainComponent()
 
     auto& chain = dspPipeline_.getEffectChain();
     {
+        auto synth = std::make_unique<::dsp::SynthEffect>();
+        synth->enabled.store(true, std::memory_order_relaxed);
+        synth->setParam(7, 0.0f);   // volume 0 au démarrage — activer via le knob
+        chain.addEffect(std::move(synth));
+    }
+    {
         auto harm = std::make_unique<::dsp::HarmonizerEffect>();
-        harm->setParam(2, 0.15f);  // Mix: 50% → 15% (live-safe)
+        harm->setParam(2, 0.15f);
         chain.addEffect(std::move(harm));
     }
     {
         auto flan = std::make_unique<::dsp::FlangerEffect>();
-        flan->setParam(3, 0.15f);  // Mix: 50% → 15% (live-safe)
+        flan->setParam(3, 0.15f);
         chain.addEffect(std::move(flan));
     }
     {
         auto del = std::make_unique<::dsp::DelayEffect>();
-        del->enabled.store(false);  // Delay OFF par défaut (500ms = injouable en live)
+        del->enabled.store(false);
         chain.addEffect(std::move(del));
     }
     {
         auto oct = std::make_unique<::dsp::OctaverEffect>();
-        oct->enabled.store(false);  // Octaver OFF par défaut (réduit latence WSOLA)
+        oct->enabled.store(false);
         chain.addEffect(std::move(oct));
-    }
-    {
-        auto synth = std::make_unique<::dsp::SynthEffect>();
-        synth->enabled.store(false, std::memory_order_relaxed);  // OFF — activé par clavier
-        synth->setParam(7, 1.0f);   // 100% wet : full synth sans dry
-        chain.addEffect(std::move(synth));
     }
 
     // ── Step Sequencer label ──────────────────────────────────────────────────
@@ -1434,8 +1434,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     {
         // ── Stereo path ───────────────────────────────────────────────────────
         float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
-        // Seed right channel with sax input (same as left before effects)
-        std::copy(left, left + numSamples, right);
 
         dspPipeline_.processStereo(left, right, numSamples);
 
@@ -2008,17 +2006,10 @@ void MainComponent::applyScene(int idx)
     if (stepSequencer_.isPlaying())
         stepSequencer_.resetPhase();
 
-    // Couper les slots sans step actif dans la nouvelle scène
-    // (évite qu'un one-shot de la scène précédente continue de jouer)
-    for (int i = 0; i < 9; ++i)
-    {
-        const int numSteps = sc.trackBarCounts[static_cast<std::size_t>(i)] * 16;
-        bool hasActiveStep = false;
-        for (int s = 0; s < numSteps && !hasActiveStep; ++s)
-            hasActiveStep = sc.steps[static_cast<std::size_t>(i)][static_cast<std::size_t>(s)];
-        if (!hasActiveStep)
-            dspPipeline_.getSampler().stop(i);
-    }
+    // Stop all slots on scene change -- sequencer re-triggers at step 0.
+    // Without this, a one-shot triggered at end of previous scene keeps playing
+    // into the new scene (hihat/perc inertia bug).
+    dspPipeline_.getSampler().stopAllSlots();
 
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 9; ++i)

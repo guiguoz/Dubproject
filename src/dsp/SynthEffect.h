@@ -29,7 +29,7 @@ namespace dsp
 //   4  resonance  Moog ladder resonance [0 .. 1.0]  default 0.3
 //   5  attack     Envelope attack  [0.001 .. 0.5 s]  default 0.005
 //   6  release    Envelope release [0.01  .. 2.0 s]  default 0.15
-//   7  mix        Dry/wet mix [0 .. 1]  default 0.5
+//   7  mix        Synth output volume [0 .. 1]  default 1.0 (dry sax always silent)
 // ─────────────────────────────────────────────────────────────────────────────
 class SynthEffect : public IEffect
 {
