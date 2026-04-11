@@ -29,6 +29,34 @@ inline std::vector<float> generateSilence(int numSamples)
     return std::vector<float>(static_cast<std::size_t>(numSamples), 0.0f);
 }
 
+/// Generate a sine wave with a DC offset added.
+inline std::vector<float> generateSineWithDcOffset(float freqHz,
+                                                     float sampleRate,
+                                                     int   numSamples,
+                                                     float dcOffset,
+                                                     float amplitude = 0.8f)
+{
+    auto buf = generateSine(freqHz, sampleRate, numSamples, amplitude);
+    for (auto& s : buf)
+        s += dcOffset;
+    return buf;
+}
+
+/// Generate white noise (deterministic seed for reproducibility).
+inline std::vector<float> generateNoise(int numSamples, float amplitude = 0.5f)
+{
+    std::vector<float> buf(static_cast<std::size_t>(numSamples));
+    unsigned int seed = 12345u;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Simple LCG pseudo-random (deterministic, no stdlib rand)
+        seed = seed * 1664525u + 1013904223u;
+        const float r = static_cast<float>(seed) / static_cast<float>(0xFFFFFFFFu);
+        buf[static_cast<std::size_t>(i)] = (r * 2.0f - 1.0f) * amplitude;
+    }
+    return buf;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Measurement
 // ─────────────────────────────────────────────────────────────────────────────

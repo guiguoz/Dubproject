@@ -18,7 +18,12 @@ namespace dsp
 // ─────────────────────────────────────────────────────────────────────────────
 // DspPipeline
 //
-// Orchestrates: YIN pitch track → harmonizer → flanger → sampler mix → clip.
+// Orchestrates: YIN pitch track → effect chain → sampler mix → master limiter.
+//
+// Pitch stabilization (v2):
+//   The raw YIN pitch is gated (confidence + RMS) and smoothed in log-domain
+//   before being sent to the effect chain. This eliminates jitter, octave
+//   errors, and false pitch during silence/breath noise.
 //
 // Thread safety:
 //   - enable/disable flags: atomic<bool> with acquire/release
@@ -127,6 +132,7 @@ class DspPipeline
     std::vector<float> tempBufR_;   // Stereo path: sampler right temp
 
     // Latest pitch (written by audio thread, read by GUI thread)
+    // lastPitchHz_ contains the STABLE pitch (after gating + smoothing), not raw YIN.
     std::atomic<float> lastPitchHz_{0.0f};
     std::atomic<float> lastConfidence_{0.0f};
 
@@ -137,6 +143,19 @@ class DspPipeline
 
     // Forced pitch from piano keyboard (0 = off)
     std::atomic<float> forcedPitchHz_{ 0.f };
+
+    // ── Pitch stabilization (v2) ─────────────────────────────────────────────
+    // stablePitch_ is audio-thread-only (like rmsRunning_).
+    // The stabilized value is exported to lastPitchHz_ (atomic) for GUI.
+    double sampleRate_        { 48000.0 };
+    float  stablePitch_       { 0.0f };    ///< audio thread only
+    int    unvoicedSamples_   { 0 };       ///< audio thread only — hold timeout counter
+
+    // Tuning constants for pitch gating + smoothing
+    static constexpr float kConfidenceGate = 0.82f;    ///< min confidence to accept pitch
+    static constexpr float kRmsGate        = 0.02f;    ///< min RMS to consider "voiced"
+    static constexpr float kSmoothTimeSec  = 0.05f;    ///< 50ms log-domain EMA
+    static constexpr float kHoldTimeoutSec = 0.20f;    ///< 200ms before releasing held pitch
 };
 
 } // namespace dsp

@@ -15,10 +15,18 @@ void YinPitchTracker::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
     sampleRate_ = sampleRate;
 
     // Window size = 2 × longest period to detect.
-    // kMinFrequencyHz = 60 Hz (baritone sax) → period ≈ 800 samples @ 48 kHz
-    // → windowSize ≈ 1600 samples (auto-sized from kMinFrequencyHz).
-    const int minPeriod = static_cast<int>(sampleRate / kMinFrequencyHz) + 1;
+    // minFrequency_ default 85 Hz (alto/ténor sax) → period ≈ 565 samples @ 48 kHz
+    // → windowSize ≈ 1130 samples. Half = 565 = 1 period in the difference function.
+    const int minPeriod = static_cast<int>(sampleRate / static_cast<double>(minFrequency_)) + 1;
     windowSize_         = minPeriod * 2;
+
+    // Hop size: ~4ms, min 128 samples. Controls analysis cadence.
+    hopSize_ = std::max(128, static_cast<int>(sampleRate * 0.004));
+
+    // DC blocker coefficient: HPF ~40 Hz, adapted to sample rate.
+    // R = exp(-2π·fc/fs). At 48 kHz: R ≈ 0.9948. At 44.1 kHz: R ≈ 0.9943.
+    constexpr float kDcBlockerCutoffHz = 40.0f;
+    hpfR_ = std::exp(-2.0f * 3.14159265f * kDcBlockerCutoffHz / static_cast<float>(sampleRate));
 
     yinBuffer_.assign(static_cast<std::size_t>(windowSize_ / 2), 0.0f);
     inputAccumulator_.assign(static_cast<std::size_t>(windowSize_), 0.0f);
@@ -33,64 +41,98 @@ void YinPitchTracker::reset() noexcept
     lastResult_  = { 0.0f, 0.0f };
     std::fill(inputAccumulator_.begin(), inputAccumulator_.end(), 0.0f);
     std::fill(yinBuffer_.begin(), yinBuffer_.end(), 0.0f);
+
+    hpfPrevIn_  = 0.0f;
+    hpfPrevOut_ = 0.0f;
+    historyIndex_ = 0;
+    historyPrimed_ = false;
+    samplesSinceLastAnalysis_ = 0;
+    std::fill(pitchHistory_.begin(), pitchHistory_.end(), 0.0f);
 }
 
 void YinPitchTracker::setThreshold(float threshold) noexcept
 {
-    threshold_ = threshold;
+    threshold_ = std::max(0.08f, std::min(0.25f, threshold));
+}
+
+void YinPitchTracker::setMinFrequency(float hz) noexcept
+{
+    minFrequency_ = std::max(40.0f, std::min(200.0f, hz));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// process
+// process  (v2)
+//
+// 1. Accumulate with DC blocker (~40 Hz)
+// 2. At most 1 YIN analysis per call (CPU-safe)
+// 3. Median filter on voiced detections only (zeros never pollute history)
 // ─────────────────────────────────────────────────────────────────────────────
 PitchResult YinPitchTracker::process(const float* input, int numSamples) noexcept
 {
-    // Accumulate incoming samples into the ring buffer
+    // 1. Accumulate incoming samples with DC blocker
+    //    y[n] = x[n] - x[n-1] + R * y[n-1]   (R ≈ 0.995 for ~40 Hz @ 48 kHz)
     for (int i = 0; i < numSamples; ++i)
     {
-        inputAccumulator_[static_cast<std::size_t>(accWritePos_)] = input[i];
+        const float x = input[i];
+        const float y = x - hpfPrevIn_ + hpfR_ * hpfPrevOut_;
+        hpfPrevIn_  = x;
+        hpfPrevOut_ = y;
+
+        inputAccumulator_[static_cast<std::size_t>(accWritePos_)] = y;
         accWritePos_ = (accWritePos_ + 1) % windowSize_;
         if (accFilled_ < windowSize_)
             ++accFilled_;
     }
 
-    // Not enough data yet — return last known result
-    if (accFilled_ < windowSize_)
+    samplesSinceLastAnalysis_ += numSamples;
+
+    // 2. At most 1 YIN analysis per process() call.
+    //    Prevents CPU spikes from multiple O(n²) differenceFunction calls.
+    if (accFilled_ < windowSize_ || samplesSinceLastAnalysis_ < hopSize_)
         return lastResult_;
 
-    // Build a linear (non-ring) view for the YIN analysis.
-    // We copy the accumulator starting from the oldest sample.
-    // This is the only copy — still realtime-safe (no allocation, fixed size).
-    const int   W    = windowSize_;
+    samplesSinceLastAnalysis_ -= hopSize_;   // preserve remainder (no cadence drift)
 
-    // Use yinBuffer_ as temporary aligned input copy reusing its memory.
-    // We need W floats; yinBuffer_ has W/2. Use inputAccumulator_ itself:
-    // since accWritePos_ is the oldest position, read W samples from there.
-    // We'll work directly on inputAccumulator_ (circular) inside the sub-steps.
+    differenceFunction(windowSize_);
+    cumulativeMeanNormalize(windowSize_);
+    const int tau = absoluteThreshold(windowSize_);
 
-    differenceFunction(W);
-    cumulativeMeanNormalize(W);
-
-    const int tau = absoluteThreshold(W);
-
-    if (tau == -1)
+    if (tau != -1)
     {
-        // No pitch detected below threshold
-        lastResult_ = { 0.0f, 0.0f };
-        return lastResult_;
+        const float refinedTau = parabolicInterpolation(tau, windowSize_);
+        const float frequency  = static_cast<float>(sampleRate_) / refinedTau;
+
+        if (frequency >= minFrequency_ && frequency <= kMaxFrequencyHz)
+        {
+            const float confidence = 1.0f - yinBuffer_[static_cast<std::size_t>(tau)];
+            lastResult_ = { frequency, std::max(0.0f, std::min(1.0f, confidence)) };
+
+            // 3. Median filter — only update on valid voiced detections.
+            //    Zeros never enter the history → no false "dropout to 0 Hz".
+            if (confidence > 0.65f)
+            {
+                // Warm-up: fill entire history on first valid pitch to avoid
+                // initial median = 0 from the zeroed array.
+                if (!historyPrimed_)
+                {
+                    pitchHistory_.fill(frequency);
+                    historyPrimed_ = true;
+                }
+
+                pitchHistory_[static_cast<std::size_t>(historyIndex_)] = frequency;
+                historyIndex_ = (historyIndex_ + 1) % 5;
+
+                std::array<float, 5> sorted = pitchHistory_;
+                std::sort(sorted.begin(), sorted.end());
+                lastResult_.frequencyHz = sorted[2];   // median
+            }
+
+            return lastResult_;
+        }
     }
 
-    const float refinedTau = parabolicInterpolation(tau, W);
-    const float frequency  = static_cast<float>(sampleRate_) / refinedTau;
-
-    if (frequency < kMinFrequencyHz || frequency > kMaxFrequencyHz)
-    {
-        lastResult_ = { 0.0f, 0.0f };
-        return lastResult_;
-    }
-
-    const float confidence = 1.0f - yinBuffer_[static_cast<std::size_t>(tau)];
-    lastResult_ = { frequency, std::max(0.0f, std::min(1.0f, confidence)) };
+    // Unvoiced — no fallback, no invented pitch.
+    lastResult_ = { 0.0f, 0.0f };
     return lastResult_;
 }
 
@@ -149,12 +191,14 @@ void YinPitchTracker::cumulativeMeanNormalize(int windowSize) noexcept
 // YIN Step 4 — Absolute threshold
 // Returns first tau where d'(tau) < threshold_ (after the first dip).
 // Returns -1 if none found (unvoiced).
+//
+// v2: removed dangerous "global minimum" fallback that invented pitch in noise.
 // ─────────────────────────────────────────────────────────────────────────────
 int YinPitchTracker::absoluteThreshold(int windowSize) const noexcept
 {
     const int half     = windowSize / 2;
     const int minTau   = static_cast<int>(sampleRate_ / kMaxFrequencyHz);
-    const int maxTau   = static_cast<int>(static_cast<double>(sampleRate_) / kMinFrequencyHz) + 1;
+    const int maxTau   = static_cast<int>(sampleRate_ / static_cast<double>(minFrequency_)) + 1;
     const int clampMax = std::min(half - 1, maxTau);
 
     for (int tau = std::max(2, minTau); tau < clampMax; ++tau)
@@ -171,19 +215,7 @@ int YinPitchTracker::absoluteThreshold(int windowSize) const noexcept
         }
     }
 
-    // No dip below threshold — return the global minimum as a fallback
-    int bestTau = std::max(2, minTau);
-    float bestVal = yinBuffer_[static_cast<std::size_t>(bestTau)];
-    for (int tau = bestTau + 1; tau < clampMax; ++tau)
-    {
-        if (yinBuffer_[static_cast<std::size_t>(tau)] < bestVal)
-        {
-            bestVal = yinBuffer_[static_cast<std::size_t>(tau)];
-            bestTau = tau;
-        }
-    }
-    // Only accept if reasonably close to threshold
-    return (bestVal < threshold_ * 2.0f) ? bestTau : -1;
+    return -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

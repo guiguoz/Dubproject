@@ -202,7 +202,7 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ./build/tests/Release/SaxFXTests.exe
 ```
 
-180 tests (Catch2 v3.5.4). Current status: 179/180 pass (1 flaky timing test).
+184 tests (Catch2 v3.5.4). Current status: 183/184 pass (1 flaky timing test).
 
 ---
 
@@ -266,7 +266,7 @@ Dubproject/   (nom du dossier local peut varier)
 │       └── styles/               scene-selector.css (neon dark theme)
 ├── docs/
 │   └── project-format.md         Schéma .saxfx v8 (référence JSON)
-├── tests/                        Catch2 unit tests (180 tests)
+├── tests/                        Catch2 unit tests (184 tests)
 ├── models/                       Trained ONNX models
 │   ├── content_classifier.onnx   Sample classifier
 │   └── mix_model.onnx            Mix optimizer
@@ -304,6 +304,17 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 17** | Done | UX & AI fixes: instant hover off, step inertia fix, BPM global, AI mix mute-reactive + RAM-based |
 | **Sprint 18** | Done | 9th DRM track + audio quality overhaul (crossfade, limiter fix, step-0 trigger) |
 | **Sprint 19** | Done | DSP fixes: Synth wet-only, effect chain debug, sampler/sax mix balance |
+| **Sprint 20** | Done | Robust pitch tracking: YIN DC blocker, median filter, pipeline log-smoothing |
+
+### Sprint 20 — Robust Pitch Tracking
+
+| Feature | Description |
+|---------|-------------|
+| YIN DC blocker | Filtre passe-haut (40 Hz) dynamique par échantillon intégré avant différence (`YinPitchTracker::process`) pour éliminer le DC offset de la carte son |
+| YIN gating & jump | `minFrequency_ = 85 Hz`, saut YIN (`samplesSinceLastAnalysis_ -= hopSize_`) pour max 1 analyse/bloc (CPU), filtre médian 5-taps avec warm-up conditionnel |
+| Pipeline gate | `confidence > 0.82` (YIN laxiste `0.20`, pipeline strict) et `rms > 0.02` obligatoires pour considerer la trame *voiced* |
+| Pipeline log-smoothing | Lissage EMA 50ms dans le domaine logarithmique sur le pitch (fini le jitter, transitions glissées) |
+| Pitch hold & timeout | Maintien de la dernière note `stablePitch_` pendant 200ms après silence, retombe à 0 propre (évite les drops) |
 
 ### Sprint 19 — DSP Fixes: Synth, Effect Chain, Sax/Sampler Mix Balance
 
@@ -338,12 +349,13 @@ Focusrite Scarlett (mono in)
               ├─ 1. YIN pitch tracker     — analyse left, ne modifie pas
               ├─ 2. BPM detector          — analyse left, ne modifie pas
               ├─ 3. RMS smoothing         — sur left avant effets
-              ├─ 4. EffectChain::process(left)  — IN-PLACE sur left
+              ├─ 4. Pitch Stabilization   — gating (confidence/rms), log-EMA smoothing, hold (200ms)
+              ├─ 5. EffectChain::process(left)  — IN-PLACE sur left, avec le pitch stabilisé
               │     └─ [Synth] → [Harmonizer] → [Flanger] → [Delay] → [Octaver] → ...
-              ├─ 5. ExpressionMapper
-              ├─ 6. std::copy(left → right)     — right = left post-effets
-              ├─ 7. Sampler::processStereo()    — additionné sur left+right
-              └─ 8. MasterLimiter (L+R)
+              ├─ 6. ExpressionMapper
+              ├─ 7. std::copy(left → right)     — right = left post-effets
+              ├─ 8. Sampler::processStereo()    — additionné sur left+right
+              └─ 9. MasterLimiter (L+R)
 ```
 
 #### Synth Effect — comportement

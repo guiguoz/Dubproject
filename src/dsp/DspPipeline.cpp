@@ -7,6 +7,8 @@ namespace dsp
 
 void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
 {
+    sampleRate_ = sampleRate;
+
     pitchTracker_.prepare(sampleRate, maxBlockSize);
     effectChain_.prepare(sampleRate, maxBlockSize);
     sampler_.prepare(sampleRate, maxBlockSize);
@@ -25,6 +27,8 @@ void DspPipeline::reset() noexcept
     bpmDetector_.reset();
     rmsRunning_ = 0.0f;
     smoothDuck_ = 1.0f;
+    stablePitch_ = 0.0f;
+    unvoicedSamples_ = 0;
     lastPitchHz_.store(0.0f, std::memory_order_relaxed);
     lastConfidence_.store(0.0f, std::memory_order_relaxed);
     rmsLevel_.store(0.0f, std::memory_order_relaxed);
@@ -37,8 +41,6 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
 {
     // 1. Pitch tracking (analysis only — does not modify buffer)
     const PitchResult pitch = pitchTracker_.process(buffer, numSamples);
-    lastPitchHz_.store(pitch.frequencyHz, std::memory_order_relaxed);
-    lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
 
     // 2. BPM detection (analysis only)
     bpmDetector_.process(buffer, numSamples);
@@ -48,10 +50,47 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
         rmsRunning_ = kRmsAlpha * rmsRunning_ + (1.0f - kRmsAlpha) * std::abs(buffer[i]);
     rmsLevel_.store(rmsRunning_, std::memory_order_relaxed);
 
-    // 4. Effect Chain (processes in-place)
-    // If piano keyboard is active, use the forced pitch instead of YIN output.
+    // 4. Pitch gating + log-domain smoothing
+    //    Only accept pitch when voiced (frequency in range, high confidence, audible RMS).
+    //    Smooth in log2 domain (musical — equal intervals in cents).
+    //    Hold last valid pitch on unvoiced, with 200ms timeout.
+    const bool voiced = (pitch.frequencyHz > 40.0f && pitch.frequencyHz < 2000.0f)
+                     && (pitch.confidence > kConfidenceGate)
+                     && (rmsRunning_ > kRmsGate);
+
+    if (voiced && stablePitch_ > 1.0f)
+    {
+        // Log-domain EMA (musical — equal intervals in cents)
+        const float blockSec = static_cast<float>(numSamples) / static_cast<float>(sampleRate_);
+        const float a = std::exp(-blockSec / kSmoothTimeSec);
+        const float logStable = std::log2(stablePitch_);
+        const float logNew    = std::log2(pitch.frequencyHz);
+        stablePitch_ = std::exp2(a * logStable + (1.0f - a) * logNew);
+        unvoicedSamples_ = 0;
+    }
+    else if (voiced)
+    {
+        // First valid pitch — snap direct (no glide from 0)
+        stablePitch_ = pitch.frequencyHz;
+        unvoicedSamples_ = 0;
+    }
+    else
+    {
+        // Unvoiced — hold with timeout
+        unvoicedSamples_ += numSamples;
+        const int timeoutSamples = static_cast<int>(kHoldTimeoutSec * sampleRate_);
+        if (unvoicedSamples_ > timeoutSamples)
+            stablePitch_ = 0.0f;
+    }
+
+    // Expose stable pitch (not raw) for UI
+    lastPitchHz_.store(stablePitch_, std::memory_order_relaxed);
+    lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
+
+    // 5. Effect Chain (processes in-place)
+    // If piano keyboard is active, use the forced pitch instead of stabilized pitch.
     const float forced = forcedPitchHz_.load(std::memory_order_relaxed);
-    const float effectPitch = (forced > 0.f) ? forced : pitch.frequencyHz;
+    const float effectPitch = (forced > 20.0f) ? forced : stablePitch_;
     effectChain_.process(buffer, numSamples, effectPitch);
 
     // 5. Expression Mapper — apply RMS→param mapping to the target effect
@@ -132,8 +171,6 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
 {
     // 1. Pitch tracking (analysis on left — does not modify buffer)
     const PitchResult pitch = pitchTracker_.process(left, numSamples);
-    lastPitchHz_.store(pitch.frequencyHz, std::memory_order_relaxed);
-    lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
 
     // 2. BPM detection (analysis on left)
     bpmDetector_.process(left, numSamples);
@@ -143,12 +180,42 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         rmsRunning_ = kRmsAlpha * rmsRunning_ + (1.0f - kRmsAlpha) * std::abs(left[i]);
     rmsLevel_.store(rmsRunning_, std::memory_order_relaxed);
 
-    // 4. Effect chain on left (in-place)
+    // 4. Pitch gating + log-domain smoothing (same logic as mono process())
+    const bool voiced = (pitch.frequencyHz > 40.0f && pitch.frequencyHz < 2000.0f)
+                     && (pitch.confidence > kConfidenceGate)
+                     && (rmsRunning_ > kRmsGate);
+
+    if (voiced && stablePitch_ > 1.0f)
+    {
+        const float blockSec = static_cast<float>(numSamples) / static_cast<float>(sampleRate_);
+        const float a = std::exp(-blockSec / kSmoothTimeSec);
+        const float logStable = std::log2(stablePitch_);
+        const float logNew    = std::log2(pitch.frequencyHz);
+        stablePitch_ = std::exp2(a * logStable + (1.0f - a) * logNew);
+        unvoicedSamples_ = 0;
+    }
+    else if (voiced)
+    {
+        stablePitch_ = pitch.frequencyHz;
+        unvoicedSamples_ = 0;
+    }
+    else
+    {
+        unvoicedSamples_ += numSamples;
+        const int timeoutSamples = static_cast<int>(kHoldTimeoutSec * sampleRate_);
+        if (unvoicedSamples_ > timeoutSamples)
+            stablePitch_ = 0.0f;
+    }
+
+    lastPitchHz_.store(stablePitch_, std::memory_order_relaxed);
+    lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
+
+    // 5. Effect chain on left (in-place)
     const float forced     = forcedPitchHz_.load(std::memory_order_relaxed);
-    const float effectPitch = (forced > 0.f) ? forced : pitch.frequencyHz;
+    const float effectPitch = (forced > 20.0f) ? forced : stablePitch_;
     effectChain_.process(left, numSamples, effectPitch);
 
-    // 5. Expression mapper
+    // 6. Expression mapper
     if (expressionMapper_.isActive())
     {
         const float mapped = expressionMapper_.mapValue(rmsRunning_);
