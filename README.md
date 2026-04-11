@@ -305,6 +305,15 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 18** | Done | 9th DRM track + audio quality overhaul (crossfade, limiter fix, step-0 trigger) |
 | **Sprint 19** | Done | DSP fixes: Synth wet-only, effect chain debug, sampler/sax mix balance |
 | **Sprint 20** | Done | Robust pitch tracking: YIN DC blocker, median filter, pipeline log-smoothing |
+| **Sprint 21** | Done | Sequencer & Sampler Scene Transitions: Graceful fade-out, async boundary lock-free, loop bleed (Option A) |
+
+### Sprint 21 — Sequencer & Sampler Scene Transitions
+
+| Feature | Description |
+|---------|-------------|
+| Graceful fade-out | `Sampler::stop()` initie un fondu doux de ~6 ms (`kFadeOutLen`) plutôt qu'une coupure audio abrupte, éliminant les clics. |
+| Async boundary lock-free | Le moteur audio repère le changement de scène (`atSceneBoundary`) et bloque les déclenchements de l'ancien pattern (fade-out immédiat), annihilant le double-trigger et la fuite dus au délai asynchrone (33ms) de la GUI. |
+| Loop bleed (Option A) | Conservé : Les samples débordent naturellement sur le rebouclage de la mesure (pas de stop forcé au step 0 sur la même scène), respectant le fonctionnement organique des boîtes à rythmes classiques. |
 
 ### Sprint 20 — Robust Pitch Tracking
 
