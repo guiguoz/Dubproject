@@ -89,7 +89,7 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 6 };
+    int                         version     { 9 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;
@@ -102,6 +102,13 @@ struct ProjectData
     std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
     int                              currentScene   { 0 };
+    // v9 — keyboard synth global state (preset + custom params + volume)
+    int                              keyboardPreset { -1 };    // -1 = no preset
+    std::array<float, 13>            keyboardParams { 0.25f, 0.5f, 0.5f, 0.75f, 0.2f,
+                                                      0.02f, 0.25f, 1.f, 0.7f, 0.15f,
+                                                      0.f, 0.5f, 0.f };
+    float                            keyboardGain   { 0.5f };
+    bool                             keyboardMono   { false };
 };
 
 } // namespace project

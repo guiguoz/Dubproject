@@ -103,6 +103,9 @@ private:
     juce::TextButton viewStaffBtn_;     // 🎼
     void             updateViewVisibility();
 
+    // ── Keyboard synth state (shadow for project save) ───────────────────────
+    int              keyboardPresetIdx_ { -1 };  // -1 = no preset selected
+
     // ── Master key (tonalité de référence) ───────────────────────────────────
     int              masterKeyRoot_  { 0 };     // 0=C .. 11=B
     bool             masterKeyMajor_ { true };

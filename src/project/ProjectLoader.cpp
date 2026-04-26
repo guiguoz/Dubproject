@@ -240,6 +240,18 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         }
     }
 
+    // ── v9 — keyboard synth state ─────────────────────────────────────────────
+    if (data.version >= 9)
+    {
+        data.keyboardPreset = static_cast<int>(root.getProperty("keyboardPreset", -1));
+        data.keyboardGain   = getFloat(root, "keyboardGain", 0.5f);
+        data.keyboardMono   = getBool(root, "keyboardMono", false);
+        if (const auto* kpArr = root["keyboardParams"].getArray())
+            for (int i = 0; i < 13 && i < kpArr->size(); ++i)
+                data.keyboardParams[static_cast<std::size_t>(i)] =
+                    static_cast<float>(static_cast<double>((*kpArr)[i]));
+    }
+
     return data;
 }
 
@@ -249,7 +261,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     8);  // always write latest format
+    root->setProperty("version",     9);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -400,6 +412,17 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             scenesArr.add(juce::var(entry.get()));
         }
         root->setProperty("scenes", scenesArr);
+    }
+
+    // ── v9 — keyboard synth state ─────────────────────────────────────────────
+    root->setProperty("keyboardPreset", data.keyboardPreset);
+    root->setProperty("keyboardGain",   static_cast<double>(data.keyboardGain));
+    root->setProperty("keyboardMono",   data.keyboardMono);
+    {
+        juce::Array<juce::var> kpArr;
+        for (float p : data.keyboardParams)
+            kpArr.add(static_cast<double>(p));
+        root->setProperty("keyboardParams", kpArr);
     }
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);

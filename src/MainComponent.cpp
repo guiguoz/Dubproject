@@ -594,6 +594,7 @@ MainComponent::MainComponent()
         dspPipeline_.setKeyboardGain(gain);
     };
     pianoKeyboardPanel_.onPreset = [this](int idx) {
+        keyboardPresetIdx_ = idx;
         if (idx >= 0)
             dspPipeline_.applyKeyboardPreset(idx);
         samplerEngine_.setKeyboardPreset(idx);   // -1 = désactivé (pas de ducking)
@@ -1191,6 +1192,13 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         }
     }
 
+    // ── Keyboard synth state (v9) ─────────────────────────────────────────────
+    data.keyboardPreset = keyboardPresetIdx_;
+    data.keyboardGain   = dspPipeline_.getKeyboardGain();
+    data.keyboardMono   = dspPipeline_.getKeyboardMono();
+    for (int i = 0; i < ::dsp::KeyboardSynth::kParamCount; ++i)
+        data.keyboardParams[static_cast<std::size_t>(i)] = dspPipeline_.getKeyboardParam(i);
+
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
     else
@@ -1420,6 +1428,26 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         // Restore bar counts, step patterns and sample paths for the current scene
         applyScene(currentScene_);
         updateSceneLabel();
+    }
+
+    // ── v9 — keyboard synth state ─────────────────────────────────────────────
+    if (data.version >= 9)
+    {
+        // Restore all 13 params to the DSP engine
+        for (int i = 0; i < ::dsp::KeyboardSynth::kParamCount; ++i)
+            dspPipeline_.setKeyboardParam(i, data.keyboardParams[static_cast<std::size_t>(i)]);
+        dspPipeline_.setKeyboardGain(data.keyboardGain);
+        // Mono mode is encoded in the params array (preset applies it), but set explicitly
+        // in case the user tweaked it independently of a preset.
+
+        keyboardPresetIdx_ = data.keyboardPreset;
+        samplerEngine_.setKeyboardPreset(keyboardPresetIdx_);
+
+        // Update UI (must be on message thread — we are already on it here)
+        pianoKeyboardPanel_.setPresetSelection(keyboardPresetIdx_);
+        pianoKeyboardPanel_.setVolumeValue(data.keyboardGain);
+        for (int i = 0; i < 8; ++i)   // only the 8 sliders exposed in the UI
+            pianoKeyboardPanel_.setParamValue(i, data.keyboardParams[static_cast<std::size_t>(i)]);
     }
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));

@@ -148,6 +148,20 @@ public:
         volumeSlider_.setValue(static_cast<double>(v), juce::dontSendNotification);
     }
 
+    // Called by MainComponent on project load to restore keyboard state.
+    void setParamValue(int idx, float v) noexcept
+    {
+        if (idx >= 0 && idx < kNumParams)
+            paramSliders_[idx].setValue(static_cast<double>(v), juce::dontSendNotification);
+    }
+
+    void setPresetSelection(int presetIdx) noexcept
+    {
+        // presetIdx == -1 → placeholder; otherwise item id = presetIdx + 2
+        presetCombo_.setSelectedId(presetIdx >= 0 ? presetIdx + 2 : 1,
+                                   juce::dontSendNotification);
+    }
+
     void setScaleType(ScaleType t) noexcept
     {
         scaleType_ = t;

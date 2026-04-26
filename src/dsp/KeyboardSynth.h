@@ -37,10 +37,16 @@ public:
     void noteOff(int midiNote)            noexcept;
 
     // Written by GUI thread
-    void setParam   (int idx, float value) noexcept;
-    void setGain    (float g)              noexcept { gain_.store(g, std::memory_order_relaxed); }
-    void setMonoMode(bool mono)            noexcept { monoMode_.store(mono, std::memory_order_relaxed); }
-    bool getMonoMode() const               noexcept { return monoMode_.load(std::memory_order_relaxed); }
+    void  setParam   (int idx, float value) noexcept;
+    void  setGain    (float g)              noexcept { gain_.store(g, std::memory_order_relaxed); }
+    void  setMonoMode(bool mono)            noexcept { monoMode_.store(mono, std::memory_order_relaxed); }
+    bool  getMonoMode() const               noexcept { return monoMode_.load(std::memory_order_relaxed); }
+    float getParam(int idx) const           noexcept
+    {
+        if (idx < 0 || idx >= kParamCount) return 0.f;
+        return params_[static_cast<std::size_t>(idx)].load(std::memory_order_relaxed);
+    }
+    float getGain() const noexcept { return gain_.load(std::memory_order_relaxed); }
 
     // Preset bank (6 dub presets)
     static int         presetCount()         noexcept;
