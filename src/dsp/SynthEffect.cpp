@@ -13,7 +13,7 @@ static constexpr float kTwoPi = 6.28318530717959f;
 // Static voice spread (must match declaration)
 constexpr float SynthEffect::kVoiceSpread[kNumVoices];
 
-static constexpr ParamDescriptor kParams[8] = {
+static constexpr ParamDescriptor kParams[9] = {
     {"waveform",  "Waveform",     0.0f,     1.0f,    0.0f},
     {"octave",    "Octave",      -2.0f,     2.0f,    0.0f},
     {"detune",    "Detune",       0.0f,   100.0f,   25.0f},
@@ -21,7 +21,8 @@ static constexpr ParamDescriptor kParams[8] = {
     {"resonance", "Resonance",    0.0f,     1.0f,    0.3f},
     {"attack",    "Attack",       0.001f,   0.5f,  0.005f},
     {"release",   "Release",      0.01f,    2.0f,   0.15f},
-    {"mix",       "Volume",          0.0f,     1.0f,    1.0f},
+    {"mix",       "Volume",       0.0f,     1.0f,    1.0f},
+    {"glide",     "Glide",        0.0f,     0.5f,    0.0f},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,18 +167,40 @@ void SynthEffect::process(float* buf, int numSamples, float pitchHz) noexcept
     const float atk   = attack_.load(std::memory_order_relaxed);
     const float rel   = release_.load(std::memory_order_relaxed);
     const float mx    = mix_.load(std::memory_order_relaxed);
+    const float gl    = glide_.load(std::memory_order_relaxed);
 
     // Envelope follower coefficients (1-pole)
     const float attackCoeff  = std::exp(-1.0f / (atk  * static_cast<float>(sampleRate_)));
     const float releaseCoeff = std::exp(-1.0f / (rel  * static_cast<float>(sampleRate_)));
 
-    // Update target frequency from pitch tracker
+    // Glide coefficient: exp so that 99 % of pitch change arrives in gl seconds.
+    // gl = 0 → glideCoeff = 0 → currentFreq_ snaps instantly to targetFreq_.
+    const float glideCoeff = (gl > 0.001f)
+        ? std::exp(-4.6051702f / (gl * static_cast<float>(sampleRate_)))
+        : 0.0f;
+
+    // Update target frequency (once per block) — with octave-error guard.
+    // The DspPipeline's 50 ms EMA already damps most YIN glitches, but a
+    // sustained octave error can still drift through.  We reject any incoming
+    // pitch that is more than ~11 semitones (×1.85 / ÷1.85) away from the
+    // current target, which covers octave jumps (×2 / ×0.5) while accepting
+    // normal chromatic leaps in a single block.
     if (pitchHz > 20.0f && pitchHz < 10000.0f)
     {
-        targetFreq_ = pitchHz * std::pow(2.0f, oct);
-        // Snap currentFreq_ on first valid pitch to avoid glide from 0
-        if (currentFreq_ < 20.0f)
-            currentFreq_ = targetFreq_;
+        const float candidate = pitchHz * std::pow(2.0f, oct);
+        if (targetFreq_ < 20.0f)
+        {
+            // First valid pitch after silence: snap both pointers immediately.
+            targetFreq_  = candidate;
+            currentFreq_ = candidate;
+        }
+        else
+        {
+            const float ratio = candidate / targetFreq_;
+            if (ratio < 1.85f && ratio > 0.54f)
+                targetFreq_ = candidate;
+            // else: suspected octave error — freeze targetFreq_ until next block
+        }
     }
 
     // Detune spread: convert cents to ratio  (e.g. 25 cents → ~1.0145)
@@ -185,9 +208,8 @@ void SynthEffect::process(float* buf, int numSamples, float pitchHz) noexcept
 
     for (int i = 0; i < safeN; ++i)
     {
-        // Smooth pitch glide (portamento) — faster snap for live playing
-        constexpr float kGlide = 0.05f;
-        currentFreq_ += kGlide * (targetFreq_ - currentFreq_);
+        // Exponential portamento — EMA toward targetFreq_ at the preset glide rate.
+        currentFreq_ = glideCoeff * currentFreq_ + (1.0f - glideCoeff) * targetFreq_;
 
         // ── Envelope follower ───────────────────────────────────────────
         const float inputAbs = std::abs(buf[i]);
@@ -242,6 +264,7 @@ float SynthEffect::getParam(int i) const noexcept
     case kAttack:    return attack_.load(std::memory_order_relaxed);
     case kRelease:   return release_.load(std::memory_order_relaxed);
     case kMix:       return mix_.load(std::memory_order_relaxed);
+    case kGlide:     return glide_.load(std::memory_order_relaxed);
     default:         return 0.0f;
     }
 }
@@ -258,6 +281,7 @@ void SynthEffect::setParam(int i, float v) noexcept
     case kAttack:    attack_.store(v, std::memory_order_relaxed);    break;
     case kRelease:   release_.store(v, std::memory_order_relaxed);   break;
     case kMix:       mix_.store(v, std::memory_order_relaxed);       break;
+    case kGlide:     glide_.store(v, std::memory_order_relaxed);     break;
     }
 }
 
@@ -271,81 +295,120 @@ void SynthEffect::setParam(int i, float v) noexcept
 struct SynthPreset
 {
     const char* name;
-    float params[8]; // wf, oct, det, cut, res, atk, rel, mix
+    float params[9]; // wf, oct, det, cut, res, atk, rel, mix, glide(s)
+    float confidence; // YIN confidence threshold for this preset
 };
 
 static constexpr SynthPreset kPresets[] = {
-    //                              wf     oct   det    cut     res    atk     rel    mix
-    //
     // Waveform mapping:
-    //   0.00 = Saw (PolyBLEP)     — bright, harmonics-rich
-    //   0.33 = Square (PolyBLEP)  — hollow, woody
-    //   0.66 = Sine               — pure, clean
-    //   1.00 = Sub sine (-1 oct)  — deep, sub-bass
+    //   0.00 = Saw (PolyBLEP)    0.33 = Square (PolyBLEP)
+    //   0.66 = Sine               1.00 = Sub sine (-1 oct)
+    //
+    // params: wf    oct   det    cut      res    atk     rel    mix   glide(s)
+    // confidence: YIN threshold — lower = more reactive, higher = fewer false triggers
 
     // ═══════════════════════════════════════════════════════════════════════
-    // MOOG BASSES — le sax devient un synthé basse analogique
+    // MOOG BASSES
     // ═══════════════════════════════════════════════════════════════════════
-    { "Moog Taurus",           {  0.0f, -1.0f,   6.0f,  280.0f, 0.55f, 0.001f, 0.12f, 0.85f }},
-    // Saw -1oct, filtre fermé + reso → gros Moog bass chaud
-    { "Acid Squelch",          {  0.0f,  0.0f,   3.0f,  450.0f, 0.98f, 0.001f, 0.03f, 0.90f }},
-    // Saw, reso quasi self-osc, cutoff bas → TB-303 qui crie
-    { "Reese Wobble",          {  0.0f, -1.0f,  45.0f,  700.0f, 0.42f, 0.003f, 0.25f, 0.80f }},
-    // Saw -1oct, gros detune → battement type DnB/dubstep reese
-    { "Sub Cannon",            {  1.0f, -2.0f,   0.0f,  100.0f, 0.08f, 0.001f, 0.08f, 0.95f }},
-    // Sub sine -2oct, cutoff 100Hz → basse viscérale sub-only
-    { "Hoover",                {  0.0f, -1.0f, 100.0f, 2200.0f, 0.48f, 0.002f, 0.06f, 0.80f }},
-    // Saw -1oct, detune max → son Hoover mentasm classic
+    { "Moog Taurus",
+      { 0.0f,-1.0f,  6.0f, 280.0f,0.55f,0.001f,0.12f,0.85f, 0.08f }, 0.80f },
+    // Saw -1oct, filtre fermé, glide 80 ms → basse Moog qui glisse naturellement
+
+    { "Acid Squelch",
+      { 0.0f, 0.0f,  3.0f, 450.0f,0.98f,0.001f,0.03f,0.90f, 0.00f }, 0.75f },
+    // Saw, reso quasi self-osc → TB-303 ; conf. réduite pour notes rapides
+
+    { "Reese Wobble",
+      { 0.0f,-1.0f, 45.0f, 700.0f,0.42f,0.003f,0.25f,0.80f, 0.05f }, 0.80f },
+    // Saw -1oct, gros detune, 50 ms glide → battement DnB/reese qui dérive
+
+    { "Sub Cannon",
+      { 1.0f,-2.0f,  0.0f, 100.0f,0.08f,0.001f,0.08f,0.95f, 0.03f }, 0.82f },
+    // Sub -2oct, 30 ms glide → impact sub viscéral, conf. haute (octave guard)
+
+    { "Hoover",
+      { 0.0f,-1.0f,100.0f,2200.0f,0.48f,0.002f,0.06f,0.80f, 0.03f }, 0.80f },
+    // Saw -1oct, detune max → Hoover / mentasm classic
 
     // ═══════════════════════════════════════════════════════════════════════
-    // LEADS — le sax qui perce le mix
+    // LEADS
     // ═══════════════════════════════════════════════════════════════════════
-    { "Trance Supersaw",       {  0.0f,  0.0f,  85.0f, 8000.0f, 0.18f, 0.001f, 0.05f, 0.75f }},
-    // Saw, gros detune, filtre grand ouvert → mur de son JP-8000
-    { "Screaming Lead",        {  0.0f,  1.0f,   8.0f, 1200.0f, 1.00f, 0.001f, 0.03f, 0.90f }},
-    // Saw +1oct, reso max → filtre qui auto-oscille, lead perçant
-    { "PWM Blade",             {  0.33f, 0.0f,  30.0f, 3500.0f, 0.60f, 0.001f, 0.04f, 0.80f }},
-    // Square, detune modéré → son tranchant type Blade Runner
-    { "Vintage Solo",          {  0.33f, 0.0f,   2.0f, 1800.0f, 0.45f, 0.003f, 0.08f, 0.70f }},
-    // Square mono, peu de detune → Minimoog solo chaud
-    { "Sync Rip",              {  0.0f,  1.0f,  65.0f, 6000.0f, 0.72f, 0.001f, 0.02f, 0.85f }},
-    // Saw +1oct, reso forte + filtre haut → texture agressive
+    { "Trance Supersaw",
+      { 0.0f, 0.0f, 85.0f,8000.0f,0.18f,0.001f,0.05f,0.75f, 0.00f }, 0.78f },
+    // Saw, gros detune, snap instantané → mur JP-8000
+
+    { "Screaming Lead",
+      { 0.0f, 1.0f,  8.0f,1200.0f,1.00f,0.001f,0.03f,0.90f, 0.00f }, 0.75f },
+    // Saw +1oct, reso max, conf. basse → réactif aux attaques rapides
+
+    { "PWM Blade",
+      { 0.33f,0.0f, 30.0f,3500.0f,0.60f,0.001f,0.04f,0.80f, 0.00f }, 0.78f },
+    // Square, detune modéré → tranchant Blade Runner
+
+    { "Vintage Solo",
+      { 0.33f,0.0f,  2.0f,1800.0f,0.45f,0.003f,0.08f,0.70f, 0.02f }, 0.80f },
+    // Square mono, 20 ms glide → légato Minimoog naturel
+
+    { "Sync Rip",
+      { 0.0f, 1.0f, 65.0f,6000.0f,0.72f,0.001f,0.02f,0.85f, 0.00f }, 0.78f },
+    // Saw +1oct, reso forte → texture agressive
 
     // ═══════════════════════════════════════════════════════════════════════
-    // PADS & ATMOSPHÈRES — transformer le sax en nappe
+    // PADS & ATMOSPHÈRES
     // ═══════════════════════════════════════════════════════════════════════
-    { "Blade Runner Pad",      {  0.0f,  0.0f,  55.0f, 1400.0f, 0.22f, 0.400f, 2.00f, 0.50f }},
-    // Saw, lent attack/release → le sax respire dans la nappe
-    { "Glass Choir",           {  0.66f, 1.0f,  40.0f, 9000.0f, 0.08f, 0.300f, 1.80f, 0.45f }},
+    { "Blade Runner Pad",
+      { 0.0f, 0.0f, 55.0f,1400.0f,0.22f,0.400f,2.00f,0.50f, 0.00f }, 0.82f },
+    // Saw, attack 400 ms → le glide est masqué, conf. standard pour pads
+
+    { "Glass Choir",
+      { 0.66f,1.0f, 40.0f,9000.0f,0.08f,0.300f,1.80f,0.45f, 0.00f }, 0.82f },
     // Sine +1oct, filtre ouvert → voix cristallines éthérées
-    { "Dark Drone",            {  0.0f, -1.0f,  20.0f,  400.0f, 0.30f, 0.500f, 2.00f, 0.60f }},
-    // Saw -1oct, cutoff bas, long release → bourdon sombre
-    { "Shimmer",               {  0.66f, 2.0f,  70.0f,14000.0f, 0.05f, 0.200f, 1.50f, 0.35f }},
-    // Sine +2oct, detune large, filtre ouvert → scintillement
-    { "Subaquatic",            {  0.66f,-1.0f,  30.0f,  600.0f, 0.35f, 0.350f, 2.00f, 0.55f }},
-    // Sine -1oct, filtre fermé → son sous-marin, profond
+
+    { "Dark Drone",
+      { 0.0f,-1.0f, 20.0f, 400.0f,0.30f,0.500f,2.00f,0.60f, 0.00f }, 0.82f },
+    // Saw -1oct, long release → bourdon sombre ; attack lente masque les glitches
+
+    { "Shimmer",
+      { 0.66f,2.0f, 70.0f,14000.0f,0.05f,0.200f,1.50f,0.35f, 0.00f }, 0.82f },
+    // Sine +2oct, detune large → scintillement
+
+    { "Subaquatic",
+      { 0.66f,-1.0f,30.0f, 600.0f,0.35f,0.350f,2.00f,0.55f, 0.00f }, 0.82f },
+    // Sine -1oct, filtre fermé → son sous-marin profond
 
     // ═══════════════════════════════════════════════════════════════════════
-    // DUB TECHNO — textures deep pour le live
+    // DUB TECHNO
     // ═══════════════════════════════════════════════════════════════════════
-    { "Deepchord Stab",        {  0.33f, 0.0f,  35.0f, 2800.0f, 0.28f, 0.001f, 0.06f, 0.65f }},
-    // Square, cut moyen → stab court dub techno
-    { "Basic Channel Wash",    {  0.0f,  0.0f,  50.0f, 1200.0f, 0.20f, 0.250f, 1.80f, 0.40f }},
-    // Saw, slow envelope → fond harmonique qui évolue lentement
-    { "Rhythm & Sound Sub",    {  1.0f, -1.0f,   5.0f,  180.0f, 0.12f, 0.010f, 0.40f, 0.75f }},
-    // Sub -1oct, filtre très fermé → basse dub minimale
+    { "Deepchord Stab",
+      { 0.33f,0.0f, 35.0f,2800.0f,0.28f,0.001f,0.06f,0.65f, 0.00f }, 0.75f },
+    // Square, stab sec → dub techno ; conf. basse pour réactivité
+
+    { "Basic Channel Wash",
+      { 0.0f, 0.0f, 50.0f,1200.0f,0.20f,0.250f,1.80f,0.40f, 0.00f }, 0.82f },
+    // Saw, enveloppe lente → fond harmonique minimaliste
+
+    { "Rhythm & Sound Sub",
+      { 1.0f,-1.0f,  5.0f, 180.0f,0.12f,0.010f,0.40f,0.75f, 0.06f }, 0.80f },
+    // Sub -1oct, glide 60 ms → basse dub avec liaisons naturelles
 
     // ═══════════════════════════════════════════════════════════════════════
-    // FX / EXPÉRIMENTAL — le sax entre dans la matrice
+    // FX / EXPÉRIMENTAL
     // ═══════════════════════════════════════════════════════════════════════
-    { "Resonance Scream",      {  0.0f,  0.0f,  10.0f,  350.0f, 1.00f, 0.001f, 0.10f, 0.85f }},
-    // Saw, reso max + cutoff bas → filtre qui hurle au pitch du sax
-    { "Bit Crusher",           {  0.33f, 2.0f,  95.0f,  900.0f, 0.85f, 0.001f, 0.02f, 0.90f }},
+    { "Resonance Scream",
+      { 0.0f, 0.0f, 10.0f, 350.0f,1.00f,0.001f,0.10f,0.85f, 0.00f }, 0.78f },
+    // Saw, reso max + cutoff bas → filtre hurle au pitch du sax
+
+    { "Bit Crusher",
+      { 0.33f,2.0f, 95.0f, 900.0f,0.85f,0.001f,0.02f,0.90f, 0.00f }, 0.80f },
     // Square +2oct, detune max, reso haute → chaos numérique
-    { "Ghost Harmonics",       {  0.66f, 1.0f,   0.0f, 4000.0f, 0.65f, 0.050f, 0.80f, 0.30f }},
-    // Sine +1oct mono, reso modérée → harmonique fantôme résonante
-    { "Foghorn",               {  0.0f, -2.0f,  15.0f,  220.0f, 0.70f, 0.010f, 0.50f, 0.90f }},
-    // Saw -2oct, filtre quasi fermé, reso → corne de brume massive
+
+    { "Ghost Harmonics",
+      { 0.66f,1.0f,  0.0f,4000.0f,0.65f,0.050f,0.80f,0.30f, 0.00f }, 0.82f },
+    // Sine +1oct mono → harmonique fantôme résonante
+
+    { "Foghorn",
+      { 0.0f,-2.0f, 15.0f, 220.0f,0.70f,0.010f,0.50f,0.90f, 0.10f }, 0.82f },
+    // Saw -2oct, glide 100 ms → corne de brume massive qui glisse
 };
 
 static constexpr int kPresetCount = static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0]));
@@ -364,9 +427,10 @@ const char* SynthEffect::presetName(int index) const noexcept
 void SynthEffect::applyPreset(int index) noexcept
 {
     if (index < 0 || index >= kPresetCount) return;
-    const auto& p = kPresets[index].params;
+    const auto& preset = kPresets[index];
     for (int i = 0; i < kParamCount; ++i)
-        setParam(i, p[i]);
+        setParam(i, preset.params[i]);
+    presetConfidence_.store(preset.confidence, std::memory_order_relaxed);
 }
 
 } // namespace dsp

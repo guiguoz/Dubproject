@@ -40,6 +40,7 @@ public:
     static constexpr int kMasterSlot = 8;
 
     void prepare(double sampleRate, int maxBlockSize) noexcept;
+    double getSampleRate() const noexcept { return sampleRate_; }
 
     // Load mono PCM into a slot.  Call from the GUI thread BEFORE the slot
     // is triggered.  fileSampleRate is used for basic rate detection

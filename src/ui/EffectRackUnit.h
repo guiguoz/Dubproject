@@ -30,7 +30,8 @@ namespace ui
 class EffectRackUnit : public juce::Component
 {
   public:
-    std::function<void()> onRemove;
+    std::function<void()>     onRemove;
+    std::function<void(bool)> onToggle; // called with new enabled state on power toggle
 
     explicit EffectRackUnit(::dsp::IEffect& effect)
         : effect_(effect),
@@ -46,7 +47,11 @@ class EffectRackUnit : public juce::Component
         powerBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x8f\xbb")); // ⏻
         powerBtn_.setClickingTogglesState(true);
         powerBtn_.setToggleState(effect.enabled.load(), juce::dontSendNotification);
-        powerBtn_.onClick = [this] { effect_.enabled.store(powerBtn_.getToggleState(), std::memory_order_release); };
+        powerBtn_.onClick = [this] {
+            const bool en = powerBtn_.getToggleState();
+            effect_.enabled.store(en, std::memory_order_release);
+            if (onToggle) onToggle(en);
+        };
         addAndMakeVisible(powerBtn_);
 
         // Preset selector (if the effect provides presets)

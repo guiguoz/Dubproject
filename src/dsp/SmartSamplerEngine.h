@@ -155,8 +155,9 @@ public:
     /// Direct apply (kept for compatibility).
     void applyMagicMix() { startWorker(false); }
 
-    bool isBusy()        const noexcept { return busy_       .load(std::memory_order_acquire); }
-    bool isMagicActive() const noexcept { return magicActive_.load(std::memory_order_acquire); }
+    bool isBusy()              const noexcept { return busy_                .load(std::memory_order_acquire); }
+    bool isMagicActive()       const noexcept { return magicActive_         .load(std::memory_order_acquire); }
+    bool didLastMixUseFallback() const noexcept { return lastMixUsedFallback_.load(std::memory_order_acquire); }
 
     // ── Content type API ──────────────────────────────────────────────────────
 
@@ -978,6 +979,8 @@ private:
             ms.depth  = sp.depth;
             ms.active = true;
         }
+
+        lastMixUsedFallback_.store(!usedAi, std::memory_order_release);
     }
 
     // ── Revert to original PCM (called when magic is toggled off) ─────────────
@@ -1396,8 +1399,9 @@ private:
     std::array<std::string, kSamplerSlots>   filePaths_ {};
     std::array<SceneSnapshot, 8>             arrangement_ {};
     int                                      currentArrangementScene_ { 0 };
-    std::atomic<bool>                        busy_        { false };
-    std::atomic<bool>                        magicActive_ { false };
+    std::atomic<bool>                        busy_                 { false };
+    std::atomic<bool>                        magicActive_          { false };
+    std::atomic<bool>                        lastMixUsedFallback_  { false };
     ContentType detectedTypes_[kSamplerSlots] {};
     ContentType overrideTypes_[kSamplerSlots] {};
     bool        hasOverride_  [kSamplerSlots] {};

@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <cmath>
+#include <tuple>
+#include <vector>
 #include "dsp/Sampler.h"
 #include "TestHelpers.h"
 
@@ -93,6 +96,112 @@ TEST_CASE("Sampler -- loop mode wraps around", "[sampler]")
 
     const float rms = test_helpers::computeRms(buf.data(), kBlockSize);
     REQUIRE(rms > 0.01f);
+}
+
+// Anti-regression: equal-power loop crossfade must not buzz (RMS modulation) or click at wrap.
+TEST_CASE("Sampler -- loop crossfade stable RMS and bounded steps (bass sine)", "[sampler]")
+{
+    auto runMono = [](Sampler& s, int numBlocks, std::vector<float>& out)
+    {
+        out.clear();
+        out.reserve(static_cast<std::size_t>(numBlocks * kBlockSize));
+        std::vector<float> buf(static_cast<std::size_t>(kBlockSize));
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            std::fill(buf.begin(), buf.end(), 0.f);
+            s.process(buf.data(), kBlockSize);
+            out.insert(out.end(), buf.begin(), buf.end());
+        }
+    };
+
+    auto runStereo = [](Sampler& s, int numBlocks, std::vector<float>& outLeft)
+    {
+        outLeft.clear();
+        outLeft.reserve(static_cast<std::size_t>(numBlocks * kBlockSize));
+        std::vector<float> bufL(static_cast<std::size_t>(kBlockSize));
+        std::vector<float> bufR(static_cast<std::size_t>(kBlockSize));
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            std::fill(bufL.begin(), bufL.end(), 0.f);
+            std::fill(bufR.begin(), bufR.end(), 0.f);
+            s.processStereo(bufL.data(), bufR.data(), kBlockSize);
+            outLeft.insert(outLeft.end(), bufL.begin(), bufL.end());
+        }
+    };
+
+    auto analyzeOutput = [](const std::vector<float>& out, int /*numBlocks*/)
+    {
+        const int kSkip = 256; // after note fade-in
+        REQUIRE(out.size() >= static_cast<std::size_t>(kSkip + 512));
+
+        float maxStep = 0.f;
+        for (std::size_t i = static_cast<std::size_t>(kSkip) + 1; i < out.size(); ++i)
+            maxStep = std::max(maxStep, std::abs(out[i] - out[i - 1]));
+
+        // 256-sample RMS on windows shifted by 1 sample — sensitive to buzz / steps at loop wrap,
+        // unlike fixed 512-sample process blocks whose RMS swings with sine phase alone.
+        constexpr int kWin = 256;
+        float maxRmsDrift = 0.f;
+        const int end = static_cast<int>(out.size()) - kWin - 1;
+        for (int i = kSkip; i < end; ++i)
+        {
+            const float r0 = test_helpers::computeRms(out.data() + i, kWin);
+            const float r1 = test_helpers::computeRms(out.data() + i + 1, kWin);
+            maxRmsDrift = std::max(maxRmsDrift, std::abs(r0 - r1));
+        }
+
+        const float globalRms = test_helpers::computeRms(out.data() + kSkip,
+                                                         static_cast<int>(out.size()) - kSkip);
+        return std::tuple{ maxStep, maxRmsDrift, globalRms };
+    };
+
+    constexpr int kLoopLen = 8192;
+    constexpr float kBassHz = 55.0f;
+    const int numBlocks = (4 * kLoopLen) / kBlockSize;
+
+    SECTION("process mono")
+    {
+        Sampler s;
+        s.prepare(kSR, kBlockSize);
+        const auto pcm = makeSine(kLoopLen, kBassHz, static_cast<float>(kSR));
+        s.loadSample(0, pcm.data(), kLoopLen, kSR);
+        s.setSlotLoop(0, true);
+        s.setSlotOneShot(0, false);
+        s.trigger(0);
+
+        std::vector<float> out;
+        runMono(s, numBlocks, out);
+        REQUIRE(s.isPlaying(0));
+
+        const auto [maxStep, maxRmsDrift, globalRms] = analyzeOutput(out, numBlocks);
+
+        // Sine 55 Hz @ 0.8: max |Δsample| ~ 0.006; crossfade stays smooth — clicks are much larger.
+        REQUIRE(maxStep < 0.12f);
+        REQUIRE(maxRmsDrift < 0.03f);
+        REQUIRE(globalRms > 0.1f);
+    }
+
+    SECTION("processStereo left channel")
+    {
+        Sampler s;
+        s.prepare(kSR, kBlockSize);
+        s.resetSpatial(); // pan L/R initialised — processStereo uses pan gains (default ctor may be 0)
+        const auto pcm = makeSine(kLoopLen, kBassHz, static_cast<float>(kSR));
+        s.loadSample(0, pcm.data(), kLoopLen, kSR);
+        s.setSlotLoop(0, true);
+        s.setSlotOneShot(0, false);
+        s.trigger(0);
+
+        std::vector<float> out;
+        runStereo(s, numBlocks, out);
+        REQUIRE(s.isPlaying(0));
+
+        const auto [maxStep, maxRmsDrift, globalRms] = analyzeOutput(out, numBlocks);
+
+        REQUIRE(maxStep < 0.12f);
+        REQUIRE(maxRmsDrift < 0.03f);
+        REQUIRE(globalRms > 0.1f);
+    }
 }
 
 TEST_CASE("Sampler -- gain applies correctly", "[sampler]")

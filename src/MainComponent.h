@@ -115,6 +115,7 @@ private:
     juce::Label samplerLabel_;
     juce::TextButton loadProjectButton_;
     juce::TextButton saveProjectButton_;
+    juce::TextButton filesMenuButton_;
     ui::StepSequencerPanel stepSeqPanel_ { stepSequencer_ };
 
     // ── Sidebar upper: already covered by audioSettingsButton_, mainMixSlider_ ──
@@ -196,6 +197,8 @@ private:
     //==========================================================================
     // State
     //==========================================================================
+    int  autosaveTick_     { 0 };
+    int  autosaveFadeTimer_{ 0 };
     std::atomic<float> currentRmsLevel_{0.0f};
     std::atomic<float> currentOutputRmsLevel_{0.0f};
     std::atomic<float> outputGain_     {1.0f};
@@ -213,6 +216,12 @@ private:
     ::dsp::SynthEffect* findSynthEffect() noexcept;
     void applyProjectData(const project::ProjectData& data);
     void saveProject();
+    void saveProjectToFile(const juce::File& f);
+    void showFilesMenu();
+    void newProject();
+    void doLoadProject();
+    void openAudioSettings();
+    void doAutosave();
     static juce::String frequencyToNoteName(float hz);
 
     // Scene management

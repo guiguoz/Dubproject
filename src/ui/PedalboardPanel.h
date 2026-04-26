@@ -177,6 +177,13 @@ class PedalboardPanel : public juce::Component, private juce::Timer
             const int idx = i;
             unit->onRemove = [this, idx] { chain_.removeEffect(idx); rebuild(); };
 
+            if (fx->type() == ::dsp::EffectType::Synth)
+            {
+                unit->onToggle = [this, idx](bool enabled) {
+                    if (enabled) { chain_.moveEffect(idx, 0); rebuild(); }
+                };
+            }
+
             inner_.addAndMakeVisible(*unit);
             units_.push_back(std::move(unit));
         }
@@ -320,7 +327,10 @@ class PedalboardPanel : public juce::Component, private juce::Timer
                 case 11: fx = std::make_unique<::dsp::SynthEffect>();          break;
                 default: return;
                 }
+                const bool isSynth = (result == 11);
                 chain_.addEffect(std::move(fx));
+                if (isSynth && chain_.effectCount() > 1)
+                    chain_.moveEffect(chain_.effectCount() - 1, 0);
                 rebuild();
             });
     }

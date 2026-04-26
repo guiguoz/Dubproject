@@ -202,7 +202,7 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ./build/tests/Release/SaxFXTests.exe
 ```
 
-184 tests (Catch2 v3.5.4). Current status: 183/184 pass (1 flaky timing test).
+198 tests (Catch2 v3.5.4). Current status: 197/198 pass (1 flaky timing test — ONNX inference thread).
 
 ---
 
@@ -221,6 +221,7 @@ Dubproject/   (nom du dossier local peut varier)
 │   │   ├── EffectChainOptimizer  AI-driven parameter optimization
 │   │   ├── SmartMixEngine.h      Intelligent defaults + genre overrides
 │   │   ├── SynthEffect.h/.cpp    Pitch-tracking synth (22 presets)
+│   │   ├── KeyboardSynth.h/.cpp  Keyboard solo synth (Mono/Legato, ADSR, Glide, PolyBLEP, 6 presets)
 │   │   ├── DelayEffect.h/.cpp    Tempo-synced delay (5 presets)
 │   │   ├── SlicerEffect.h/.cpp   Rhythmic gate (15 built-in presets)
 │   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
@@ -306,6 +307,24 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 19** | Done | DSP fixes: Synth wet-only, effect chain debug, sampler/sax mix balance |
 | **Sprint 20** | Done | Robust pitch tracking: YIN DC blocker, median filter, pipeline log-smoothing |
 | **Sprint 21** | Done | Sequencer & Sampler Scene Transitions: Graceful fade-out, async boundary lock-free, loop bleed (Option A) |
+| **Sprint 22** | Done | KeyboardSynth (Mono/Legato + ADSR + Glide + Velocity + PolyBLEP + Filter Env + 6 presets) + UX fixes |
+
+### Sprint 22 — KeyboardSynth + UX fixes
+
+| Feature | Description |
+|---------|-------------|
+| **KeyboardSynth** | Nouveau synthé dédié au clavier MIDI (classe `KeyboardSynth`, `src/dsp/`) — indépendant du `SynthEffect` pitch-tracker |
+| Mono / Legato | Mode mono avec note-stack (last-note priority) ; legato = pas de retrigger d'enveloppe quand une note est déjà active |
+| ADSR complet | Attack + **Decay** + Sustain + Release (params 5, 9, 8, 6) ; Sustain = 0 → décroissance totale |
+| Portamento (Glide) | Filtre exponentiel sur `currentHz` → `targetHz` : 99 % de convergence en `glideTime` (param 10, 0–500 ms, mono uniquement) |
+| Velocity scaling | Param 11 `VelAmt` : 0 = niveau plat, 1 = amplitude proportionnelle à la vélocité MIDI |
+| PolyBLEP | Anti-aliasing 2 échantillons sur les discontinuités de Saw (phase wrap) et Square (0 et 0.5) — suppression des repliements sans filtre |
+| Enveloppe de filtre | Param 12 `FiltEnvAmt` module la coupure SVF de 0 à +3 octaves via le niveau ADSR (`cutOffHz × exp(amt × envAmp × 3×ln2)`) |
+| 6 presets dub | Classic Mono Lead, Acid Dub, Sub Bass, Warm Chord, Reggae Stab, Gritty Lead |
+| Fix BPM au chargement | `applyProjectData()` appelle désormais `updateSidebarBpm()` — la sidebar affichait l'ancien tempo après rechargement de projet |
+| COPY scene PopupMenu | `copyCurrentSceneToNext()` remplacé par un `juce::PopupMenu` listant les scènes existantes (sauf la courante) — choix de la source |
+| Indicateur IA dégradé | `PixelCloudComponent` passe en rouge (`State::Disabled`) quand `SmartSamplerEngine` a utilisé la voie heuristique (fallback sans ONNX) |
+| Tests | 13 tests `[keyboard]` couvrant ADSR, release, velocity, legato, note-stack, glide, poly — 197/198 au global |
 
 ### Sprint 21 — Sequencer & Sampler Scene Transitions
 

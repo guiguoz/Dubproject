@@ -27,9 +27,14 @@ public:
     enum class ScaleType { Major, Minor, PentatonicMaj, PentatonicMin, Blues, Dorian };
 
     // ── Callbacks wired by MainComponent ─────────────────────────────────────
-    std::function<void(float hz)> onNoteOn;
+    std::function<void(float hz)> onNoteOn;   // conservé mais non câblé (sax SynthEffect)
     std::function<void()>         onNoteOff;
     std::function<void(int paramIdx, float value)> onSynthParam;
+
+    // Keyboard synth indépendant (MIDI note int, pas Hz)
+    std::function<void(int midiNote)> onKeyNoteOn;
+    std::function<void(int midiNote)> onKeyNoteOff;
+    std::function<void(float gain)>   onVolumeChanged;
 
     // ── Constructor ───────────────────────────────────────────────────────────
     PianoKeyboardPanel()
@@ -90,6 +95,23 @@ public:
             addAndMakeVisible(paramLabels_[i]);
         }
 
+        // Volume slider clavier
+        volumeSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+        volumeSlider_.setRange(0.0, 1.5, 0.01);
+        volumeSlider_.setValue(0.5, juce::dontSendNotification);
+        volumeSlider_.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        volumeSlider_.setTooltip("Volume clavier");
+        volumeSlider_.onValueChange = [this] {
+            if (onVolumeChanged)
+                onVolumeChanged(static_cast<float>(volumeSlider_.getValue()));
+        };
+        volumeLabel_.setText("Vol", juce::dontSendNotification);
+        volumeLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+        volumeLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
+        volumeLabel_.setJustificationType(juce::Justification::centred);
+        addAndMakeVisible(volumeSlider_);
+        addAndMakeVisible(volumeLabel_);
+
         rebuildScaleSet();
         updateOctaveLabel();
     }
@@ -119,12 +141,14 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        // Top bar: scale combo + octave nav
+        // Top bar: scale combo + vol slider + octave nav
         const int topH = 28;
         scaleCombo_   .setBounds(8,         4, 160, topH - 8);
-        octaveDownBtn_.setBounds(W - 100,   4,  24, topH - 8);
-        octaveLabel_  .setBounds(W -  72,   4,  44, topH - 8);
-        octaveUpBtn_  .setBounds(W -  28,   4,  24, topH - 8);
+        volumeLabel_  .setBounds(W - 200,   4,  24, topH - 8);
+        volumeSlider_ .setBounds(W - 175,   4,  80, topH - 8);
+        octaveDownBtn_.setBounds(W -  90,   4,  24, topH - 8);
+        octaveLabel_  .setBounds(W -  62,   4,  44, topH - 8);
+        octaveUpBtn_  .setBounds(W -  18,   4,  24, topH - 8);
 
         // Bottom bar: param sliders
         const int paramH  = 60;
@@ -160,15 +184,16 @@ public:
         if (note >= 0)
         {
             pressedNote_ = note;
-            if (onNoteOn) onNoteOn(midiToHz(note));
+            if (onKeyNoteOn) onKeyNoteOn(note);
             repaint();
         }
     }
 
     void mouseUp(const juce::MouseEvent&) override
     {
+        const int released = pressedNote_;
         pressedNote_ = -1;
-        if (onNoteOff) onNoteOff();
+        if (onKeyNoteOff && released >= 0) onKeyNoteOff(released);
         repaint();
     }
 
@@ -177,8 +202,10 @@ public:
         const int note = hitTestKey(e.x, e.y);
         if (note >= 0 && note != pressedNote_)
         {
+            const int prev = pressedNote_;
             pressedNote_ = note;
-            if (onNoteOn) onNoteOn(midiToHz(note));
+            if (onKeyNoteOff && prev >= 0) onKeyNoteOff(prev);
+            if (onKeyNoteOn) onKeyNoteOn(note);
             repaint();
         }
     }
@@ -361,6 +388,8 @@ private:
     juce::ComboBox   scaleCombo_;
     juce::TextButton octaveDownBtn_, octaveUpBtn_;
     juce::Label      octaveLabel_;
+    juce::Slider     volumeSlider_;
+    juce::Label      volumeLabel_;
 
     std::array<juce::Slider, kNumParams> paramSliders_;
     std::array<juce::Label,  kNumParams> paramLabels_;

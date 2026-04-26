@@ -68,6 +68,7 @@ Ordre logique stéréo (résumé) :
 | Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin |
 | Pipeline / ordre traitement | `DspPipeline.*`, éventuellement `MainComponent` (routing) |
 | Sampler / grille | `Sampler.*`, `StepSequencer.*`, `SmartSamplerEngine.*`, UI `StepSequencerPanel` |
+| Clavier / synthé solo | `KeyboardSynth.*`, `DspPipeline.*` (intégration SPSC noteOn/noteOff), `PianoKeyboardPanel.h` |
 | Sauvegarde projet | `ProjectData.h`, `ProjectLoader.cpp` (migrations **version** JSON), toute UI qui sérialise |
 | Thème / boutons | `SaxOsLookAndFeel`, `NeonButton`, `Colours`, `SaxFXLayout` / `SaxFXFonts` |
 
@@ -82,7 +83,7 @@ Ordre logique stéréo (résumé) :
 cmake --build build --config Release --target SaxFXTests --parallel
 ```
 
-Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). Le README mentionne ~180 tests ; un test peut être flaky selon la machine.
+Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). Le README mentionne ~198 tests ; un test peut être flaky selon la machine (ONNX inference thread timing).
 
 ## Conventions Git
 

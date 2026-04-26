@@ -26,24 +26,9 @@ MainComponent::MainComponent()
     logoImage_ = juce::ImageCache::getFromMemory(
         BinaryData::logo_png, BinaryData::logo_pngSize);
 
-    // ── Audio settings button ─────────────────────────────────────────────────
+    // ── Audio settings button (masqué — accessible via menu FILES) ───────────
     audioSettingsButton_.setButtonText("AUDIO SETTINGS");
-    audioSettingsButton_.onClick = [this]
-    {
-        auto* selector = new juce::AudioDeviceSelectorComponent(deviceManager, 0, 1, 0, 2, true,
-                                                                false, false, false);
-        selector->setSize(500, 400);
-
-        juce::DialogWindow::LaunchOptions options;
-        options.content.setOwned(selector);
-        options.dialogTitle = "Audio Device Settings";
-        options.dialogBackgroundColour = juce::Colours::darkgrey;
-        options.escapeKeyTriggersCloseButton = true;
-        options.useNativeTitleBar = true;
-        options.resizable = false;
-        options.launchAsync();
-    };
-    addAndMakeVisible(audioSettingsButton_);
+    audioSettingsButton_.onClick = [this] { openAudioSettings(); };
 
     // ── Status / info labels ──────────────────────────────────────────────────
     infoLabel_.setJustificationType(juce::Justification::centred);
@@ -212,35 +197,17 @@ MainComponent::MainComponent()
     addAndMakeVisible(sidebarBpmLabel_);
     addAndMakeVisible(aiCloud_);
 
-    // ── Project buttons ───────────────────────────────────────────────────────
+    // ── Project buttons (masqués — accessibles via menu FILES) ───────────────
     saveProjectButton_.setButtonText("SAVE PROJECT");
     saveProjectButton_.onClick = [this] { saveProject(); };
-    addAndMakeVisible(saveProjectButton_);
 
     loadProjectButton_.setButtonText("LOAD PROJECT");
-    loadProjectButton_.onClick = [this]
-    {
-        auto chooser =
-            std::make_shared<juce::FileChooser>("Open SaxFX Project", juce::File{}, "*.saxfx");
+    loadProjectButton_.onClick = [this] { doLoadProject(); };
 
-        chooser->launchAsync(
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chooser](const juce::FileChooser& fc)
-            {
-                const auto results = fc.getResults();
-                if (results.isEmpty()) return;
-
-                auto data =
-                    project::ProjectLoader::load(results[0].getFullPathName().toStdString());
-                if (data.has_value())
-                    applyProjectData(*data);
-                else
-                    juce::AlertWindow::showMessageBoxAsync(
-                        juce::MessageBoxIconType::WarningIcon,
-                        "Load failed", "Could not parse the .saxfx file.");
-            });
-    };
-    addAndMakeVisible(loadProjectButton_);
+    // ── Menu FILES (barre de titre) ───────────────────────────────────────────
+    filesMenuButton_.setButtonText("FILES");
+    filesMenuButton_.onClick = [this] { showFilesMenu(); };
+    addAndMakeVisible(filesMenuButton_);
 
     // ── Step Sequencer panel ──────────────────────────────────────────────────
 
@@ -601,21 +568,18 @@ MainComponent::MainComponent()
 
     // ── Piano keyboard panel ──────────────────────────────────────────────────
     pianoKeyboardPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
-    pianoKeyboardPanel_.onNoteOn = [this](float hz) {
-        dspPipeline_.setForcedPitch(hz);
-        if (auto* se = findSynthEffect()) {
-            se->enabled.store(true, std::memory_order_relaxed);
-            se->setKeyGate(0.75f);
-        }
+    // onNoteOn / onNoteOff non câblés — le clavier est un instrument indépendant
+    pianoKeyboardPanel_.onKeyNoteOn  = [this](int note) {
+        dspPipeline_.keyboardNoteOn(note);
     };
-    pianoKeyboardPanel_.onNoteOff = [this]() {
-        dspPipeline_.clearForcedPitch();
-        if (auto* se = findSynthEffect())
-            se->setKeyGate(0.f);  // relâche l'enveloppe normalement
+    pianoKeyboardPanel_.onKeyNoteOff = [this](int note) {
+        dspPipeline_.keyboardNoteOff(note);
     };
     pianoKeyboardPanel_.onSynthParam = [this](int paramIdx, float value) {
-        if (auto* se = findSynthEffect())
-            se->setParam(paramIdx, value);
+        dspPipeline_.setKeyboardParam(paramIdx, value);
+    };
+    pianoKeyboardPanel_.onVolumeChanged = [this](float gain) {
+        dspPipeline_.setKeyboardGain(gain);
     };
     pianoKeyboardPanel_.setVisible(false);
     addAndMakeVisible(pianoKeyboardPanel_);
@@ -1132,6 +1096,90 @@ void MainComponent::openSampleEditor(int slot)
     sampleEditorWindow_->setVisible(true);
 }
 
+void MainComponent::saveProjectToFile(const juce::File& f)
+{
+    auto path = f.getFullPathName();
+    if (!path.endsWithIgnoreCase(".saxfx"))
+        path += ".saxfx";
+
+    project::ProjectData data;
+    data.projectName = "SaxFX Project";
+    data.bpm         = stepSequencer_.getBpm();
+
+    // ── Effect chain ──────────────────────────────────────────────────────
+    const auto aiFlags = effectChainEditor_.captureAiManagedFlags();
+    project::ProjectLoader::captureChain(dspPipeline_.getEffectChain(), data, aiFlags);
+
+    // ── Music context ─────────────────────────────────────────────────────
+    const auto& ctx  = effectChainEditor_.getMusicContext();
+    data.musicContext.bpm     = ctx.bpm;
+    data.musicContext.keyRoot = ctx.keyRoot;
+    data.musicContext.isMajor = ctx.isMajor;
+    data.musicContext.style   = static_cast<int>(ctx.style);
+
+    // ── Sampler slots + step patterns ─────────────────────────────────────
+    auto& sampler = dspPipeline_.getSampler();
+    for (int i = 0; i < 9; ++i)
+    {
+        auto& sc    = data.samples[static_cast<std::size_t>(i)];
+        sc.filePath = stepSeqPanel_.getSlotFilePath(i);
+        sc.gain     = sampler.getSlotGain(i);
+        sc.loop     = false;
+        sc.oneShot  = true;
+        sc.muted    = sampler.isSlotMuted(i);
+        sc.gridDiv  = 0;
+        for (int s = 0; s < 16; ++s)
+            sc.stepPattern[s] = stepSequencer_.getStep(i, s);
+    }
+
+    // ── AI mix states ─────────────────────────────────────────────────────
+    for (int i = 0; i < 9; ++i)
+    {
+        const auto ms = samplerEngine_.getSlotMixState(i);
+        auto& sm      = data.slotMix[static_cast<std::size_t>(i)];
+        sm.gain    = ms.gain;
+        sm.pan     = ms.pan;
+        sm.width   = ms.width;
+        sm.depth   = ms.depth;
+        sm.applied = ms.active;
+    }
+
+    // ── Master key ────────────────────────────────────────────────────────
+    data.masterKeyRoot  = masterKeyRoot_;
+    data.masterKeyMajor = masterKeyMajor_;
+
+    // ── Scenes ────────────────────────────────────────────────────────────
+    captureCurrentScene();
+    data.currentScene = currentScene_;
+    for (int si = 0; si < kMaxScenes; ++si)
+    {
+        const auto& src = scenes_[static_cast<std::size_t>(si)];
+        auto& dst       = data.scenes[static_cast<std::size_t>(si)];
+        dst.used           = src.used;
+        dst.bpm            = src.bpm;
+        dst.filePaths      = src.filePaths;
+        dst.mutes          = src.mutes;
+        dst.gains          = src.gains;
+        dst.trackBarCounts = src.trackBarCounts;
+        dst.trimStart      = src.trimStart;
+        dst.trimEnd        = src.trimEnd;
+        for (int t = 0; t < 9; ++t)
+        {
+            const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
+            for (int s = 0; s < numSteps; ++s)
+                dst.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s)] =
+                    src.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s)];
+        }
+    }
+
+    if (project::ProjectLoader::save(data, path.toStdString()))
+        juce::Logger::writeToLog("Project saved: " + path);
+    else
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon, "Save failed",
+            "Could not write to " + path + ".");
+}
+
 void MainComponent::saveProject()
 {
     auto chooser = std::make_shared<juce::FileChooser>(
@@ -1143,91 +1191,98 @@ void MainComponent::saveProject()
         {
             const auto results = fc.getResults();
             if (results.isEmpty()) return;
+            saveProjectToFile(results[0]);
+        });
+}
 
-            project::ProjectData data;
-            data.projectName = "SaxFX Project";
-            data.bpm         = stepSequencer_.getBpm();
+void MainComponent::showFilesMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "New Project");
+    menu.addItem(2, "Load Project");
+    menu.addItem(3, "Save Project");
+    menu.addSeparator();
+    menu.addItem(4, "Audio Settings");
 
-            // ── Effect chain ──────────────────────────────────────────────
-            const auto aiFlags = effectChainEditor_.captureAiManagedFlags();
-            project::ProjectLoader::captureChain(
-                dspPipeline_.getEffectChain(), data, aiFlags);
-
-            // ── Music context ─────────────────────────────────────────────
-            const auto& ctx  = effectChainEditor_.getMusicContext();
-            data.musicContext.bpm     = ctx.bpm;
-            data.musicContext.keyRoot = ctx.keyRoot;
-            data.musicContext.isMajor = ctx.isMajor;
-            data.musicContext.style   = static_cast<int>(ctx.style);
-
-            // ── Sampler slots + step patterns ─────────────────────────────
-            auto& sampler = dspPipeline_.getSampler();
-            for (int i = 0; i < 9; ++i)
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetComponent(filesMenuButton_)
+            .withMinimumWidth(180),
+        [this](int result)
+        {
+            switch (result)
             {
-                auto& sc    = data.samples[static_cast<std::size_t>(i)];
-                sc.filePath = stepSeqPanel_.getSlotFilePath(i);
-                sc.gain     = sampler.getSlotGain(i);   // actual runtime gain
-                sc.loop     = false;
-                sc.oneShot  = true;
-                sc.muted    = sampler.isSlotMuted(i);
-                sc.gridDiv  = 0;
-                for (int s = 0; s < 16; ++s)
-                    sc.stepPattern[s] = stepSequencer_.getStep(i, s);
+                case 1: newProject();        break;
+                case 2: doLoadProject();     break;
+                case 3: saveProject();       break;
+                case 4: openAudioSettings(); break;
+                default: break;
             }
+        });
+}
 
-            // ── AI mix states (gain, pan, width, depth) ───────────────────
-            for (int i = 0; i < 9; ++i)
+void MainComponent::newProject()
+{
+    juce::AlertWindow::showOkCancelBox(
+        juce::AlertWindow::WarningIcon,
+        "New Project",
+        "Creer un nouveau projet ?\nToutes les scenes seront effacees.",
+        "Nouveau projet", "Annuler", nullptr,
+        juce::ModalCallbackFunction::create([this](int result)
+        {
+            if (result == 1)
             {
-                const auto ms = samplerEngine_.getSlotMixState(i);
-                auto& sm      = data.slotMix[static_cast<std::size_t>(i)];
-                sm.gain    = ms.gain;
-                sm.pan     = ms.pan;
-                sm.width   = ms.width;
-                sm.depth   = ms.depth;
-                sm.applied = ms.active;
+                project::ProjectData empty{};
+                applyProjectData(empty);
             }
+        }));
+}
 
-            // ── Master key ────────────────────────────────────────────────
-            data.masterKeyRoot  = masterKeyRoot_;
-            data.masterKeyMajor = masterKeyMajor_;
+void MainComponent::doLoadProject()
+{
+    auto chooser =
+        std::make_shared<juce::FileChooser>("Open SaxFX Project", juce::File{}, "*.saxfx");
 
-            // ── Scenes ────────────────────────────────────────────────────
-            captureCurrentScene();  // make sure current scene is up to date
-            data.currentScene = currentScene_;
-            for (int si = 0; si < kMaxScenes; ++si)
-            {
-                const auto& src = scenes_[static_cast<std::size_t>(si)];
-                auto& dst       = data.scenes[static_cast<std::size_t>(si)];
-                dst.used           = src.used;
-                dst.bpm            = src.bpm;
-                dst.filePaths      = src.filePaths;
-                dst.mutes          = src.mutes;
-                dst.gains          = src.gains;
-                dst.trackBarCounts = src.trackBarCounts;
-                dst.trimStart      = src.trimStart;
-                dst.trimEnd        = src.trimEnd;
-                for (int t = 0; t < 9; ++t)
-                {
-                    const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
-                    for (int s = 0; s < numSteps; ++s)
-                        dst.steps[static_cast<std::size_t>(t)]
-                                 [static_cast<std::size_t>(s)] =
-                            src.steps[static_cast<std::size_t>(t)]
-                                     [static_cast<std::size_t>(s)];
-                }
-            }
+    chooser->launchAsync(
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this, chooser](const juce::FileChooser& fc)
+        {
+            const auto results = fc.getResults();
+            if (results.isEmpty()) return;
 
-            auto path = results[0].getFullPathName();
-            if (!path.endsWithIgnoreCase(".saxfx"))
-                path += ".saxfx";
-
-            if (project::ProjectLoader::save(data, path.toStdString()))
-                juce::Logger::writeToLog("Project saved: " + path);
+            auto data = project::ProjectLoader::load(results[0].getFullPathName().toStdString());
+            if (data.has_value())
+                applyProjectData(*data);
             else
                 juce::AlertWindow::showMessageBoxAsync(
-                    juce::MessageBoxIconType::WarningIcon, "Save failed",
-                    "Could not write to " + path + ".");
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Load failed", "Could not parse the .saxfx file.");
         });
+}
+
+void MainComponent::openAudioSettings()
+{
+    auto* selector = new juce::AudioDeviceSelectorComponent(
+        deviceManager, 0, 1, 0, 2, true, false, false, false);
+    selector->setSize(500, 400);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(selector);
+    options.dialogTitle            = "Audio Device Settings";
+    options.dialogBackgroundColour = juce::Colours::darkgrey;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.launchAsync();
+}
+
+void MainComponent::doAutosave()
+{
+    const auto dir = juce::File::getSpecialLocation(
+        juce::File::userApplicationDataDirectory).getChildFile("DubEngine");
+    dir.createDirectory();
+    saveProjectToFile(dir.getChildFile("autosave.saxfx"));
+    autosaveFadeTimer_ = 120;
 }
 
 void MainComponent::applyProjectData(const project::ProjectData& data)
@@ -1237,6 +1292,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     stepSequencer_.setBpm(bpm);
     dspPipeline_.setBpm(bpm);
     stepSeqPanel_.setBpm(bpm);
+    updateSidebarBpm(bpm);
 
     // Load samples and restore step patterns
     for (int i = 0; i < 9; ++i)
@@ -1535,6 +1591,15 @@ void MainComponent::paint(juce::Graphics& g)
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(13.f).withStyle("Bold")));
         g.drawText(pitchLabel_.getText(), sidebarX - 180, 0, 170, kHeaderH,
                    juce::Justification::centredRight);
+
+        // Indicateur autosave (fade sur 4 s)
+        if (autosaveFadeTimer_ > 0)
+        {
+            const float alpha = juce::jmin(1.f, autosaveFadeTimer_ / 30.f) * 0.60f;
+            g.setColour(ui::SaxFXColours::vuLow.withAlpha(alpha));
+            g.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+            g.drawText("AUTOSAVED", 292, 0, 90, kHeaderH, juce::Justification::centredLeft);
+        }
     }
 
     // ── Sidebar background ────────────────────────────────────────────────────
@@ -1618,16 +1683,9 @@ void MainComponent::paint(juce::Graphics& g)
         }
     }
 
-    // ── Sidebar separator line before buttons ─────────────────────────────────
-    {
-        const int sepY = kHeaderH + 320;
-        g.setColour(ui::SaxFXColours::cardBorder);
-        g.fillRect(sidebarX + 12, sepY, kSidebarW - 24, 1);
-    }
-
     // ── Sidebar separator before transport ────────────────────────────────────
     {
-        const int sepY = kHeaderH + 490;
+        const int sepY = kHeaderH + 382;
         g.setColour(ui::SaxFXColours::cardBorder);
         g.fillRect(sidebarX + 12, sepY, kSidebarW - 24, 1);
     }
@@ -1636,16 +1694,12 @@ void MainComponent::paint(juce::Graphics& g)
     {
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(8.f)));
         g.setColour(ui::SaxFXColours::textSecondary.withAlpha(0.50f));
-        g.drawText("PROJECT", sidebarX + 12, kHeaderH + 328, kSidebarW - 24, 10,
-                   juce::Justification::centredLeft);
-        g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 498, kSidebarW - 24, 10,
+        g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 385, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // Labels pour KEY et VIEW — positions miroir de resized() (après COPY)
-        // kHeaderH + 637 + 8 = kHeaderH + 645 → KEY
-        // kHeaderH + 645 + 30 = kHeaderH + 675 → VIEW
-        const int masterKeyY_p = kHeaderH + 645;
-        const int viewBtnY_p   = kHeaderH + 675;
+        // Labels KEY et VIEW — miroir des positions dans resized() (yFlow = kHeaderH+519)
+        const int masterKeyY_p = kHeaderH + 519;
+        const int viewBtnY_p   = kHeaderH + 549;
         g.drawText("KEY",  sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
         g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
@@ -1720,6 +1774,9 @@ void MainComponent::resized()
     const int sbBtnW = kSidebarW - 24;
     const int sbBtnX = sidebarX + 12;
 
+    // ── Bouton FILES dans le header ──────────────────────────────────────────
+    filesMenuButton_.setBounds(222, (kHeaderH - 22) / 2, 64, 22);
+
     // ════════════════════════════════════════════════════════════════════════
     // SIDEBAR — unified top to bottom
     // ════════════════════════════════════════════════════════════════════════
@@ -1738,36 +1795,31 @@ void MainComponent::resized()
 
         // VU meters drawn in paint() at kHeaderH+140
 
-        // ── PROJECT section ──────────────────────────────────────────────
-        // Separator + label drawn in paint()
-        int y = kHeaderH + 342;
-        saveProjectButton_  .setBounds(sbBtnX, y, sbBtnW, 28); y += 32;
-        loadProjectButton_  .setBounds(sbBtnX, y, sbBtnW, 28); y += 32;
-        audioSettingsButton_.setBounds(sbBtnX, y, sbBtnW, 28);
+        // Boutons projet déplacés dans le menu FILES — masqués ici
+        saveProjectButton_  .setBounds(0, 0, 0, 0);
+        loadProjectButton_  .setBounds(0, 0, 0, 0);
+        audioSettingsButton_.setBounds(0, 0, 0, 0);
+        sceneTrackResetBtn_ .setBounds(0, 0, 0, 0);
 
-        // Info label (tiny, below audio settings)
-        infoLabel_.setBounds(sidebarX, kHeaderH + 436, kSidebarW, 10);
+        // Info label
+        infoLabel_.setBounds(sidebarX, kHeaderH + 308, kSidebarW, 10);
 
         // ── SPATIAL pad ─────────────────────────────────────────────────
-        spatialViz_.setBounds(sbBtnX, kHeaderH + 450, sbBtnW, 58);
+        spatialViz_.setBounds(sbBtnX, kHeaderH + 320, sbBtnW, 58);
 
         // ── TRANSPORT section ────────────────────────────────────────────
-        // Separator + label drawn in paint()
-        y = kHeaderH + 512;
+        // Separator + label drawn in paint() at kHeaderH+382/385
+        int y = kHeaderH + 394;
         sceneUpBtn_   .setBounds(sbBtnX, y, sbBtnW, 26); y += 28;
         sceneNumLabel_.setBounds(sbBtnX, y, sbBtnW, 18); y += 20;
         sceneDownBtn_ .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
-        {
-            const int half = (sbBtnW - 2) / 2;
-            sceneResetBtn_     .setBounds(sbBtnX,          y, half,            22);
-            sceneTrackResetBtn_.setBounds(sbBtnX + half + 2, y, sbBtnW - half - 2, 22);
-        }
+        sceneResetBtn_.setBounds(sbBtnX, y, sbBtnW, 22); // pleine largeur
         y += 25;
         sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);
 
         // ── Section sous COPY : KEY/MODE, clavier/portée, PLAY, nuage IA ──
-        // sceneCopyBtn_ se termine à kHeaderH + 512 + 103 + 22 = kHeaderH + 637
-        int yFlow = kHeaderH + 637 + 8;   // +8 gap après COPY
+        // yFlow = kHeaderH + 394 + 26+28+18+20+26+30+22+25+22 + 8 = kHeaderH + 519
+        int yFlow = kHeaderH + 519;
 
         const int halfW = sbBtnW / 2 - 2;
 
@@ -1817,6 +1869,15 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    // Autosave toutes les 5 min (30 fps × 300 s = 9000 ticks)
+    if (++autosaveTick_ >= 9000)
+    {
+        autosaveTick_ = 0;
+        doAutosave();
+    }
+    if (autosaveFadeTimer_ > 0)
+        --autosaveFadeTimer_;
+
     // Transition de scène quantisée : appliquée à la fin du cycle du séquenceur
     if (pendingScene_.load(std::memory_order_relaxed) >= 0
         && stepSequencer_.consumeSceneEnd())
@@ -1859,7 +1920,9 @@ void MainComponent::timerCallback()
     if (samplerEngine_.isBusy())
         aiCloud_.setState(ui::PixelCloudComponent::State::Working);
     else if (samplerEngine_.isMagicActive())
-        aiCloud_.setState(ui::PixelCloudComponent::State::Active);
+        aiCloud_.setState(samplerEngine_.didLastMixUseFallback()
+                              ? ui::PixelCloudComponent::State::Disabled   // rouge = fallback heuristique
+                              : ui::PixelCloudComponent::State::Active);   // vert = IA réelle
     else
         aiCloud_.setState(ui::PixelCloudComponent::State::Disabled);
 
@@ -2155,12 +2218,32 @@ void MainComponent::resetCurrentSceneFull()
 
 void MainComponent::copyCurrentSceneToNext()
 {
-    if (currentScene_ == 0) return;   // no previous scene
-    const int prevIdx = currentScene_ - 1;
-    captureCurrentScene();   // save current state first
-    scenes_[static_cast<std::size_t>(currentScene_)] = scenes_[static_cast<std::size_t>(prevIdx)];
-    scenes_[static_cast<std::size_t>(currentScene_)].used = true;
-    applyScene(currentScene_);
-    juce::Logger::writeToLog("Scene " + juce::String(prevIdx + 1) +
-                             " copied into scene " + juce::String(currentScene_ + 1));
+    // Construire le menu avec les scènes existantes (sauf la scène courante)
+    juce::PopupMenu menu;
+    int itemId = 1;
+    for (int i = 0; i < kMaxScenes; ++i)
+    {
+        if (i == currentScene_ || !scenes_[static_cast<std::size_t>(i)].used)
+            { ++itemId; continue; }
+        menu.addItem(itemId, "Scene " + juce::String(i + 1));
+        ++itemId;
+    }
+
+    if (menu.getNumItems() == 0)
+        return;  // aucune autre scène existante — ne rien faire
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetComponent(&sceneCopyBtn_),
+        [this](int result)
+        {
+            if (result <= 0) return;
+            const int srcIdx = result - 1;  // itemId = index + 1
+            captureCurrentScene();
+            scenes_[static_cast<std::size_t>(currentScene_)] =
+                scenes_[static_cast<std::size_t>(srcIdx)];
+            scenes_[static_cast<std::size_t>(currentScene_)].used = true;
+            applyScene(currentScene_);
+            juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
+                                     " copied into scene " + juce::String(currentScene_ + 1));
+        });
 }

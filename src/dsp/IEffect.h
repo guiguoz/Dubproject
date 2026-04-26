@@ -82,6 +82,11 @@ public:
     virtual const char* presetName(int /*index*/)    const noexcept { return ""; }
     virtual void        applyPreset(int /*index*/)         noexcept {}
 
+    /// Preferred YIN confidence threshold for this effect's active preset.
+    /// DspPipeline reads this each block to override kConfidenceGate.
+    /// Return -1 to use the pipeline default.
+    virtual float confidenceHint() const noexcept { return -1.f; }
+
     // Enable / disable without removing from the chain.
     std::atomic<bool> enabled { true };
 

@@ -37,12 +37,14 @@ add_executable(SaxFXTests
     test_ai_classifier.cpp
     test_feature_extractor.cpp
     test_ai_mix_engine.cpp
+    test_keyboard_synth.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/YinPitchTracker.cpp
     ../src/dsp/WsolaShifter.cpp
     ../src/dsp/Flanger.cpp
     ../src/dsp/Harmonizer.cpp
     ../src/dsp/Sampler.cpp
+    ../src/dsp/KeyboardSynth.cpp
     ../src/dsp/DspPipeline.cpp
     # Sprint 4 DSP layer (pure C++, no JUCE — ReverbEffect excluded)
     ../src/dsp/FlangerEffect.cpp

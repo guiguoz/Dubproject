@@ -3,6 +3,40 @@
 #include <cassert>
 #include <cmath>
 
+namespace {
+
+// Equal-power overlap crossfade at loop wrap (~23 ms @ 44.1 kHz). Dub-friendly for sub bass.
+constexpr int kLoopXfadeMax = 1024;
+constexpr int kLoopXfadeMin = 8;
+
+inline int loopXfadeSamples(int totalSamp) noexcept
+{
+    if (totalSamp < kLoopXfadeMin * 2)
+        return 0;
+    const int n = std::min(kLoopXfadeMax, totalSamp / 2);
+    return (n >= kLoopXfadeMin) ? n : 0;
+}
+
+inline float sampleLoopWithXfade(const float* data, int totalSamp, int readPos, bool loop) noexcept
+{
+    if (!loop)
+        return data[static_cast<std::size_t>(readPos)];
+    const int n = loopXfadeSamples(totalSamp);
+    if (n == 0)
+        return data[static_cast<std::size_t>(readPos)];
+    if (readPos < totalSamp - n)
+        return data[static_cast<std::size_t>(readPos)];
+    const float phase = static_cast<float>(readPos - (totalSamp - n)) / static_cast<float>(n);
+    constexpr float kHalfPi = 1.57079632679489661923f;
+    const float wOut = std::cos(phase * kHalfPi);
+    const float wIn  = std::sin(phase * kHalfPi);
+    const int headIdx = readPos - (totalSamp - n);
+    return data[static_cast<std::size_t>(readPos)] * wOut
+         + data[static_cast<std::size_t>(headIdx)] * wIn;
+}
+
+} // namespace
+
 namespace dsp {
 
 void Sampler::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
@@ -413,8 +447,17 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                 {
                     if (loop)
                     {
-                        vState.readPos = 0;
-                        vState.fadeIn  = 0;
+                        const int nxf = loopXfadeSamples(totalSamp);
+                        if (nxf > 0)
+                        {
+                            vState.readPos = nxf;
+                            vState.fadeIn  = kFadeInLen; // head already blended in xfade — skip note attack
+                        }
+                        else
+                        {
+                            vState.readPos = 0;
+                            vState.fadeIn  = 0;
+                        }
                     }
                     else
                     {
@@ -432,15 +475,9 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                         ++vState.fadeIn;
                     }
 
-                    float loopEndGain = 1.0f;
-                    if (loop)
-                    {
-                        const int remain = totalSamp - vState.readPos;
-                        if (remain > 0 && remain <= kRetriggerFadeOutLen)
-                            loopEndGain = static_cast<float>(remain) / static_cast<float>(kRetriggerFadeOutLen);
-                    }
-
-                    s_mix += gain * fadeGain * loopEndGain * sl.data[vState.dataIdx][static_cast<std::size_t>(vState.readPos)];
+                    const float* pcm = sl.data[vState.dataIdx].data();
+                    const float s = sampleLoopWithXfade(pcm, totalSamp, vState.readPos, loop);
+                    s_mix += gain * fadeGain * s;
                 }
                 ++vState.readPos;
             }
@@ -714,8 +751,25 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
 
                 if (vState.readPos >= totalSamp)
                 {
-                    if (loop) { vState.readPos = 0; vState.fadeIn = 0; }
-                    else       { vState.playing = false; continue; }
+                    if (loop)
+                    {
+                        const int nxf = loopXfadeSamples(totalSamp);
+                        if (nxf > 0)
+                        {
+                            vState.readPos = nxf;
+                            vState.fadeIn  = kFadeInLen;
+                        }
+                        else
+                        {
+                            vState.readPos = 0;
+                            vState.fadeIn  = 0;
+                        }
+                    }
+                    else
+                    {
+                        vState.playing = false;
+                        continue;
+                    }
                 }
 
                 if (!muted && !soloMuted)
@@ -728,15 +782,9 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
                         ++vState.fadeIn;
                     }
 
-                    float loopEndGain = 1.f;
-                    if (loop)
-                    {
-                        const int remain = totalSamp - vState.readPos;
-                        if (remain > 0 && remain <= kRetriggerFadeOutLen)
-                            loopEndGain = static_cast<float>(remain) / static_cast<float>(kRetriggerFadeOutLen);
-                    }
-
-                    s_mix += gain * fadeGain * loopEndGain * sl.data[vState.dataIdx][static_cast<std::size_t>(vState.readPos)];
+                    const float* pcm = sl.data[vState.dataIdx].data();
+                    const float s = sampleLoopWithXfade(pcm, totalSamp, vState.readPos, loop);
+                    s_mix += gain * fadeGain * s;
                 }
                 ++vState.readPos;
             }

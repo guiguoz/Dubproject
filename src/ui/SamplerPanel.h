@@ -141,14 +141,46 @@ private:
         std::unique_ptr<juce::AudioFormatReader> reader(fmt.createReaderFor(file));
         if (!reader) return;
 
-        const int numSamples = static_cast<int>(reader->lengthInSamples);
-        if (numSamples <= 0) return;
+        const int numCh = static_cast<int>(reader->numChannels);
+        const int numIn = static_cast<int>(reader->lengthInSamples);
+        if (numIn <= 0) return;
 
-        juce::AudioBuffer<float> buf(1, numSamples);
-        reader->read(&buf, 0, numSamples, 0, true, false);
+        // Lire tous les canaux, downmix → mono (somme / numCh)
+        juce::AudioBuffer<float> srcBuf(numCh, numIn);
+        reader->read(&srcBuf, 0, numIn, 0, true, numCh > 1);
 
-        sampler_.loadSample(slot, buf.getReadPointer(0), numSamples,
-                            static_cast<double>(reader->sampleRate));
+        std::vector<float> mono(static_cast<std::size_t>(numIn), 0.f);
+        const float invCh = 1.f / static_cast<float>(numCh);
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            const float* ptr = srcBuf.getReadPointer(ch);
+            for (int i = 0; i < numIn; ++i)
+                mono[i] += ptr[i] * invCh;
+        }
+
+        const double fileSR   = reader->sampleRate;
+        const double engineSR = sampler_.getSampleRate();
+
+        if (std::abs(fileSR / engineSR - 1.0) < 1e-4)
+        {
+            sampler_.loadSample(slot, mono.data(), numIn, engineSR);
+            return;
+        }
+
+        // Resampling offline — LagrangeInterpolator
+        const double speed  = fileSR / engineSR;
+        const int    numOut = static_cast<int>(std::ceil(static_cast<double>(numIn) / speed));
+
+        // Pad +4 samples (valeur finale répétée) pour éviter glitch en fin de buffer
+        std::vector<float> padded(mono.begin(), mono.end());
+        padded.resize(mono.size() + 4, padded.empty() ? 0.f : padded.back());
+
+        std::vector<float> dst(static_cast<std::size_t>(numOut));
+        juce::LagrangeInterpolator interp;
+        interp.reset();
+        interp.process(speed, padded.data(), dst.data(), numOut);
+
+        sampler_.loadSample(slot, dst.data(), numOut, engineSR);
     }
 
     // ── Members ───────────────────────────────────────────────────────────────

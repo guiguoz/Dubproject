@@ -3,6 +3,7 @@
 #include "BpmDetector.h"
 #include "EffectChain.h"
 #include "ExpressionMapper.h"
+#include "KeyboardSynth.h"
 #include "LockFreeQueue.h"
 #include "MasterLimiter.h"
 #include "Sampler.h"
@@ -14,6 +15,12 @@
 
 namespace dsp
 {
+
+struct KeyboardEvent {
+    int   note;   // MIDI note 0-127
+    float vel;    // 0..1
+    bool  on;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DspPipeline
@@ -111,15 +118,24 @@ class DspPipeline
     void setMasterLimiterEnabled(bool enabled) noexcept { masterLimiter_.setEnabled(enabled); }
     bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }
 
+    // ── Keyboard synth (GUI thread) ──────────────────────────────────────────
+    // Instrument indépendant, mixé dans le bus master après le sampler.
+    void keyboardNoteOn (int midiNote, float vel = 1.f) noexcept;
+    void keyboardNoteOff(int midiNote)                  noexcept;
+    void setKeyboardParam(int idx, float value) noexcept { keyboardSynth_.setParam(idx, value); }
+    void setKeyboardGain (float g)              noexcept { keyboardSynth_.setGain(g); }
+
   private:
     YinPitchTracker  pitchTracker_;
     EffectChain      effectChain_;
     Sampler          sampler_;
+    KeyboardSynth    keyboardSynth_;
     BpmDetector      bpmDetector_;
     ExpressionMapper expressionMapper_;
     MasterLimiter    masterLimiter_;
 
-    LockFreeQueue<SamplerEvent, 64> midiEventQueue_;
+    LockFreeQueue<SamplerEvent,   64> midiEventQueue_;
+    LockFreeQueue<KeyboardEvent,  64> keyboardEventQueue_;
 
     std::atomic<bool> samplerEnabled_{true};
     std::atomic<bool> duckingEnabled_{false};

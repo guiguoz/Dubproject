@@ -50,6 +50,12 @@ class SynthEffect : public IEffect
     const char* presetName(int index)     const noexcept override;
     void        applyPreset(int index)          noexcept override;
 
+    // Returns the confidence threshold stored by the last applyPreset() call.
+    float confidenceHint() const noexcept override
+    {
+        return presetConfidence_.load(std::memory_order_relaxed);
+    }
+
   private:
     // Parameter indices
     enum : int
@@ -62,6 +68,7 @@ class SynthEffect : public IEffect
         kAttack,
         kRelease,
         kMix,
+        kGlide,     // portamento time [0..0.5 s]  default 0
         kParamCount
     };
 
@@ -74,6 +81,10 @@ class SynthEffect : public IEffect
     std::atomic<float> attack_    { 0.005f }; // seconds
     std::atomic<float> release_   { 0.15f };  // seconds
     std::atomic<float> mix_       { 0.5f };
+    std::atomic<float> glide_     { 0.0f };   // seconds
+
+    // Per-preset YIN confidence threshold (read by DspPipeline via confidenceHint())
+    std::atomic<float> presetConfidence_ { 0.82f };
 
     // ── SuperSaw unison (7 voices) ──────────────────────────────────────────
     static constexpr int kNumVoices = 7;

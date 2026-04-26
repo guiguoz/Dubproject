@@ -12,6 +12,7 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     pitchTracker_.prepare(sampleRate, maxBlockSize);
     effectChain_.prepare(sampleRate, maxBlockSize);
     sampler_.prepare(sampleRate, maxBlockSize);
+    keyboardSynth_.prepare(sampleRate, maxBlockSize);
     bpmDetector_.prepare(sampleRate);
 
     tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
@@ -54,8 +55,22 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
     //    Only accept pitch when voiced (frequency in range, high confidence, audible RMS).
     //    Smooth in log2 domain (musical — equal intervals in cents).
     //    Hold last valid pitch on unvoiced, with 200ms timeout.
+    //    Per-preset confidence: active SynthEffect may advertise a tighter or looser
+    //    threshold via confidenceHint() (stored when applyPreset() is called).
+    float confGate = kConfidenceGate;
+    for (int ci = 0; ci < EffectChain::kMaxEffects; ++ci)
+    {
+        IEffect* ce = effectChain_.getActiveEffect(ci);
+        if (!ce) break;
+        if (ce->type() == EffectType::Synth
+            && ce->enabled.load(std::memory_order_relaxed))
+        {
+            const float hint = ce->confidenceHint();
+            if (hint > 0.f) { confGate = hint; break; }
+        }
+    }
     const bool voiced = (pitch.frequencyHz > 40.0f && pitch.frequencyHz < 2000.0f)
-                     && (pitch.confidence > kConfidenceGate)
+                     && (pitch.confidence > confGate)
                      && (rmsRunning_ > kRmsGate);
 
     if (voiced && stablePitch_ > 1.0f)
@@ -155,7 +170,18 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
         currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
     }
 
-    // 7. Final Master Limiter (Soft-Clipper safety net)
+    // 7. Keyboard synth indépendant — drain queue + mix additif mono
+    {
+        KeyboardEvent kevt;
+        while (keyboardEventQueue_.tryPop(kevt))
+        {
+            if (kevt.on) keyboardSynth_.noteOn(kevt.note, kevt.vel);
+            else         keyboardSynth_.noteOff(kevt.note);
+        }
+        keyboardSynth_.processMonoAdd(buffer, numSamples);
+    }
+
+    // 8. Final Master Limiter (Soft-Clipper safety net)
     masterLimiter_.process(buffer, numSamples);
 }
 
@@ -181,8 +207,20 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
     rmsLevel_.store(rmsRunning_, std::memory_order_relaxed);
 
     // 4. Pitch gating + log-domain smoothing (same logic as mono process())
+    float confGate = kConfidenceGate;
+    for (int ci = 0; ci < EffectChain::kMaxEffects; ++ci)
+    {
+        IEffect* ce = effectChain_.getActiveEffect(ci);
+        if (!ce) break;
+        if (ce->type() == EffectType::Synth
+            && ce->enabled.load(std::memory_order_relaxed))
+        {
+            const float hint = ce->confidenceHint();
+            if (hint > 0.f) { confGate = hint; break; }
+        }
+    }
     const bool voiced = (pitch.frequencyHz > 40.0f && pitch.frequencyHz < 2000.0f)
-                     && (pitch.confidence > kConfidenceGate)
+                     && (pitch.confidence > confGate)
                      && (rmsRunning_ > kRmsGate);
 
     if (voiced && stablePitch_ > 1.0f)
@@ -285,7 +323,18 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
     }
 
-    // 8. Master limiter on both channels independently
+    // 8. Keyboard synth indépendant — drain queue + mix additif stéréo
+    {
+        KeyboardEvent kevt;
+        while (keyboardEventQueue_.tryPop(kevt))
+        {
+            if (kevt.on) keyboardSynth_.noteOn(kevt.note, kevt.vel);
+            else         keyboardSynth_.noteOff(kevt.note);
+        }
+        keyboardSynth_.processStereoAdd(left, right, numSamples);
+    }
+
+    // 9. Master limiter on both channels independently
     masterLimiter_.process(left,  numSamples);
     masterLimiter_.process(right, numSamples);
 }
@@ -301,6 +350,16 @@ void DspPipeline::setSamplerEnabled(bool enabled) noexcept
 bool DspPipeline::isSamplerEnabled() const noexcept
 {
     return samplerEnabled_.load(std::memory_order_acquire);
+}
+
+void DspPipeline::keyboardNoteOn(int midiNote, float vel) noexcept
+{
+    keyboardEventQueue_.tryPush(KeyboardEvent{ midiNote, vel, true });
+}
+
+void DspPipeline::keyboardNoteOff(int midiNote) noexcept
+{
+    keyboardEventQueue_.tryPush(KeyboardEvent{ midiNote, 0.f, false });
 }
 
 PitchResult DspPipeline::getLastPitch() const noexcept
