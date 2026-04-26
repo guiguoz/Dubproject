@@ -3,6 +3,7 @@
 #include "Colours.h"
 #include "SaxOsLookAndFeel.h"
 #include "dsp/ScaleHarmonizer.h"  // for kMajorScale / kMinorScale tables
+#include "dsp/KeyboardSynth.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -35,6 +36,7 @@ public:
     std::function<void(int midiNote)> onKeyNoteOn;
     std::function<void(int midiNote)> onKeyNoteOff;
     std::function<void(float gain)>   onVolumeChanged;
+    std::function<void(int presetIdx)> onPreset;
 
     // ── Constructor ───────────────────────────────────────────────────────────
     PianoKeyboardPanel()
@@ -53,6 +55,18 @@ public:
             repaint();
         };
         addAndMakeVisible(scaleCombo_);
+
+        // Preset selector
+        presetCombo_.addItem("-- Preset --", 1);
+        for (int i = 0; i < ::dsp::KeyboardSynth::presetCount(); ++i)
+            presetCombo_.addItem(::dsp::KeyboardSynth::presetName(i), i + 2);
+        presetCombo_.setSelectedId(1, juce::dontSendNotification);
+        presetCombo_.onChange = [this] {
+            const int id = presetCombo_.getSelectedId();
+            if (id >= 2 && onPreset)
+                onPreset(id - 2);
+        };
+        addAndMakeVisible(presetCombo_);
 
         // Octave selector
         octaveDownBtn_.setButtonText("<");
@@ -141,9 +155,10 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        // Top bar: scale combo + vol slider + octave nav
+        // Top bar: scale combo | preset combo | ... | vol | octave
         const int topH = 28;
-        scaleCombo_   .setBounds(8,         4, 160, topH - 8);
+        scaleCombo_   .setBounds(  8,       4, 150, topH - 8);
+        presetCombo_  .setBounds(162,       4, 150, topH - 8);
         volumeLabel_  .setBounds(W - 200,   4,  24, topH - 8);
         volumeSlider_ .setBounds(W - 175,   4,  80, topH - 8);
         octaveDownBtn_.setBounds(W -  90,   4,  24, topH - 8);
@@ -386,6 +401,7 @@ private:
     // ── Members ───────────────────────────────────────────────────────────────
 
     juce::ComboBox   scaleCombo_;
+    juce::ComboBox   presetCombo_;
     juce::TextButton octaveDownBtn_, octaveUpBtn_;
     juce::Label      octaveLabel_;
     juce::Slider     volumeSlider_;

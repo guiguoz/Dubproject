@@ -581,6 +581,9 @@ MainComponent::MainComponent()
     pianoKeyboardPanel_.onVolumeChanged = [this](float gain) {
         dspPipeline_.setKeyboardGain(gain);
     };
+    pianoKeyboardPanel_.onPreset = [this](int idx) {
+        dspPipeline_.applyKeyboardPreset(idx);
+    };
     pianoKeyboardPanel_.setVisible(false);
     addAndMakeVisible(pianoKeyboardPanel_);
 

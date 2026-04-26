@@ -122,8 +122,9 @@ class DspPipeline
     // Instrument indépendant, mixé dans le bus master après le sampler.
     void keyboardNoteOn (int midiNote, float vel = 1.f) noexcept;
     void keyboardNoteOff(int midiNote)                  noexcept;
-    void setKeyboardParam(int idx, float value) noexcept { keyboardSynth_.setParam(idx, value); }
-    void setKeyboardGain (float g)              noexcept { keyboardSynth_.setGain(g); }
+    void setKeyboardParam   (int idx, float value) noexcept { keyboardSynth_.setParam(idx, value); }
+    void setKeyboardGain    (float g)              noexcept { keyboardSynth_.setGain(g); }
+    void applyKeyboardPreset(int idx)              noexcept { keyboardSynth_.applyPreset(idx); }
 
   private:
     YinPitchTracker  pitchTracker_;
