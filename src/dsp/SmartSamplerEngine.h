@@ -159,6 +159,19 @@ public:
     bool isMagicActive()       const noexcept { return magicActive_         .load(std::memory_order_acquire); }
     bool didLastMixUseFallback() const noexcept { return lastMixUsedFallback_.load(std::memory_order_acquire); }
 
+    // ── Keyboard integration ──────────────────────────────────────────────────
+    // Called by MainComponent when the user selects a KeyboardSynth preset.
+    // applyNeutronMix() uses this to duck competing sampler slots and suggest
+    // a normalised keyboard gain via onKeyboardGainSuggested.
+    void setKeyboardPreset(int idx) noexcept
+    {
+        keyboardPresetIdx_.store(idx, std::memory_order_relaxed);
+    }
+
+    // Fired at the end of applyNeutronMix() (background thread) with the
+    // suggested gain for the KeyboardSynth.  Wire to dspPipeline_.setKeyboardGain.
+    std::function<void(float)> onKeyboardGainSuggested;
+
     // ── Content type API ──────────────────────────────────────────────────────
 
     ContentType getDetectedType(int slot) const noexcept
@@ -981,6 +994,55 @@ private:
         }
 
         lastMixUsedFallback_.store(!usedAi, std::memory_order_release);
+
+        // ── Keyboard-aware adjustment ─────────────────────────────────────────
+        // If a KeyboardSynth preset is active, duck sampler slots to leave room:
+        //   • -0.7 dB globally (kGlobalDuck)
+        //   • additional duck on the slot that competes most with the preset
+        // Then fire onKeyboardGainSuggested so the audio thread / UI can update.
+        const int kbPreset = keyboardPresetIdx_.load(std::memory_order_relaxed);
+        if (kbPreset >= 0)
+        {
+            // preset index → { competing sampler slot, extra duck factor }
+            // Slots: 0=MST 1=BSS 2=KCK 3=SNR 4=HAT 5=PAD 6=SYN 7=PRC 8=DRM
+            struct CompInfo { int slot; float duck; };
+            static constexpr CompInfo kComp[] = {
+                { 6, 0.88f },  // 0: Classic Mono Lead  → SYN
+                { 6, 0.84f },  // 1: Acid Dub           → SYN (heavy filter)
+                { 1, 0.84f },  // 2: Sub Bass           → BSS
+                { 5, 0.88f },  // 3: Warm Chord         → PAD
+                { 6, 0.88f },  // 4: Reggae Stab        → SYN
+                { 6, 0.86f },  // 5: Gritty Lead        → SYN
+            };
+            static constexpr float kGlobalDuck = 0.92f;  // ≈ -0.7 dB
+
+            for (int i = 0; i < kSamplerSlots; ++i)
+            {
+                if (!sampler_.isLoaded(i)) continue;
+                float g = sampler_.getSlotGain(i) * kGlobalDuck;
+                if (kbPreset < 6 && i == kComp[kbPreset].slot)
+                    g *= kComp[kbPreset].duck;
+                g = std::clamp(g, 0.f, 1.5f);
+                sampler_.setSlotGain(i, g);
+                lastMixState_[static_cast<std::size_t>(i)].gain = g;
+            }
+
+            if (onKeyboardGainSuggested)
+            {
+                // Lead presets sit slightly above the average slot gain;
+                // bass/chord presets blend in at the average level.
+                static constexpr float kLeadMult[] =
+                    { 1.15f, 1.10f, 1.00f, 0.90f, 0.90f, 1.15f };
+                const float mult = (kbPreset < 6) ? kLeadMult[kbPreset] : 1.0f;
+
+                float sumGain = 0.f; int cnt = 0;
+                for (int i = 0; i < kSamplerSlots; ++i)
+                    if (sampler_.isLoaded(i) && !sampler_.isSlotMuted(i))
+                        { sumGain += sampler_.getSlotGain(i); ++cnt; }
+                const float avg = (cnt > 0) ? sumGain / static_cast<float>(cnt) : 0.4f;
+                onKeyboardGainSuggested(std::clamp(avg * mult, 0.15f, 1.2f));
+            }
+        }
     }
 
     // ── Revert to original PCM (called when magic is toggled off) ─────────────
@@ -1402,6 +1464,7 @@ private:
     std::atomic<bool>                        busy_                 { false };
     std::atomic<bool>                        magicActive_          { false };
     std::atomic<bool>                        lastMixUsedFallback_  { false };
+    std::atomic<int>                         keyboardPresetIdx_    { -1 };
     ContentType detectedTypes_[kSamplerSlots] {};
     ContentType overrideTypes_[kSamplerSlots] {};
     bool        hasOverride_  [kSamplerSlots] {};

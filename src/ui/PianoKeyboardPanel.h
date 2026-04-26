@@ -140,6 +140,12 @@ public:
         repaint();
     }
 
+    // Called by MainComponent when the AI mix engine suggests a keyboard gain.
+    void setVolumeValue(float v) noexcept
+    {
+        volumeSlider_.setValue(static_cast<double>(v), juce::dontSendNotification);
+    }
+
     void setScaleType(ScaleType t) noexcept
     {
         scaleType_ = t;

@@ -391,6 +391,18 @@ MainComponent::MainComponent()
         }
     };
 
+    // Keyboard gain suggestion fired by SmartSamplerEngine at end of magic mix.
+    // Called on the mix background thread — dspPipeline_.setKeyboardGain() is
+    // atomic-safe; UI update is posted to the message thread.
+    samplerEngine_.onKeyboardGainSuggested = [this](float g)
+    {
+        dspPipeline_.setKeyboardGain(g);
+        juce::MessageManager::callAsync([this, g]
+        {
+            pianoKeyboardPanel_.setVolumeValue(g);
+        });
+    };
+
     // Override manuel du type par slot (right-click sur l'indicateur)
     stepSeqPanel_.onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
@@ -583,6 +595,7 @@ MainComponent::MainComponent()
     };
     pianoKeyboardPanel_.onPreset = [this](int idx) {
         dspPipeline_.applyKeyboardPreset(idx);
+        samplerEngine_.setKeyboardPreset(idx);
     };
     pianoKeyboardPanel_.setVisible(false);
     addAndMakeVisible(pianoKeyboardPanel_);
