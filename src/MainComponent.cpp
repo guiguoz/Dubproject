@@ -594,8 +594,11 @@ MainComponent::MainComponent()
         dspPipeline_.setKeyboardGain(gain);
     };
     pianoKeyboardPanel_.onPreset = [this](int idx) {
-        dspPipeline_.applyKeyboardPreset(idx);
-        samplerEngine_.setKeyboardPreset(idx);
+        if (idx >= 0)
+            dspPipeline_.applyKeyboardPreset(idx);
+        samplerEngine_.setKeyboardPreset(idx);   // -1 = désactivé (pas de ducking)
+        if (samplerEngine_.isMagicActive())
+            samplerEngine_.applyMagicMix();       // recalcule immédiatement avec le nouveau contexte
     };
     pianoKeyboardPanel_.setVisible(false);
     addAndMakeVisible(pianoKeyboardPanel_);

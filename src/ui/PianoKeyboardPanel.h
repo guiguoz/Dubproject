@@ -62,9 +62,11 @@ public:
             presetCombo_.addItem(::dsp::KeyboardSynth::presetName(i), i + 2);
         presetCombo_.setSelectedId(1, juce::dontSendNotification);
         presetCombo_.onChange = [this] {
-            const int id = presetCombo_.getSelectedId();
-            if (id >= 2 && onPreset)
-                onPreset(id - 2);
+            if (onPreset)
+            {
+                const int id = presetCombo_.getSelectedId();
+                onPreset(id >= 2 ? id - 2 : -1);  // -1 = placeholder selected
+            }
         };
         addAndMakeVisible(presetCombo_);
 
