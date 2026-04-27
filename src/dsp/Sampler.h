@@ -173,6 +173,10 @@ private:
     int   numSidechains_                { 0 };
     float sidechainGains_[kMaxSlots]   { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
     float slotPeaks_     [kMaxSlots]   {};
+
+    // Gain lissé per-sample (audio thread only) + coeff précalculé dans prepare().
+    float gainSmoothed_  [kMaxSlots]   {};
+    float gainRampCoeff_               { 0.998f };
     std::atomic<int>   soloSlot_       { -1 };  // -1 = no solo
 
     // Per-slot output peak — written by audio thread, read by GUI (VU meter).

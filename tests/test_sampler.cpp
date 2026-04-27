@@ -209,12 +209,17 @@ TEST_CASE("Sampler -- gain applies correctly", "[sampler]")
     Sampler s;
     s.prepare(kSR, kBlockSize);
 
-    const auto sine = makeSine(kBlockSize);
-    s.loadSample(0, sine.data(), kBlockSize, kSR);
+    const auto sine = makeSine(kBlockSize * 20);
+    s.loadSample(0, sine.data(), static_cast<int>(sine.size()), kSR);
     s.setSlotGain(0, 0.5f);
     s.trigger(0);
 
     std::vector<float> buf(kBlockSize, 0.0f);
+    // Laisser la ramp 50 ms converger (T99 ≈ 4.3 blocs @ 44100/512 — on en fait 6)
+    for (int i = 0; i < 6; ++i)
+        s.process(buf.data(), kBlockSize);
+
+    std::fill(buf.begin(), buf.end(), 0.f);
     s.process(buf.data(), kBlockSize);
 
     // Sampler with gain 0.5 should produce ~half the RMS of the original
@@ -298,4 +303,78 @@ TEST_CASE("Sampler -- out-of-range slot does not crash", "[sampler]")
     REQUIRE_NOTHROW(s.stop(Sampler::kMaxSlots));
     REQUIRE_NOTHROW(s.loadSample(-1, nullptr, 0, kSR));
     REQUIRE_NOTHROW(s.loadSample(Sampler::kMaxSlots, nullptr, 0, kSR));
+}
+
+TEST_CASE("Sampler -- gain change is smoothed over ~50ms", "[sampler]")
+{
+    Sampler s;
+    s.prepare(kSR, kBlockSize);
+    auto sine = makeSine(kBlockSize * 20);
+    s.loadSample(0, sine.data(), static_cast<int>(sine.size()), kSR);
+    s.setSlotGain(0, 1.0f);
+    s.trigger(0);
+
+    std::vector<float> buf(kBlockSize, 0.f);
+    for (int i = 0; i < 3; ++i)
+        s.process(buf.data(), kBlockSize);   // warm-up
+
+    // Baseline RMS à gain = 1
+    std::fill(buf.begin(), buf.end(), 0.f);
+    s.process(buf.data(), kBlockSize);
+    const float baseline = test_helpers::computeRms(buf.data(), kBlockSize);
+    REQUIRE(baseline > 1e-4f);
+
+    s.setSlotGain(0, 0.0f);    // snap cible → 0
+    std::fill(buf.begin(), buf.end(), 0.f);
+    s.process(buf.data(), kBlockSize);
+    const float rms1 = test_helpers::computeRms(buf.data(), kBlockSize);
+    // Bloc 1 : encore > 10 % du baseline (ramp pas terminée)
+    REQUIRE(rms1 > baseline * 0.10f);
+
+    // 6 blocs supplémentaires (~70 ms @ 44100/512)
+    for (int i = 0; i < 6; ++i) {
+        std::fill(buf.begin(), buf.end(), 0.f);
+        s.process(buf.data(), kBlockSize);
+    }
+    const float rmsEnd = test_helpers::computeRms(buf.data(), kBlockSize);
+    // Après ~70 ms : < 2 % du baseline (T99 = 50 ms)
+    REQUIRE(rmsEnd < baseline * 0.02f);
+}
+
+TEST_CASE("Sampler -- sidechain release is progressive not instant", "[sampler]")
+{
+    Sampler s;
+    s.prepare(kSR, kBlockSize);
+
+    // Kick fort (source sidechain)
+    auto kick = makeSine(kBlockSize * 4, 60.f);
+    for (auto& v : kick) v *= 0.8f;
+    s.loadSample(0, kick.data(), static_cast<int>(kick.size()), kSR);
+
+    // Bass long (cible sidechain, loop pour éviter fin prématurée)
+    auto bass = makeSine(kBlockSize * 200, 80.f);
+    s.loadSample(1, bass.data(), static_cast<int>(bass.size()), kSR);
+    s.setSlotLoop(1, true);
+
+    s.setSidechainPair(0, 1);
+    s.trigger(0); s.trigger(1);
+
+    // Utiliser process() mono — pan non initialisé avec prepare() seul
+    std::vector<float> buf(kBlockSize, 0.f);
+    for (int i = 0; i < 4; ++i)    // laisser l'enveloppe attaquer
+        s.process(buf.data(), kBlockSize);
+
+    s.stop(0);   // kick s'arrête
+
+    // Mesure juste après arrêt du kick (enveloppe encore réduite)
+    std::fill(buf.begin(), buf.end(), 0.f);
+    s.process(buf.data(), kBlockSize);
+    const float rmsRef = test_helpers::computeRms(buf.data(), kBlockSize);
+    REQUIRE(rmsRef > 1e-4f);  // bass doit être audible
+
+    // 1 bloc plus tard : rebond max +20 % (release ~120 ms → ~12 blocs total)
+    std::fill(buf.begin(), buf.end(), 0.f);
+    s.process(buf.data(), kBlockSize);
+    const float rmsNext = test_helpers::computeRms(buf.data(), kBlockSize);
+    REQUIRE(rmsNext < rmsRef * 1.20f);
 }

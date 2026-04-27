@@ -35,6 +35,15 @@ inline float sampleLoopWithXfade(const float* data, int totalSamp, int readPos, 
          + data[static_cast<std::size_t>(headIdx)] * wIn;
 }
 
+// Coeff one-pole : 99 % convergence en `ms` sur un bloc de `n` samples.
+// Forme d'usage : state = target + coeff * (state - target)
+inline float sidechainCoeff(float ms, double sr, int n) noexcept
+{
+    if (ms <= 0.f || sr <= 0.0 || n <= 0) return 0.f;
+    return std::exp(-4.6052f * static_cast<float>(n)
+                    / (ms * 0.001f * static_cast<float>(sr)));
+}
+
 } // namespace
 
 namespace dsp {
@@ -43,6 +52,10 @@ void Sampler::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
 {
     sampleRate_ = sampleRate;
     beatClock_.prepare(sampleRate);
+    // T99 = 50 ms : exp(-4.6052 / (T*sr)) → 99 % convergence en 50 ms per-sample
+    gainRampCoeff_ = std::exp(-4.6052f / (0.050f * static_cast<float>(sampleRate)));
+    for (int v = 0; v < kMaxSlots; ++v)
+        gainSmoothed_[v] = slots_[static_cast<std::size_t>(v)].gain.load(std::memory_order_relaxed);
 }
 
 void Sampler::loadSample(int slot, const float* data, int numSamples,
@@ -277,21 +290,20 @@ void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
 void Sampler::process(float* buffer, int numSamples) noexcept
 {
     // ── Sidechain: update gain multipliers from previous block's peaks ────────
-    static constexpr float kSCAttack  = 0.5f;
-    static constexpr float kSCRelease = 0.985f;
-    static constexpr float kSCThresh  = 0.25f;
+    constexpr float kSCThresh  = 0.25f;
+    const float scAttCoeff = sidechainCoeff(  5.f, sampleRate_, numSamples);
+    const float scRelCoeff = sidechainCoeff(120.f, sampleRate_, numSamples);
     for (int k = 0; k < numSidechains_; ++k)
     {
         auto& sc = sidechains_[static_cast<std::size_t>(k)];
         if (sc.source < 0 || sc.target < 0) continue;
         const float src = slotPeaks_[static_cast<std::size_t>(sc.source)];
-        sc.envelope = (src > sc.envelope)
-            ? sc.envelope + kSCAttack * (src - sc.envelope)
-            : sc.envelope * kSCRelease;
-        sidechainGains_[static_cast<std::size_t>(sc.target)] =
-            (sc.envelope > kSCThresh)
-                ? std::pow(kSCThresh / sc.envelope, 0.75f)
-                : 1.f;
+        const float targetEnv = (src > kSCThresh)
+            ? std::pow(kSCThresh / src, 0.75f)
+            : 1.f;
+        const float coeff = (src > sc.envelope) ? scAttCoeff : scRelCoeff;
+        sc.envelope = targetEnv + coeff * (sc.envelope - targetEnv);
+        sidechainGains_[static_cast<std::size_t>(sc.target)] = sc.envelope;
     }
     for (auto& p : slotPeaks_) p = 0.f;
 
@@ -396,7 +408,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             continue;
         }
 
-        const float gain      = sl.gain.load(std::memory_order_relaxed);
+        const float targetGain = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
         const int   solo      = soloSlot_.load(std::memory_order_relaxed);
@@ -405,13 +417,18 @@ void Sampler::process(float* buffer, int numSamples) noexcept
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
+            gainSmoothed_[static_cast<std::size_t>(v)] =
+                gainRampCoeff_ * gainSmoothed_[static_cast<std::size_t>(v)]
+                + (1.f - gainRampCoeff_) * targetGain;
+            const float gain = std::clamp(gainSmoothed_[static_cast<std::size_t>(v)], 0.f, 2.f);
+
             float s_mix = 0.f;
-            
+
             for (int vi = 0; vi < 2; ++vi)
             {
                 auto& vState = ps.voices[vi];
                 if (!vState.playing) continue;
-                
+
                 const int totalSamp = sl.sampleCount[vState.dataIdx];
                 if (totalSamp <= 0) {
                     vState.playing = false;
@@ -481,7 +498,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                 }
                 ++vState.readPos;
             }
-            
+
             const float s_final = sidechainGains_[static_cast<std::size_t>(v)] * s_mix;
             buffer[i] += s_final;
             slotPeaks_[static_cast<std::size_t>(v)] = std::max(slotPeaks_[static_cast<std::size_t>(v)], std::abs(s_final));
@@ -502,6 +519,7 @@ void Sampler::reset() noexcept
             ps.voices[vi].playing = false;
             ps.voices[vi].readPos = 0;
         }
+        gainSmoothed_[v] = slots_[static_cast<std::size_t>(v)].gain.load(std::memory_order_relaxed);
     }
     clearSidechain();
     resetSpatial();
@@ -572,10 +590,10 @@ inline float Sampler::applyHaasDelay(int slot, float sample) noexcept
 // ─────────────────────────────────────────────────────────────────────────────
 void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
 {
-    static constexpr float kAttack   = 0.5f;
-    static constexpr float kRelease  = 0.985f;
-    static constexpr float kThresh   = 0.25f;
-    static constexpr float kRatio    = 4.0f;
+    constexpr float kSCThresh  = 0.25f;
+    constexpr float kSCRatio   = 4.0f;
+    const float scAttCoeff = sidechainCoeff(  5.f, sampleRate_, numSamples);
+    const float scRelCoeff = sidechainCoeff(120.f, sampleRate_, numSamples);
 
     for (int sc = 0; sc < numSidechains_; ++sc)
     {
@@ -583,16 +601,18 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         if (pair.source < 0 || pair.target < 0) continue;
 
         const float srcPeak = slotPeaks_[static_cast<std::size_t>(pair.source)];
-        if (srcPeak > kThresh)
+        float targetEnv;
+        if (srcPeak > kSCThresh)
         {
-            const float over = (srcPeak - kThresh) / kThresh;
-            const float targetGain = 1.f - over * (1.f - 1.f / kRatio);
-            pair.envelope += kAttack * (targetGain - pair.envelope);
+            const float over = (srcPeak - kSCThresh) / kSCThresh;
+            targetEnv = 1.f - over * (1.f - 1.f / kSCRatio);
         }
         else
         {
-            pair.envelope += kRelease * (1.f - pair.envelope);
+            targetEnv = 1.f;
         }
+        const float coeff = (srcPeak > pair.envelope) ? scAttCoeff : scRelCoeff;
+        pair.envelope = targetEnv + coeff * (pair.envelope - targetEnv);
         sidechainGains_[static_cast<std::size_t>(pair.target)] = pair.envelope;
     }
     std::fill(slotPeaks_, slotPeaks_ + kMaxSlots, 0.f);
@@ -698,7 +718,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
             continue;
         }
 
-        const float gain      = sl.gain.load(std::memory_order_relaxed);
+        const float targetGain = sl.gain.load(std::memory_order_relaxed);
         const bool  loop      = sl.loopEnabled.load(std::memory_order_relaxed);
         const bool  muted     = sl.muted.load(std::memory_order_relaxed);
         const int   solo      = soloSlot_.load(std::memory_order_relaxed);
@@ -711,6 +731,10 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
+            gainSmoothed_[idx] =
+                gainRampCoeff_ * gainSmoothed_[idx] + (1.f - gainRampCoeff_) * targetGain;
+            const float gain = std::clamp(gainSmoothed_[idx], 0.f, 2.f);
+
             float s_mix = 0.f;
 
             for (int vi = 0; vi < 2; ++vi)
