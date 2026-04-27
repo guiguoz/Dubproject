@@ -164,6 +164,33 @@ class DspPipeline
     // Forced pitch from piano keyboard (0 = off)
     std::atomic<float> forcedPitchHz_{ 0.f };
 
+    // ── Mono-sub < 120 Hz (PA mono compatibility) ───────────────────────────
+    struct MonoSubFilter {
+        float alpha_ { 0.9844f };
+        float zL_ { 0.f }, zR_ { 0.f }, zMid_ { 0.f };
+
+        void prepare(double sr) noexcept
+        {
+            alpha_ = std::exp(-2.f * 3.14159265f * 120.f / static_cast<float>(sr));
+            zL_ = zR_ = zMid_ = 0.f;
+        }
+        void process(float& L, float& R) noexcept
+        {
+            // kDenorm is added to each state to prevent IIR denormal stall.
+            // The identical offset in zL_/zMid_ cancels in the crossover output:
+            //   L_out = (L - zL_) + zMid_  →  DC = -kDenorm + kDenorm = 0.
+            static constexpr float kDenorm = 1e-20f;
+            const float c   = 1.f - alpha_;
+            const float mid = (L + R) * 0.5f;
+            zMid_ = c * mid + alpha_ * zMid_ + kDenorm;
+            zL_   = c * L   + alpha_ * zL_   + kDenorm;
+            zR_   = c * R   + alpha_ * zR_   + kDenorm;
+            L = (L - zL_) + zMid_;
+            R = (R - zR_) + zMid_;
+        }
+        void reset() noexcept { zL_ = zR_ = zMid_ = 0.f; }
+    } monoSubFilter_;
+
     // ── Pitch stabilization (v2) ─────────────────────────────────────────────
     // stablePitch_ is audio-thread-only (like rmsRunning_).
     // The stabilized value is exported to lastPitchHz_ (atomic) for GUI.

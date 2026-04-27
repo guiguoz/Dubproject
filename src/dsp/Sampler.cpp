@@ -67,9 +67,10 @@ void Sampler::loadSample(int slot, const float* data, int numSamples,
     auto& s  = slots_[static_cast<std::size_t>(slot)];
 
     int bgIdx = 1 - s.activeDataIdx.load(std::memory_order_acquire);
-    
-    s.loaded.store(false, std::memory_order_release);
 
+    // Do NOT set loaded=false here: it would abruptly kill voices mid-fadeout.
+    // The double-buffer ensures the background slot is never read by live voices.
+    // (Same rationale as clearSlot() — "let the fadeout finish".)
     std::vector<float> newData(data, data + numSamples);
     s.data[bgIdx].swap(newData);
     s.sampleCount[bgIdx] = numSamples;
@@ -278,13 +279,12 @@ void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
     auto& s  = slots_[static_cast<std::size_t>(slot)];
 
     int bgIdx = 1 - s.activeDataIdx.load(std::memory_order_acquire);
-    
-    s.loaded.store(false, std::memory_order_release);
+
     s.data[bgIdx].swap(newData);
     s.sampleCount[bgIdx] = static_cast<int>(s.data[bgIdx].size());
-    
+
     s.activeDataIdx.store(bgIdx, std::memory_order_release);
-    s.loaded.store(true, std::memory_order_release);
+    // loaded was already true; no store needed.
 }
 
 void Sampler::process(float* buffer, int numSamples) noexcept

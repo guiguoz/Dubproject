@@ -18,6 +18,7 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
     tempBufL_.resize(std::max(maxBlockSize, 256), 0.0f);
     tempBufR_.resize(std::max(maxBlockSize, 256), 0.0f);
+    monoSubFilter_.prepare(sampleRate);
 }
 
 void DspPipeline::reset() noexcept
@@ -28,6 +29,7 @@ void DspPipeline::reset() noexcept
     bpmDetector_.reset();
     rmsRunning_ = 0.0f;
     smoothDuck_ = 1.0f;
+    monoSubFilter_.reset();
     stablePitch_ = 0.0f;
     unvoicedSamples_ = 0;
     lastPitchHz_.store(0.0f, std::memory_order_relaxed);
@@ -334,7 +336,11 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         keyboardSynth_.processStereoAdd(left, right, numSamples);
     }
 
-    // 9. Master limiter on both channels independently
+    // 9. Mono-sub < 120 Hz (dub techno / PA mono compatibility)
+    for (int i = 0; i < numSamples; ++i)
+        monoSubFilter_.process(left[i], right[i]);
+
+    // 10. Master limiter on both channels independently
     masterLimiter_.process(left,  numSamples);
     masterLimiter_.process(right, numSamples);
 }

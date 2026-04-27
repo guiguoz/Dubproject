@@ -522,6 +522,59 @@ private:
                  -2.f * cosw0 / a0,    (1.f - alpha/A) / a0 };
     }
 
+    // ── Sub ownership 30-60 Hz ────────────────────────────────────────────────
+    // Decides which slot (KICK or BASS) owns the sub range.
+    // The loser gets a gentle cut so both can coexist without mud.
+    static void applySubOwnership(std::vector<float>* pcms,
+                                   const ContentType* types,
+                                   double sr) noexcept
+    {
+        auto subEnergy = [](const std::vector<float>& pcm, double sampleRate)
+        {
+            const float a = std::exp(-2.f * 3.14159265f * 60.f
+                                     / static_cast<float>(sampleRate));
+            const float c = 1.f - a;
+            float z = 0.f, e = 0.f;
+            // 8192 samples (~185 ms @ 44.1 kHz) — covers slow 808-style kicks
+            const int n = std::min(8192, static_cast<int>(pcm.size()));
+            for (int i = 0; i < n; ++i)
+            {
+                z = c * pcm[i] + a * z;
+                e += z * z;
+            }
+            return (n > 0) ? e / static_cast<float>(n) : 0.f;
+        };
+
+        int   kickSlot = -1, bassSlot = -1;
+        float kickSub  = 0.f, bassSub  = 0.f;
+        for (int i = 0; i < kSamplerSlots; ++i)
+        {
+            if (pcms[i].empty()) continue;
+            if (types[i] == ContentType::KICK)
+            {
+                const float e = subEnergy(pcms[i], sr);
+                if (e > kickSub) { kickSub = e; kickSlot = i; }
+            }
+            if (types[i] == ContentType::BASS)
+            {
+                const float e = subEnergy(pcms[i], sr);
+                if (e > bassSub) { bassSub = e; bassSlot = i; }
+            }
+        }
+        if (kickSlot < 0 || bassSlot < 0) return;
+
+        // Hysteresis: apply only when one dominates by >= ~1.5 dB (energy ratio ≥ 1.41).
+        // Prevents flip-flopping when kick and bass have similar sub content.
+        const float maxE = std::max(kickSub, bassSub);
+        const float minE = std::max(std::min(kickSub, bassSub), 1e-12f);
+        if (maxE / minE < 1.41f) return;
+
+        if (kickSub >= bassSub)
+            applyBiquad(pcms[bassSlot], makeLowShelf(55.f, -4.f, sr));
+        else
+            applyBiquad(pcms[kickSlot], makePeaking(45.f, -3.f, 0.7f, sr));
+    }
+
     // ── Role-based EQ presets (Neutron Track Assistant-inspired) ────────────────
     //
     // Applies well-known mixing EQ curves to the PCM vector in-place.
@@ -680,12 +733,17 @@ private:
         const int delaySamples = static_cast<int>((60.0 / bpm) * sr * (4.0 / divisions));
         if (delaySamples <= 0 || delaySamples >= static_cast<int>(pcm.size())) return;
 
+        // Bandpass the feedback path (80 Hz – 8 kHz): no sub mud, no harsh highs.
+        std::vector<float> filtered = pcm;
+        applyBiquad(filtered, makeHP(  80.f, sr));
+        applyBiquad(filtered, makeLP(8000.f, sr));
+
         std::vector<float> out(pcm.size(), 0.f);
         for (int i = 0; i < static_cast<int>(pcm.size()); ++i)
         {
             out[i] = pcm[i];
             if (i >= delaySamples)
-                out[i] += pcm[i - delaySamples] * feedback;
+                out[i] += filtered[static_cast<std::size_t>(i - delaySamples)] * feedback;
         }
         pcm = std::move(out);
     }
@@ -857,6 +915,9 @@ private:
                     && curSnap.slotTypes[static_cast<std::size_t>(i)] == ContentType::BASS)
                     bassPresent = true;
 
+            // Sub ownership: determine which slot (KICK or BASS) dominates 30-60 Hz.
+            applySubOwnership(pcms, types, sampleRate_);
+
             for (int i = 0; i < kSamplerSlots; ++i)
             {
                 if (thread && thread->threadShouldExit()) return;
@@ -922,7 +983,9 @@ private:
             for (int tgt = 0; tgt < kSamplerSlots; ++tgt)
             {
                 if (!loaded[tgt] || tgt == kick) continue;
-                if (types[tgt] == ContentType::BASS || types[tgt] == ContentType::SYNTH)
+                if (types[tgt] == ContentType::BASS
+                 || types[tgt] == ContentType::SYNTH
+                 || types[tgt] == ContentType::PAD)
                     sampler_.setSidechainPair(kick, tgt);
             }
         }

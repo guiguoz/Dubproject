@@ -648,7 +648,8 @@ MainComponent::~MainComponent()
 
 //==============================================================================
 
-void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
+void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
+                                        int trimStart, int trimEnd)
 {
     juce::AudioFormatManager fmt;
     fmt.registerBasicFormats();
@@ -663,8 +664,16 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
     juce::AudioBuffer<float> buf(1, numSamples);
     reader->read(&buf, 0, numSamples, 0, true, false);
 
+    // Apply trim inline so that only one loadSample() call is made per scene
+    // transition — avoids a second reloadSlotData() write that would race with
+    // a voice still reading the background buffer during its fadeOut.
+    const int start = juce::jlimit(0, numSamples - 1, trimStart);
+    const int end   = (trimEnd >= 0)
+                      ? juce::jlimit(start + 1, numSamples, trimEnd)
+                      : numSamples;
+
     auto& sampler = dspPipeline_.getSampler();
-    sampler.loadSample(slot, buf.getReadPointer(0), numSamples,
+    sampler.loadSample(slot, buf.getReadPointer(0) + start, end - start,
                        static_cast<double>(reader->sampleRate));
     sampler.setSlotOneShot(slot, true);
 
@@ -2121,6 +2130,9 @@ void MainComponent::applyScene(int idx)
     // into the new scene (hihat/perc inertia bug).
     dspPipeline_.getSampler().stopAllSlots();
 
+    // Track which slots got a new file — trim is already integrated in that case.
+    std::array<bool, 9> loadedNewFile {};
+
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 9; ++i)
     {
@@ -2135,8 +2147,10 @@ void MainComponent::applyScene(int idx)
 
         if (!newPath.empty() && newPath != currentPath)
         {
-            // Sample différent : rechargement nécessaire
-            loadSampleIntoSlot(i, newPath);
+            // Sample différent : trim intégré dans le chargement → un seul write,
+            // pas de double-write race avec la voix en fadeOut.
+            loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
+            loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_.setSlotFilePath(i, newPath);
             samplerEngine_.setSlotFilePath(i, newPath);
         }
@@ -2162,7 +2176,9 @@ void MainComponent::applyScene(int idx)
             stepSeqPanel_.setStepState(i, s, active);
         }
 
-        // v7 — re-appliquer le trim si défini pour ce slot/scène
+        // v7 — re-appliquer le trim si défini pour ce slot/scène.
+        // Seulement si même fichier : trim déjà intégré lors du chargement ci-dessus.
+        if (!loadedNewFile[static_cast<std::size_t>(i)])
         {
             const int ts = sc.trimStart[sidx];
             const int te = sc.trimEnd  [sidx];

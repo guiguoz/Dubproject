@@ -202,7 +202,7 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ./build/tests/Release/SaxFXTests.exe
 ```
 
-198 tests (Catch2 v3.5.4). Current status: 197/198 pass (1 flaky timing test — ONNX inference thread).
+206 tests (Catch2 v3.5.4). Current status: 203/206 pass (3 pre-existing failures: test name encoding issues + version check).
 
 ---
 
@@ -227,7 +227,7 @@ Dubproject/   (nom du dossier local peut varier)
 │   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
 │   │   ├── [12 more effects]     Reverb, Flanger, Harmonizer, etc.
 │   │   ├── DspPipeline.h/.cpp    Audio processing pipeline
-│   │   ├── Sampler.h/.cpp        9-slot sample player (kFadeInLen=88, kFadeOutLen=256, tanh limiter)
+│   │   ├── Sampler.h/.cpp        9-slot sample player (kFadeInLen=88, kFadeOutLen=256/350ms stop, double-buffer lock-free reload)
 │   │   ├── StepSequencer.h       Up-to-512-step sequencer, 9 tracks (kTracks=9, kMaxSteps=512)
 │   │   ├── BpmDetector.h/.cpp    Tempo detection
 │   │   ├── KeyDetector.h/.cpp    Key/scale detection
@@ -308,6 +308,18 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 20** | Done | Robust pitch tracking: YIN DC blocker, median filter, pipeline log-smoothing |
 | **Sprint 21** | Done | Sequencer & Sampler Scene Transitions: Graceful fade-out, async boundary lock-free, loop bleed (Option A) |
 | **Sprint 22** | Done | KeyboardSynth (Mono/Legato + ADSR + Glide + Velocity + PolyBLEP + Filter Env + 6 presets) + UX fixes |
+| **Sprint 23** | Done | Dub techno audio quality (sub ownership, mono-sub 120 Hz, delay BP, KICK→PAD sidechain) + fix micro-coupure scene transitions |
+
+### Sprint 23 — Dub techno DSP + fix micro-coupure transitions de scène
+
+| Feature | Description |
+|---------|-------------|
+| **Sub ownership 30-60 Hz** | `applySubOwnership()` dans `SmartSamplerEngine` : mesure l'énergie sub (<60 Hz) des slots KICK et BASS ; le perdant reçoit un cut EQ (low-shelf -4 dB @55 Hz pour la basse, ou peak -3 dB @45 Hz pour le kick). Hystérésis 1,5 dB pour éviter le flip-flop sur magic mix consécutifs. |
+| **Mono-sub master bus** | `MonoSubFilter` (1er ordre, 6 dB/oct) dans `DspPipeline::processStereo` : force le contenu <120 Hz en mono avant le master limiter → compatibilité PA / subs espacés. Anti-denorm `+1e-20f` self-canceling sur les états IIR. |
+| **Dub echo bandpass** | `applyDubEcho()` : le signal feedbacké passe par HP 80 Hz + LP 8 kHz (biquad Butterworth Q=0.707) avant d'être mixé → le delay ne cumule ni sub (boue) ni aigu criard. |
+| **Sidechain KICK→PAD** | Le setup sidechain existant inclut désormais `ContentType::PAD` comme cible (en plus de BASS et SYNTH) → les queues de reverb pontent au kick. |
+| **Fix micro-coupure scènes** | `Sampler::loadSample()` et `reloadSlotData()` ne mettent plus `loaded=false` pendant le swap de buffer — la voix en cours de fadeOut (350 ms) se termine proprement au lieu d'être coupée. Trim intégré dans `loadSampleIntoSlot()` pour éviter le double-write race (un seul `loadSample()` par transition). |
+| **Tests** | 6 nouveaux tests : T-A1a/b (sub ownership + hysteresis), T-B1a/b (MonoSubFilter @40 Hz/@400 Hz), T-C1 (delay bandpass HP biquad), T-S1 (loadSample pendant fadeOut ne coupe pas la voix). |
 
 ### Sprint 22 — KeyboardSynth + UX fixes
 
@@ -383,7 +395,8 @@ Focusrite Scarlett (mono in)
               ├─ 6. ExpressionMapper
               ├─ 7. std::copy(left → right)     — right = left post-effets
               ├─ 8. Sampler::processStereo()    — additionné sur left+right
-              └─ 9. MasterLimiter (L+R)
+              ├─ 9. MonoSubFilter               — force < 120 Hz en mono (PA compat.)
+              └─ 10. MasterLimiter (L+R)
 ```
 
 #### Synth Effect — comportement

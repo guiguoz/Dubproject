@@ -49,7 +49,8 @@ Ordre logique stéréo (résumé) :
 4. **ExpressionMapper** — peut pousser un paramètre d’effet selon le RMS.
 5. Copie **gauche → droite** pour le sax traité (signal mono étendu en L/R identiques pour la partie live — voir code actuel).
 6. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine).
-7. **MasterLimiter** sur L et R.
+7. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
+8. **MasterLimiter** sur L et R.
 
 **Synth** : effet **100 % wet** sur le sax ; le sax sec disparaît quand le synth est audible — voir `SynthEffect` et README section Synth.
 
@@ -60,6 +61,7 @@ Ordre logique stéréo (résumé) :
 - Le callback **audio** doit rester **lock-free** autant que possible : files SPSC pour MIDI → sampler, atomiques pour flags (`std::atomic`, `memory_order` cohérent).
 - **ONNX / inference** : thread dédié (`InferenceThread` etc.) — ne pas bloquer le callback audio sur l’inférence.
 - Modifications de chaîne d’effets / gros états : typiquement **message thread** (GUI) + recréation `prepare()` si besoin.
+- **`Sampler::loadSample()` / `reloadSlotData()`** : n’utilisent plus `loaded=false` comme garde pendant le swap — le double-buffer garantit qu’on écrit toujours dans le buffer de fond (non lu par les voix actives). `loaded` ne passe à `true` qu’au **premier** chargement d’un slot vide. Les voix en fadeOut (`retriggering=true`) se terminent proprement sans coupure.
 
 ## Fichiers souvent touchés par type de changement
 
@@ -83,7 +85,7 @@ Ordre logique stéréo (résumé) :
 cmake --build build --config Release --target SaxFXTests --parallel
 ```
 
-Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). Le README mentionne ~198 tests ; un test peut être flaky selon la machine (ONNX inference thread timing).
+Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). 206 tests (Catch2) ; 203/206 passent (3 échecs pré-existants : encoding de noms de tests + check version).
 
 ## Conventions Git
 

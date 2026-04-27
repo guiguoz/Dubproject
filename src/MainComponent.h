@@ -211,7 +211,8 @@ private:
     //==========================================================================
     // Helpers
     //==========================================================================
-    void loadSampleIntoSlot(int slot, const std::string& path);
+    void loadSampleIntoSlot(int slot, const std::string& path,
+                            int trimStart = 0, int trimEnd = -1);
     void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
     void showBpmConfidencePopup(int slot, float detectedBpm);
     void openSampleEditor(int slot);
