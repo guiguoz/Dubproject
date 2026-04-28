@@ -53,7 +53,7 @@ void ReverbEffect::prepare(double sampleRate, int maxBlockSize) noexcept
     juce::dsp::ProcessSpec spec;
     spec.sampleRate       = sampleRate;
     spec.maximumBlockSize = static_cast<juce::uint32>(maxBlockSize);
-    spec.numChannels      = 1;
+    spec.numChannels      = 2;
     pimpl_->reverb.prepare(spec);
     pimpl_->applyParams();
 }
@@ -66,6 +66,19 @@ void ReverbEffect::process(float* buf, int numSamples, float /*pitchHz*/) noexce
     juce::dsp::AudioBlock<float>  block (&buf, 1, static_cast<std::size_t>(numSamples));
     juce::dsp::ProcessContextReplacing<float> ctx (block);
     pimpl_->reverb.process(ctx);
+}
+
+void ReverbEffect::processStereo(float* left, float* right,
+                                  int numSamples, float /*pitchHz*/) noexcept
+{
+    if (!enabled.load(std::memory_order_acquire)) return;
+
+    // AudioBlock wraps raw pointers — zero allocation (constexpr noexcept ctor).
+    float* channels[2] = { left, right };
+    juce::dsp::AudioBlock<float> block(channels, 2,
+                                       static_cast<std::size_t>(numSamples));
+    juce::dsp::ProcessContextReplacing<float> ctx(block);
+    pimpl_->reverb.process(ctx);   // Freeverb: separate comb/allpass for L and R
 }
 
 void ReverbEffect::reset() noexcept

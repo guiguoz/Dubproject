@@ -250,10 +250,15 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
     lastPitchHz_.store(stablePitch_, std::memory_order_relaxed);
     lastConfidence_.store(pitch.confidence, std::memory_order_relaxed);
 
-    // 5. Effect chain on left (in-place)
+    // 5. Effect chain — true stereo (Reverb + ping-pong Delay).
+    //    Copy L→R first so both channels receive the same dry source; effects then
+    //    build stereo divergence (Freeverb separate comb/allpass for L and R, Delay
+    //    ping-pong L→R→L→R).  Effects without processStereo() override fall back to
+    //    dual-mono (process L and R independently) which preserves any upstream width.
     const float forced     = forcedPitchHz_.load(std::memory_order_relaxed);
     const float effectPitch = (forced > 20.0f) ? forced : stablePitch_;
-    effectChain_.process(left, numSamples, effectPitch);
+    std::copy(left, left + numSamples, right);
+    effectChain_.processStereo(left, right, numSamples, effectPitch);
 
     // 6. Expression mapper
     if (expressionMapper_.isActive())
@@ -263,14 +268,6 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         if (fx != nullptr)
             fx->setParam(expressionMapper_.getParamIndex(), mapped);
     }
-
-    // 6. Spread sax L/R: sax sits at pan = +0.2 (slightly right)
-    //    Equal-power: angle = (0.2+1)*0.25*π → cos≈0.951, sin≈0.309
-    //    That gives left ×0.951, right ×0.309 — audibly left-biased with slight R presence.
-    //    We swap to make sax "mostly left" with a hint in right = more natural for live sax.
-    //    Implementation: left is the main sax signal; right gets an attenuated copy.
-    // Copy processed signal to right channel (true stereo from mono source)
-    std::copy(left, left + numSamples, right);
 
     // 7. Sampler (MIDI drain + stereo mix with optional ducking)
     if (samplerEnabled_.load(std::memory_order_acquire))

@@ -45,10 +45,10 @@ Ordre logique stéréo (résumé) :
 
 1. Analyse **YIN** et **BPM** sur le canal **gauche** (sax) — ne modifient pas le buffer seuls.
 2. **RMS** lissé sur la gauche (VU, expression, ducking éventuel).
-3. **EffectChain** — traitement **in-place sur le canal gauche** ; le pitch passé aux effets peut être forcé (clavier) ou issu de YIN.
+3. `std::copy(left → right)` puis **`EffectChain::processStereo(left, right)`** — vrai stéréo : `ReverbEffect` utilise `juce::dsp::Reverb::processStereo()` (Freeverb filtres peigne séparés L/R), `DelayEffect` fait le ping-pong L→R→L→R (second `RingBuffer` heap-allocated). Les effets sans override utilisent le défaut dual-mono (`process(L); process(R)`), ce qui préserve toute divergence stéréo amont.
 4. **ExpressionMapper** — peut pousser un paramètre d’effet selon le RMS.
-5. Copie **gauche → droite** pour le sax traité (signal mono étendu en L/R identiques pour la partie live — voir code actuel).
-6. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine).
+5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine).
+6. **KeyboardSynth::processStereoAdd()** — spread compact `kWidth=0.15` (était 0.35).
 7. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
 8. **MasterLimiter** sur L et R.
 
@@ -67,7 +67,7 @@ Ordre logique stéréo (résumé) :
 
 | Besoin | Fichiers / zones |
 |--------|-------------------|
-| Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin |
+| Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin. Si l'effet a un comportement stéréo (L≠R), surcharger `processStereo()` ; sinon le défaut dual-mono suffit. |
 | Pipeline / ordre traitement | `DspPipeline.*`, éventuellement `MainComponent` (routing) |
 | Sampler / grille | `Sampler.*`, `StepSequencer.*`, `SmartSamplerEngine.*`, UI `StepSequencerPanel` |
 | Clavier / synthé solo | `KeyboardSynth.*`, `DspPipeline.*` (intégration SPSC noteOn/noteOff), `PianoKeyboardPanel.h` |
@@ -85,7 +85,7 @@ Ordre logique stéréo (résumé) :
 cmake --build build --config Release --target SaxFXTests --parallel
 ```
 
-Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). 206 tests (Catch2) ; 203/206 passent (3 échecs pré-existants : encoding de noms de tests + check version).
+Exécuter l’exe de tests généré sous `build/tests/Release/` (ou équivalent). 210 tests (Catch2) ; 207/210 passent (3 échecs pré-existants : encoding de noms de tests + check version).
 
 ## Conventions Git
 

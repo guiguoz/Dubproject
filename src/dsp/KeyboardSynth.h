@@ -59,7 +59,7 @@ public:
 
 private:
     static constexpr int   kVoices  = 8;
-    static constexpr float kWidth   = 0.35f;
+    static constexpr float kWidth   = 0.15f;
     static constexpr int   kMaxHeld = 16;
 
     struct Voice {

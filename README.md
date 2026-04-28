@@ -202,7 +202,7 @@ cmake --build build --config Release --target SaxFXTests --parallel
 ./build/tests/Release/SaxFXTests.exe
 ```
 
-206 tests (Catch2 v3.5.4). Current status: 203/206 pass (3 pre-existing failures: test name encoding issues + version check).
+210 tests (Catch2 v3.5.4). Current status: 207/210 pass (3 pre-existing failures: test name encoding issues + version check).
 
 ---
 
@@ -309,6 +309,19 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 21** | Done | Sequencer & Sampler Scene Transitions: Graceful fade-out, async boundary lock-free, loop bleed (Option A) |
 | **Sprint 22** | Done | KeyboardSynth (Mono/Legato + ADSR + Glide + Velocity + PolyBLEP + Filter Env + 6 presets) + UX fixes |
 | **Sprint 23** | Done | Dub techno audio quality (sub ownership, mono-sub 120 Hz, delay BP, KICK→PAD sidechain) + fix micro-coupure scene transitions |
+| **Sprint 24** | Done | Vrai stéréo dans la chaîne d'effets (Reverb stéréo JUCE Freeverb, Delay ping-pong L→R→L→R, spread keyboard réduit 0.35→0.15) |
+
+### Sprint 24 — Vrai stéréo dans la chaîne d'effets
+
+| Feature | Description |
+|---------|-------------|
+| **IEffect::processStereo()** | Méthode virtuelle ajoutée à l'interface — défaut dual-mono indépendant : `process(L)` + `process(R)` séparément, préserve la divergence stéréo amont. Les effets avec état cross-canal (LFO global, compresseur) doivent surcharger. |
+| **EffectChain::processStereo()** | Nouvelle méthode : drain commandes + itère la chaîne active en appelant `processStereo()` sur chaque effet actif. |
+| **Reverb stéréo JUCE Freeverb** | `ReverbEffect::processStereo()` crée un `juce::dsp::AudioBlock<float>` à 2 canaux depuis les raw pointers (zéro allocation — constructeur `constexpr noexcept`). `juce::dsp::Reverb` route automatiquement vers `processStereo()` Freeverb (filtres peigne/allpass séparés L et R → décorrélation naturelle). `prepare()` : `numChannels = 2`. |
+| **Delay ping-pong** | `DelayEffect::processStereo()` avec second buffer `delayBufferR_` (heap-allocated `unique_ptr` pour éviter stack overflow 1.5 MB). Pattern L→R→L→R : buffer L se nourrit de l'écho R, buffer R de l'écho L → `feedback` clampé à 0.95. |
+| **DspPipeline** | `processStereo()` : `std::copy(L→R)` d'abord (source identique aux deux canaux), puis `effectChain_.processStereo(L, R, n, pitch)` — Reverb et Delay construisent la divergence L≠R depuis ce signal. |
+| **Keyboard spread** | `KeyboardSynth::kWidth` 0.35 → 0.15 rad — stab dub compact, moins de phasing en mono. |
+| **Tests** | 4 nouveaux tests : T-EC1 (EffectChain produit divergence stéréo), T-EC2 (divergence préservée après effet mono), T-D1 (ping-pong : impulsion L → écho R), T-K1 (spread keyboard compact). |
 
 ### Sprint 23 — Dub techno DSP + fix micro-coupure transitions de scène
 
@@ -390,11 +403,14 @@ Focusrite Scarlett (mono in)
               ├─ 2. BPM detector          — analyse left, ne modifie pas
               ├─ 3. RMS smoothing         — sur left avant effets
               ├─ 4. Pitch Stabilization   — gating (confidence/rms), log-EMA smoothing, hold (200ms)
-              ├─ 5. EffectChain::process(left)  — IN-PLACE sur left, avec le pitch stabilisé
-              │     └─ [Synth] → [Harmonizer] → [Flanger] → [Delay] → [Octaver] → ...
+              ├─ 5. std::copy(left → right)     — source identique aux 2 canaux
+              ├─ 5. EffectChain::processStereo(left, right)  — vrai stéréo
+              │     ├─ [Reverb] → Freeverb filtres peigne/allpass séparés L/R
+              │     ├─ [Delay]  → ping-pong L→R→L→R
+              │     └─ autres effets → dual-mono indépendant (défaut IEffect)
               ├─ 6. ExpressionMapper
-              ├─ 7. std::copy(left → right)     — right = left post-effets
-              ├─ 8. Sampler::processStereo()    — additionné sur left+right
+              ├─ 7. Sampler::processStereo()    — additionné sur left+right
+              ├─ 8. KeyboardSynth::processStereoAdd()
               ├─ 9. MonoSubFilter               — force < 120 Hz en mono (PA compat.)
               └─ 10. MasterLimiter (L+R)
 ```

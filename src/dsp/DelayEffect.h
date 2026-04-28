@@ -3,6 +3,8 @@
 #include "IEffect.h"
 #include "RingBuffer.h"
 
+#include <memory>
+
 namespace dsp
 {
 
@@ -26,6 +28,8 @@ class DelayEffect : public IEffect
 
     void prepare(double sampleRate, int maxBlockSize) noexcept override;
     void process(float* buf, int numSamples, float pitchHz) noexcept override;
+    void processStereo(float* left, float* right,
+                       int numSamples, float pitchHz) noexcept override;
     void reset() noexcept override;
 
     int             paramCount() const noexcept override { return kParamCount; }
@@ -59,6 +63,9 @@ class DelayEffect : public IEffect
 
     static constexpr std::size_t kMaxDelayBuffer = 192000; // ~4s at 48kHz
     RingBuffer<kMaxDelayBuffer> delayBuffer_;
+    // ping-pong R channel — heap-allocated to avoid stack overflow (768 KB per buffer)
+    std::unique_ptr<RingBuffer<kMaxDelayBuffer>> delayBufferR_
+        = std::make_unique<RingBuffer<kMaxDelayBuffer>>();
     double sampleRate_ { 44100.0 };
 
     std::atomic<float> time_     { 500.0f };

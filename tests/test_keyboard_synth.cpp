@@ -252,3 +252,37 @@ TEST_CASE("KeyboardSynth: poly mode all-notes-off silences output", "[keyboard]"
     renderPeak(s, 4096);    // let release complete
     REQUIRE(renderPeak(s, 512) < 0.001f);  // tail must be silent
 }
+
+TEST_CASE("KeyboardSynth: poly spread exists but is compact (kWidth=0.15)", "[keyboard][stereo]")
+{
+    // Poly mode with 2 notes → voices get different pan angles → L≠R.
+    // With kWidth=0.15, spread is compact: neither channel dominates strongly.
+    KeyboardSynth s;
+    s.prepare(kSR, kBlock);
+    s.setMonoMode(false);
+    s.setParam(5, 0.001f);  // fast attack
+    s.setParam(8, 1.0f);    // full sustain
+
+    s.noteOn(60, 1.f);
+    s.noteOn(64, 1.f);
+
+    // Warm up a few blocks
+    std::vector<float> L(kBlock, 0.f), R(kBlock, 0.f);
+    for (int b = 0; b < 8; ++b)
+    {
+        std::fill(L.begin(), L.end(), 0.f);
+        std::fill(R.begin(), R.end(), 0.f);
+        s.processStereoAdd(L.data(), R.data(), kBlock);
+    }
+
+    float sumL = 0.f, sumR = 0.f;
+    for (int i = 0; i < kBlock; ++i) { sumL += L[i] * L[i]; sumR += R[i] * R[i]; }
+    const float rmsL = std::sqrt(sumL / kBlock);
+    const float rmsR = std::sqrt(sumR / kBlock);
+
+    REQUIRE(rmsL > 1e-3f);  // both channels have signal
+    REQUIRE(rmsR > 1e-3f);
+    // Compact spread: neither channel should be more than 5× louder than the other
+    REQUIRE(rmsL / rmsR < 5.0f);
+    REQUIRE(rmsR / rmsL < 5.0f);
+}

@@ -26,6 +26,8 @@ public:
 
     void prepare(double sampleRate, int maxBlockSize) noexcept override;
     void process(float* buf, int numSamples, float pitchHz) noexcept override;
+    void processStereo(float* left, float* right,
+                       int numSamples, float pitchHz) noexcept override;
     void reset()  noexcept override;
 
     int             paramCount()           const noexcept override { return kParamCount; }

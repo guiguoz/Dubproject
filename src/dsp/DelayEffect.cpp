@@ -40,7 +40,8 @@ float DelayEffect::divisionToMs(int div, float bpm) noexcept
 void DelayEffect::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 44100.0;
-    delayBuffer_.setSize(kMaxDelayBuffer);
+    delayBuffer_  .setSize(kMaxDelayBuffer);
+    delayBufferR_->setSize(kMaxDelayBuffer);
 }
 
 void DelayEffect::process(float* buf, int numSamples, float /*pitchHz*/) noexcept
@@ -83,7 +84,46 @@ void DelayEffect::process(float* buf, int numSamples, float /*pitchHz*/) noexcep
 
 void DelayEffect::reset() noexcept
 {
-    delayBuffer_.reset();
+    delayBuffer_ .reset();
+    delayBufferR_->reset();
+}
+
+void DelayEffect::processStereo(float* left, float* right,
+                                 int numSamples, float /*pitchHz*/) noexcept
+{
+    if (!enabled.load(std::memory_order_acquire)) return;
+
+    const float fb = std::min(feedback_.load(std::memory_order_relaxed), 0.95f);
+    const float mx = mix_.load(std::memory_order_relaxed);
+
+    float timeMs;
+    const float bpm = syncBpm_.load(std::memory_order_relaxed);
+    if (bpm > 0.0f)
+    {
+        const int div = static_cast<int>(division_.load(std::memory_order_relaxed) + 0.5f);
+        timeMs = divisionToMs(div, bpm);
+    }
+    else
+    {
+        timeMs = time_.load(std::memory_order_relaxed);
+    }
+    const float maxMs = static_cast<float>(kMaxDelayBuffer)
+                        / static_cast<float>(sampleRate_) * 1000.0f;
+    timeMs = std::max(1.0f, std::min(timeMs, maxMs));
+    const float ds = (timeMs / 1000.0f) * static_cast<float>(sampleRate_);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Ping-pong: L buffer fed from R echo, R buffer fed from L echo → L→R→L→R
+        const float echoL = delayBuffer_  .read(ds);
+        const float echoR = delayBufferR_->read(ds);
+
+        delayBuffer_  .push(left [i] + echoR * fb);
+        delayBufferR_->push(right[i] + echoL * fb);
+
+        left [i] = left [i] * (1.0f - mx) + echoL * mx;
+        right[i] = right[i] * (1.0f - mx) + echoR * mx;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -62,6 +62,18 @@ public:
     /// Process one mono block in-place.  pitchHz = current detected pitch (0 = unknown).
     virtual void process(float* buf, int numSamples, float pitchHz) noexcept = 0;
 
+    /// Process one stereo block in-place.
+    /// Default: processes L and R independently — preserves any stereo divergence
+    /// produced by upstream effects.  Override for true stereo behaviour (e.g. Reverb,
+    /// ping-pong Delay).  Note: effects with cross-channel shared state (LFO, look-ahead
+    /// compressor) must provide their own override.
+    virtual void processStereo(float* left, float* right,
+                                int numSamples, float pitchHz) noexcept
+    {
+        process(left,  numSamples, pitchHz);
+        process(right, numSamples, pitchHz);
+    }
+
     /// Reset DSP state (e.g. after a pause).
     virtual void reset() noexcept = 0;
 

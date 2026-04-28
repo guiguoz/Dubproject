@@ -53,6 +53,20 @@ void EffectChain::process(float* buf, int numSamples, float pitchHz) noexcept
     }
 }
 
+void EffectChain::processStereo(float* left, float* right,
+                                int numSamples, float pitchHz) noexcept
+{
+    drainCommands();
+
+    const auto& chain = buffers_[activeIdx_.load(std::memory_order_acquire)];
+    for (int i = 0; i < chain.count; ++i)
+    {
+        IEffect* eff = chain.effects[i];
+        if (eff && eff->enabled.load(std::memory_order_acquire))
+            eff->processStereo(left, right, numSamples, pitchHz);
+    }
+}
+
 void EffectChain::reset() noexcept
 {
     for (int i = 0; i < ownedCount_; ++i)

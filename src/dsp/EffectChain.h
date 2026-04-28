@@ -49,6 +49,9 @@ public:
     /// Drain pending chain updates then process one block.
     void process(float* buf, int numSamples, float pitchHz) noexcept;
 
+    /// Drain pending chain updates then process one stereo block in-place.
+    void processStereo(float* left, float* right, int numSamples, float pitchHz) noexcept;
+
     /// Reset all currently-owned effects.
     void reset() noexcept;
 

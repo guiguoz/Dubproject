@@ -109,6 +109,33 @@ TEST_CASE("DelayEffect reset clears buffer", "[delay]")
     REQUIRE(allZero(buf.data(), kBlock));
 }
 
+TEST_CASE("DelayEffect ping-pong: impulse in L echoes into R after 2 delays", "[delay][stereo]")
+{
+    // Ping-pong: impulse in L →
+    //   +ds samples : echo fires in L, cross-feed 0.7 written into R buffer
+    //   +2ds samples: echo fires in R
+    dsp::DelayEffect e;
+    e.prepare(kSR, kBlock);
+    e.setParam(0, 50.0f);   // 50 ms delay → 2205 samples @ 44100
+    e.setParam(1, 0.7f);    // feedback
+    e.setParam(2, 1.0f);    // 100% wet
+
+    const int ds          = static_cast<int>(0.05 * kSR);  // 2205
+    const int blocksTotal = (2 * ds / kBlock) + 3;
+
+    float totalREnergy = 0.f;
+    std::vector<float> L(kBlock, 0.f), R(kBlock, 0.f);
+    for (int b = 0; b < blocksTotal; ++b)
+    {
+        std::fill(L.begin(), L.end(), 0.f);
+        std::fill(R.begin(), R.end(), 0.f);
+        if (b == 0) L[0] = 1.0f;
+        e.processStereo(L.data(), R.data(), kBlock, 0.f);
+        for (float v : R) totalREnergy += v * v;
+    }
+    REQUIRE(totalREnergy > 1e-4f);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WhammyEffect
 // ─────────────────────────────────────────────────────────────────────────────

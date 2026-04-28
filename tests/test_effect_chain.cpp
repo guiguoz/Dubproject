@@ -272,3 +272,64 @@ TEST_CASE("EffectChain: EnvelopeFilterEffect integrates without crash")
         REQUIRE(s <=  1.0f);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// processStereo — stereo divergence tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Mock effect: overrides processStereo() to scale L by 0.7, R unchanged → L≠R.
+class StereoScaleEffect : public dsp::IEffect
+{
+public:
+    dsp::EffectType type()    const noexcept override { return dsp::EffectType::Flanger; }
+    void prepare(double, int) noexcept override {}
+    void process(float*, int, float) noexcept override {}
+    void processStereo(float* L, float* R, int n, float) noexcept override
+    {
+        for (int i = 0; i < n; ++i) { L[i] *= 0.7f; (void)R; }
+    }
+    void reset()              noexcept override {}
+    int              paramCount()           const noexcept override { return 0; }
+    dsp::ParamDescriptor paramDescriptor(int) const noexcept override { return {}; }
+    float            getParam(int)          const noexcept override { return 0.0f; }
+    void             setParam(int, float)         noexcept override {}
+};
+
+TEST_CASE("EffectChain: processStereo produces stereo divergence when effect overrides it", "[effect_chain][stereo]")
+{
+    dsp::EffectChain chain;
+    chain.prepare(44100.0, 64);
+    chain.addEffect(std::make_unique<StereoScaleEffect>());
+    chain.drainCommands();
+
+    auto L = makeSine(0.5f);
+    auto R = makeSine(0.5f);  // identical input
+
+    chain.processStereo(L.data(), R.data(), 64, 440.0f);
+
+    bool diverged = false;
+    for (int i = 0; i < 64; ++i)
+        if (std::fabs(L[i] - R[i]) > 1e-5f) { diverged = true; break; }
+    REQUIRE(diverged);
+}
+
+TEST_CASE("EffectChain: processStereo preserves stereo divergence through subsequent mono effect", "[effect_chain][stereo]")
+{
+    // StereoScaleEffect → L≠R. GainEffect (no override) processes L and R independently
+    // → divergence must survive (default does NOT copy L→R).
+    dsp::EffectChain chain;
+    chain.prepare(44100.0, 64);
+    chain.addEffect(std::make_unique<StereoScaleEffect>());
+    chain.addEffect(std::make_unique<GainEffect>(0.9f));
+    chain.drainCommands();
+
+    auto L = makeSine(0.5f);
+    auto R = makeSine(0.5f);
+
+    chain.processStereo(L.data(), R.data(), 64, 440.0f);
+
+    bool diverged = false;
+    for (int i = 0; i < 64; ++i)
+        if (std::fabs(L[i] - R[i]) > 1e-5f) { diverged = true; break; }
+    REQUIRE(diverged);
+}
