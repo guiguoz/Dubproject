@@ -37,6 +37,7 @@ public:
     std::function<void(int midiNote)> onKeyNoteOff;
     std::function<void(float gain)>   onVolumeChanged;
     std::function<void(int presetIdx)> onPreset;
+    std::function<void(int presetIdx)> onSoloPresetChanged;
 
     // ── Constructor ───────────────────────────────────────────────────────────
     PianoKeyboardPanel()
@@ -69,6 +70,20 @@ public:
             }
         };
         addAndMakeVisible(presetCombo_);
+
+        // Solo IA preset selector
+        soloPresetCombo_.addItem("IA : Off",     1);
+        soloPresetCombo_.addItem("IA : Prudent", 2);
+        soloPresetCombo_.addItem("IA : Dub",     3);
+        soloPresetCombo_.setSelectedId(1, juce::dontSendNotification);
+        soloPresetCombo_.setColour(juce::ComboBox::backgroundColourId, SaxFXColours::cardBody);
+        soloPresetCombo_.setColour(juce::ComboBox::textColourId, SaxFXColours::textPrimary);
+        soloPresetCombo_.onChange = [this]
+        {
+            if (onSoloPresetChanged)
+                onSoloPresetChanged(soloPresetCombo_.getSelectedId() - 1);
+        };
+        addAndMakeVisible(soloPresetCombo_);
 
         // Octave selector
         octaveDownBtn_.setButtonText("<");
@@ -170,6 +185,21 @@ public:
         repaint();
     }
 
+    void setSuggestions(const std::vector<int>& midiNotes) noexcept
+    {
+        suggestionNotes_.fill(false);
+        for (int n : midiNotes)
+            suggestionNotes_[static_cast<std::size_t>(((n % 12) + 12) % 12)] = true;
+        repaint();
+    }
+
+    void clearSuggestions() noexcept { suggestionNotes_.fill(false); repaint(); }
+
+    void setSoloPreset(int idx)
+    {
+        soloPresetCombo_.setSelectedId(idx + 1, juce::dontSendNotification);
+    }
+
     // ── Layout ────────────────────────────────────────────────────────────────
 
     void resized() override
@@ -177,15 +207,16 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        // Top bar: scale combo | preset combo | ... | vol | octave
+        // Top bar: scale combo | preset combo | ... | IA preset | vol | octave
         const int topH = 28;
-        scaleCombo_   .setBounds(  8,       4, 150, topH - 8);
-        presetCombo_  .setBounds(162,       4, 150, topH - 8);
-        volumeLabel_  .setBounds(W - 200,   4,  24, topH - 8);
-        volumeSlider_ .setBounds(W - 175,   4,  80, topH - 8);
-        octaveDownBtn_.setBounds(W -  90,   4,  24, topH - 8);
-        octaveLabel_  .setBounds(W -  62,   4,  44, topH - 8);
-        octaveUpBtn_  .setBounds(W -  18,   4,  24, topH - 8);
+        scaleCombo_      .setBounds(  8,       4, 150, topH - 8);
+        presetCombo_     .setBounds(162,       4, 150, topH - 8);
+        soloPresetCombo_ .setBounds(W - 320,   2, 108, topH - 8);
+        volumeLabel_  .setBounds(W - 208,   4,  22, topH - 8);
+        volumeSlider_ .setBounds(W - 184,   4,  82, topH - 8);
+        octaveDownBtn_.setBounds(W -  98,   4,  24, topH - 8);
+        octaveLabel_  .setBounds(W -  72,   4,  44, topH - 8);
+        octaveUpBtn_  .setBounds(W -  26,   4,  24, topH - 8);
 
         // Bottom bar: param sliders
         const int paramH  = 60;
@@ -362,8 +393,14 @@ private:
                 juce::Colour fill;
                 if (pressed)
                     fill = juce::Colour(0xFF4CDFA8).brighter(0.3f);
+                else if (suggestionNotes_[static_cast<std::size_t>(pitchClass)])
+                    fill = juce::Colour(0xFFFF9500).withAlpha(0.75f);
+                else if (pitchClass == masterKey_)
+                    fill = juce::Colour(0xFF4CDFA8);
+                else if (pitchClass == (masterKey_ + 7) % 12)
+                    fill = juce::Colour(0xFF06B6D4).withAlpha(0.80f);
                 else if (inScale)
-                    fill = juce::Colour(0xFF4CDFA8).withAlpha(0.55f);
+                    fill = juce::Colour(0xFF4CDFA8).withAlpha(0.35f);
                 else
                     fill = juce::Colour(0xFFDDDDCC);
 
@@ -406,8 +443,14 @@ private:
                 juce::Colour fill;
                 if (pressed)
                     fill = juce::Colour(0xFF4CDFA8).brighter(0.1f);
+                else if (suggestionNotes_[static_cast<std::size_t>(pitchClass)])
+                    fill = juce::Colour(0xFFFF9500).withAlpha(0.85f);
+                else if (pitchClass == masterKey_)
+                    fill = juce::Colour(0xFF4CDFA8);
+                else if (pitchClass == (masterKey_ + 7) % 12)
+                    fill = juce::Colour(0xFF06B6D4).withAlpha(0.90f);
                 else if (inScale)
-                    fill = juce::Colour(0xFF4CDFA8).withAlpha(0.80f);
+                    fill = juce::Colour(0xFF4CDFA8).withAlpha(0.60f);
                 else
                     fill = juce::Colour(0xFF111111);
 
@@ -440,7 +483,9 @@ private:
     int         keyboardY_   = 32;
     int         keyboardH_   = 120;
 
-    std::array<bool, 12> scaleNotes_ {};  // which pitch classes are in the scale
+    std::array<bool, 12> scaleNotes_     {};
+    std::array<bool, 12> suggestionNotes_{};
+    juce::ComboBox       soloPresetCombo_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoKeyboardPanel)
 };

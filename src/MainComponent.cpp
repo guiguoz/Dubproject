@@ -515,6 +515,11 @@ MainComponent::MainComponent()
         return dspPipeline_.getCurrentDuckingGain();
     };
 
+    stepSeqPanel_.getInputRms = [this]() -> float
+    {
+        return dspPipeline_.getLastRms();
+    };
+
     addAndMakeVisible(stepSeqPanel_);
 
     // ── Master key selector (sidebar) ─────────────────────────────────────────
@@ -548,10 +553,12 @@ MainComponent::MainComponent()
     globalScaleCombo_.addItem("Dorian",           6);
     globalScaleCombo_.setSelectedId(1, juce::dontSendNotification);
     globalScaleCombo_.onChange = [this] {
-        const auto st = static_cast<ui::PianoKeyboardPanel::ScaleType>(
-                            globalScaleCombo_.getSelectedId() - 1);
+        const int selectedId = globalScaleCombo_.getSelectedId() - 1;
+        const auto st = static_cast<ui::PianoKeyboardPanel::ScaleType>(selectedId);
         pianoKeyboardPanel_.setScaleType(st);
         saxStaffPanel_     .setScaleType(st);
+        soloAssistant_.configure(masterKeyRoot_, selectedId);
+        pianoKeyboardPanel_.clearSuggestions();
     };
     addAndMakeVisible(globalScaleCombo_);
 
@@ -583,6 +590,8 @@ MainComponent::MainComponent()
     // onNoteOn / onNoteOff non câblés — le clavier est un instrument indépendant
     pianoKeyboardPanel_.onKeyNoteOn  = [this](int note) {
         dspPipeline_.keyboardNoteOn(note);
+        soloAssistant_.recordNote(note);
+        pianoKeyboardPanel_.setSuggestions(soloAssistant_.suggest(36, 96));
     };
     pianoKeyboardPanel_.onKeyNoteOff = [this](int note) {
         dspPipeline_.keyboardNoteOff(note);
@@ -600,6 +609,10 @@ MainComponent::MainComponent()
         samplerEngine_.setKeyboardPreset(idx);   // -1 = désactivé (pas de ducking)
         if (samplerEngine_.isMagicActive())
             samplerEngine_.applyMagicMix();       // recalcule immédiatement avec le nouveau contexte
+    };
+    pianoKeyboardPanel_.onSoloPresetChanged = [this](int idx) {
+        soloAssistant_.setPreset(static_cast<::dsp::SoloPreset>(idx));
+        pianoKeyboardPanel_.clearSuggestions();
     };
     pianoKeyboardPanel_.setVisible(false);
     addAndMakeVisible(pianoKeyboardPanel_);
@@ -1015,6 +1028,8 @@ void MainComponent::applyMasterKey()
 {
     pianoKeyboardPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
     saxStaffPanel_     .setMasterKey(masterKeyRoot_, masterKeyMajor_);
+    soloAssistant_.configure(masterKeyRoot_, globalScaleCombo_.getSelectedId() - 1);
+    pianoKeyboardPanel_.clearSuggestions();
 
     // Update the existing MusicContext used by HarmonizerEffect / SmartMixEngine
     auto ctx     = effectChainEditor_.getMusicContext();
@@ -1201,6 +1216,9 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         }
     }
 
+    // ── Solo assistant preset (v10) ───────────────────────────────────────────
+    data.soloPreset = static_cast<int>(soloAssistant_.preset());
+
     // ── Keyboard synth state (v9) ─────────────────────────────────────────────
     data.keyboardPreset = keyboardPresetIdx_;
     data.keyboardGain   = dspPipeline_.getKeyboardGain();
@@ -1340,6 +1358,10 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             loadSampleIntoSlot(i, sc.filePath);
             stepSeqPanel_.setSlotFilePath(i, sc.filePath);   // updates LCD name
             samplerEngine_.setSlotFilePath(i, sc.filePath);
+
+            // Restore saved gain (fallback to unity if not yet set)
+            const float savedGain = sc.gain > 0.f ? sc.gain : 1.0f;
+            dspPipeline_.getSampler().setSlotGain(i, savedGain);
         }
 
         for (int s = 0; s < 16; ++s)
@@ -1457,6 +1479,13 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         pianoKeyboardPanel_.setVolumeValue(data.keyboardGain);
         for (int i = 0; i < 8; ++i)   // only the 8 sliders exposed in the UI
             pianoKeyboardPanel_.setParamValue(i, data.keyboardParams[static_cast<std::size_t>(i)]);
+    }
+
+    // ── v10 — solo assistant preset ───────────────────────────────────────────
+    if (data.version >= 10)
+    {
+        soloAssistant_.setPreset(static_cast<::dsp::SoloPreset>(data.soloPreset));
+        pianoKeyboardPanel_.setSoloPreset(data.soloPreset);
     }
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
@@ -2109,13 +2138,15 @@ void MainComponent::applyScene(int idx)
 
     if (!sc.used)
     {
-        // Empty scene: clear all step patterns, keep BPM
+        // Empty scene: clear step patterns and reset all gains to unity
         for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
             {
                 stepSequencer_.setStep(i, s, false);
                 stepSeqPanel_.setStepState(i, s, false);
             }
+        for (int i = 0; i < 9; ++i)
+            dspPipeline_.getSampler().setSlotGain(i, 1.0f);
         return;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Colours.h"
+#include "MusicVisualizerComponent.h"
 #include "NeonButton.h"
 #include "dsp/StepSequencer.h"
 #include "dsp/Sampler.h"
@@ -42,6 +43,7 @@ public:
     std::function<bool(int slot)>                         isSlotPlaying;  // for VU (legacy)
     std::function<float(int slot)>                        getSlotLevel;   // real output peak 0..1+
     std::function<float()>                                getDuckingGain; // 1.0 = no duck, 0.5 = -6dB
+    std::function<float()>                                getInputRms;    // sax input RMS — for visualizer
     std::function<void(int slot, bool soloed)>            onSoloChanged;
     /// Called when user right-clicks a slot indicator and picks a type override.
     /// typeIndex = 0-7 (maps to ContentType enum), or -1 = clear override.
@@ -261,6 +263,8 @@ public:
         hScrollBar_.addListener(this);
         addAndMakeVisible(hScrollBar_);
 
+        addAndMakeVisible(visualizer_);
+        visualizer_.toBack();
         startTimerHz(30);
     }
 
@@ -447,6 +451,8 @@ public:
 
     void resized() override
     {
+        visualizer_.setBounds(getLocalBounds());
+
         const int W = getWidth();
         const int H = getHeight();
 
@@ -863,6 +869,11 @@ private:
                 duckingLevel_ = duckingLevel_ * 0.85f + targetGain * 0.15f;
         }
 
+        // Update visualizer with current levels, input RMS and BPM
+        visualizer_.update(vuLevels_,
+                           getInputRms ? getInputRms() : 0.f,
+                           currentBpm_);
+
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
         if (seq_.isPlaying())
         {
@@ -1174,6 +1185,8 @@ private:
 
     // Waveform preview data — 200-bin peak envelopes, set via setSlotWaveform()
     std::array<std::vector<float>, 9> slotEnvelopes_;
+
+    MusicVisualizerComponent visualizer_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
 };

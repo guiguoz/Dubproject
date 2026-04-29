@@ -252,6 +252,10 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     static_cast<float>(static_cast<double>((*kpArr)[i]));
     }
 
+    // ── v10 — solo assistant preset ───────────────────────────────────────────
+    if (data.version >= 10)
+        data.soloPreset = static_cast<int>(root.getProperty("soloPreset", 0));
+
     return data;
 }
 
@@ -261,7 +265,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     9);  // always write latest format
+    root->setProperty("version",     10);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -415,6 +419,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     }
 
     // ── v9 — keyboard synth state ─────────────────────────────────────────────
+    root->setProperty("soloPreset",     data.soloPreset);      // v10
     root->setProperty("keyboardPreset", data.keyboardPreset);
     root->setProperty("keyboardGain",   static_cast<double>(data.keyboardGain));
     root->setProperty("keyboardMono",   data.keyboardMono);

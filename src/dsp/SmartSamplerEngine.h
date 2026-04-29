@@ -60,6 +60,15 @@ public:
         }
     }
 
+    // ── Calibration (public pour tests et UI) ────────────────────────────────
+    static constexpr float kBassTargetGain = 0.70f;  // plage recommandée 0.55–0.75
+
+    // Retourne le facteur headroom sax : 1.0 pour BASS/KICK, 0.707 pour les autres
+    static float saxClearance(ContentType type) noexcept
+    {
+        return (type == ContentType::BASS || type == ContentType::KICK) ? 1.0f : 0.707f;
+    }
+
     // ── Callbacks (message thread) ────────────────────────────────────────────
     std::function<void(int /*slot*/, float /*progress 0-1*/)> onSlotProgress;
     std::function<void()>                                     onDone;
@@ -704,20 +713,18 @@ private:
 
     // ── Target gain per instrument type ───────────────────────────────────────
 
-    // Gains orientés dub techno avec sax live dans le mix :
-    // headroom réduit de ~3dB sur tous les slots pour laisser de la place au sax traité
     static float targetGainForType(ContentType type) noexcept
     {
         switch (type)
         {
-            case ContentType::KICK:  return 0.55f;  // −5.2 dBFS
-            case ContentType::SNARE: return 0.30f;  // −10.5 dBFS
-            case ContentType::HIHAT: return 0.13f;  // −17.7 dBFS
-            case ContentType::BASS:  return 0.45f;  // −7.0 dBFS
-            case ContentType::SYNTH: return 0.22f;  // −13.1 dBFS
-            case ContentType::PAD:   return 0.26f;  // −11.7 dBFS
-            case ContentType::PERC:  return 0.26f;  // −11.7 dBFS
-            case ContentType::LOOP:  return 0.38f;  // −8.4 dBFS
+            case ContentType::KICK:  return 0.55f;       // −5.2 dBFS
+            case ContentType::SNARE: return 0.30f;       // −10.5 dBFS
+            case ContentType::HIHAT: return 0.13f;       // −17.7 dBFS
+            case ContentType::BASS:  return kBassTargetGain;  // −3.1 dBFS
+            case ContentType::SYNTH: return 0.22f;       // −13.1 dBFS
+            case ContentType::PAD:   return 0.26f;       // −11.7 dBFS
+            case ContentType::PERC:  return 0.26f;       // −11.7 dBFS
+            case ContentType::LOOP:  return 0.38f;       // −8.4 dBFS
             default:                 return 0.30f;
         }
     }
@@ -858,10 +865,10 @@ private:
                     applyBiquad(pcms[i], makeHighShelf(8000.f, safeHiG, sampleRate_)); // air
                     applyBiquad(pcms[i], makeLP       (18000.f,         sampleRate_)); // anti-alias
 
-                    // Gain: target volume / true-peak (4× oversample), -3dBFS headroom
+                    // Gain: target volume / true-peak (4× oversample), -3dBFS headroom for sax
                     const float truePeak = calculateTruePeak(pcms[i]);
                     const float gain = juce::jlimit(0.f, 1.5f,
-                        (d.volume * 0.707f) / std::max(truePeak, 0.001f));
+                        (d.volume * saxClearance(types[i])) / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
 
@@ -886,7 +893,7 @@ private:
                     applyRoleEQ(pcms[i], effectiveType, sampleRate_);
                     const float truePeak = calculateTruePeak(pcms[i]);
                     const float gain = juce::jlimit(0.f, 1.5f,
-                        (targetGainForType(effectiveType) * 0.707f)
+                        (targetGainForType(effectiveType) * saxClearance(effectiveType))
                         / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
@@ -955,10 +962,10 @@ private:
                         applyDubEcho(pcms[i], musicCtx_.bpm, sampleRate_, 0.20f, 8);
                 }
 
-                // Gain calibration: true-peak (4× oversample) + densityScale + -3dBFS headroom
+                // Gain calibration: true-peak (4× oversample) + densityScale + sax headroom
                 const float truePeak = calculateTruePeak(pcms[i]);
                 const float gain = juce::jlimit(0.f, 1.5f,
-                    (targetGainForType(effectiveType) * densityScale * 0.707f)
+                    (targetGainForType(effectiveType) * densityScale * saxClearance(effectiveType))
                     / std::max(truePeak, 0.001f));
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));

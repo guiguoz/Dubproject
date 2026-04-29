@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp/DspPipeline.h"
+#include "dsp/SoloAssistant.h"
 #include "dsp/SynthEffect.h"
 #include "dsp/SmartSamplerEngine.h"
 #include "dsp/StepSequencer.h"
@@ -72,6 +73,7 @@ private:
     // DSP + MIDI
     //==========================================================================
     ::dsp::DspPipeline       dspPipeline_;
+    ::dsp::SoloAssistant     soloAssistant_;
     ::dsp::SmartSamplerEngine samplerEngine_ { dspPipeline_.getSampler() };
     ::dsp::StepSequencer     stepSequencer_;
     midi::MidiManager        midiManager_{dspPipeline_.getMidiEventQueue()};

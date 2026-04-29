@@ -89,7 +89,7 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 9 };
+    int                         version     { 10 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;
@@ -109,6 +109,8 @@ struct ProjectData
                                                       0.f, 0.5f, 0.f };
     float                            keyboardGain   { 0.5f };
     bool                             keyboardMono   { false };
+    // v10 — solo assistant preset (0=Off, 1=Prudent, 2=Dub)
+    int                              soloPreset     { 0 };
 };
 
 } // namespace project

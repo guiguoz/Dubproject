@@ -9,6 +9,7 @@
 #include "dsp/DelayEffect.h"
 #include "dsp/OctaverEffect.h"
 #include "dsp/SlicerEffect.h"
+#include "dsp/SoloAssistant.h"
 #include "dsp/TunerEffect.h"
 #include "dsp/WhammyEffect.h"
 
@@ -446,3 +447,60 @@ TEST_CASE("SlicerEffect reset resets phase", "[slicer]")
     e.process(buf.data(), 1, kPitchHz);
     REQUIRE(buf[0] == Catch::Approx(1.0f));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T-C1 : SoloAssistant — suggestions all in-scale
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("SoloAssistant: suggestions are all in C major scale", "[solo]")
+{
+    dsp::SoloAssistant sa;
+    sa.configure(0, 0);  // C major
+    sa.setPreset(dsp::SoloPreset::Dub);
+    sa.recordNote(60);   // C4
+
+    const auto suggestions = sa.suggest(48, 84);
+    REQUIRE_FALSE(suggestions.empty());
+
+    static constexpr bool kCMajor[12] = {
+        true,false,true,false,true,true,false,true,false,true,false,true };
+    for (int note : suggestions)
+    {
+        REQUIRE(note >= 48);
+        REQUIRE(note <= 84);
+        REQUIRE(kCMajor[note % 12]);
+    }
+}
+
+TEST_CASE("SoloAssistant: Off preset returns empty suggestions", "[solo]")
+{
+    dsp::SoloAssistant sa;
+    sa.configure(0, 0);
+    sa.setPreset(dsp::SoloPreset::Off);
+    sa.recordNote(60);
+    REQUIRE(sa.suggest(48, 84).empty());
+}
+
+TEST_CASE("SoloAssistant: configure resets lastNote so no suggestions yet", "[solo]")
+{
+    dsp::SoloAssistant sa;
+    sa.configure(0, 0);
+    sa.setPreset(dsp::SoloPreset::Prudent);
+    sa.recordNote(60);
+    sa.configure(5, 1);  // change key — resets lastNote
+    REQUIRE(sa.suggest(48, 84).empty());
+}
+
+TEST_CASE("SoloAssistant: Prudent returns 2 suggestions, Dub returns 3", "[solo]")
+{
+    dsp::SoloAssistant sa;
+    sa.configure(0, 0);
+    sa.recordNote(60);
+
+    sa.setPreset(dsp::SoloPreset::Prudent);
+    REQUIRE(sa.suggest(48, 84).size() == 2);
+
+    sa.setPreset(dsp::SoloPreset::Dub);
+    REQUIRE(sa.suggest(48, 84).size() == 3);
+}
+
