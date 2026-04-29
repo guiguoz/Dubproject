@@ -817,6 +817,30 @@ public:
                 return;
             }
         }
+
+        // Right-click on waveform preview area → context menu
+        if (e.eventComponent == this)
+        {
+            static constexpr int kTopH    = 18;
+            static constexpr int kScrollH = 12;
+            static constexpr int kPad     = 3;
+            static constexpr int kWfX     = kPad + 76;
+            static constexpr int kWfW     = 60;
+            const int H    = getHeight();
+            const int rowH = (H - kTopH - kPad - kScrollH - kPad * 2) / 9;
+            const int gridY = kTopH + kPad;
+            for (int t = 0; t < 9; ++t)
+            {
+                if (slotEnvelopes_[static_cast<std::size_t>(t)].empty()) continue;
+                const int ry = gridY + t * rowH;
+                if (e.x >= kWfX && e.x <= kWfX + kWfW &&
+                    e.y >= ry   && e.y <= ry + rowH)
+                {
+                    showSlotContextMenu(t);
+                    return;
+                }
+            }
+        }
     }
 
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
@@ -959,7 +983,7 @@ private:
         juce::PopupMenu menu;
         menu.addItem(1, "Load file...");
         if (!slotFilePaths_[static_cast<std::size_t>(slot)].empty())
-            menu.addItem(2, "Clear slot");
+            menu.addItem(2, "Vider le slot");
         menu.addSeparator();
         menu.addItem(3, "Copy track");
         menu.addItem(4, "Paste track", hasPasteData);
