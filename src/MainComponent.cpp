@@ -2312,31 +2312,31 @@ void MainComponent::resetCurrentSceneFull()
 
 void MainComponent::copyCurrentSceneToNext()
 {
-    captureCurrentScene();
-
-    // Toutes les scènes sauf la courante sont des destinations valides (y compris vides)
+    // Scènes source disponibles : toutes les scènes utilisées sauf la courante
     juce::PopupMenu menu;
     int itemId = 1;
     for (int i = 0; i < kMaxScenes; ++i)
     {
-        if (i == currentScene_)
+        if (i == currentScene_ || !scenes_[static_cast<std::size_t>(i)].used)
             { ++itemId; continue; }
-        const bool used = scenes_[static_cast<std::size_t>(i)].used;
-        menu.addItem(itemId,
-                     "Scene " + juce::String(i + 1) + (used ? "" : "  (vide)"));
+        menu.addItem(itemId, "Scene " + juce::String(i + 1));
         ++itemId;
     }
+
+    if (menu.getNumItems() == 0)
+        return;
 
     menu.showMenuAsync(
         juce::PopupMenu::Options().withTargetComponent(&sceneCopyBtn_),
         [this](int result)
         {
             if (result <= 0) return;
-            const int destIdx = result - 1;  // itemId == sceneIndex + 1
-            scenes_[static_cast<std::size_t>(destIdx)] =
-                scenes_[static_cast<std::size_t>(currentScene_)];
-            scenes_[static_cast<std::size_t>(destIdx)].used = true;
-            juce::Logger::writeToLog("Scene " + juce::String(currentScene_ + 1) +
-                                     " copied to scene " + juce::String(destIdx + 1));
+            const int srcIdx = result - 1;  // itemId == sceneIndex + 1
+            scenes_[static_cast<std::size_t>(currentScene_)] =
+                scenes_[static_cast<std::size_t>(srcIdx)];
+            scenes_[static_cast<std::size_t>(currentScene_)].used = true;
+            applyScene(currentScene_);
+            juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
+                                     " copied into scene " + juce::String(currentScene_ + 1));
         });
 }
