@@ -361,6 +361,24 @@ Dubproject/   (nom du dossier local peut varier)
 
 ### Sprint 20 — Robust Pitch Tracking
 
+## PingPong Delay (v1.0) — Dub Techno
+
+- Objectif: Ping-Pong Delay RT-safe avec bus Send/Return, HP→sat→LP, smoothing et zéro alloc/zero lock dans le callback audio.
+- BPM: engineBpm injecté via setBpm sur PingPongDelay et le Sampler (transport comme source unique).
+- SR par défaut: 44.1 kHz (initialisation; préparé/updaté lors de prepare()).
+- Delay max: 5.0 s (fixe dans prepare()).
+- Mapping tone: t^2 (courbe perceptuelle par défaut).
+- Smoothing: block-based, tau par défaut 50 ms.
+- Détails API:
+  - setBpm(float bpm), setEnabled(bool), setSend(float), setWet(float), setFeedback(float), setTone(float), setDrive(float), setDiv(int)
+  - processAdd(const float* inL, const float* inR, float* outL, float* outR, int n)
+- Architecture: HP 1-pole (stable via HP=x-LP(x)); LP 1-pole; saturation tanh; HP/LP calculés à partir tone; readFrac (linéaire) pour lecture fractionnaire; delay jitter-free via smoothing.
+- Persistance: migration silencieuse; defaults si absent dans le .saxfx.
+- Tests: unitaires PingPongDelay et tests d’intégration post-duck.
+- UI: Enable, Send, Div, Feedback, Tone, Wet, Freeze, Drive.
+- Defaults: maxDelay=5s, tau=50ms, div stocké en atomic<int>.
+
+
 | Feature | Description |
 |---------|-------------|
 | YIN DC blocker | Filtre passe-haut (40 Hz) dynamique par échantillon intégré avant différence (`YinPitchTracker::process`) pour éliminer le DC offset de la carte son |

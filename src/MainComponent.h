@@ -134,6 +134,17 @@ private:
     bool                    reloadPending_ { false };       // sample chargé pendant mix actif
     std::array<bool, 9>     manualTypeOverride_ {};         // clic droit → type prioritaire sur rôle fixe
 
+    // ── Dub Delay global bus ───────────────────────────────────────────────────
+    juce::ToggleButton dubDelayEnableBtn_;
+    juce::Slider       dubDelaySendSlider_;
+    juce::Slider       dubDelayWetSlider_;
+    juce::Slider       dubDelayFeedbackSlider_;
+    juce::Slider       dubDelayToneSlider_;
+    juce::Slider       dubDelayDriveSlider_;
+    juce::ComboBox     dubDelayDivCombo_;
+    juce::TextButton   dubDelayFreezeBtn_;
+    juce::Label        dubDelayLabel_;
+
     // ── Sidebar lower — scene navigation ──────────────────────────────────────
     juce::TextButton sceneUpBtn_;
     juce::Label      sceneNumLabel_;

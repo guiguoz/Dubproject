@@ -523,6 +523,62 @@ MainComponent::MainComponent()
     addAndMakeVisible(stepSeqPanel_);
 
     // ── Master key selector (sidebar) ─────────────────────────────────────────
+    // ── Dub Delay global bus
+    dubDelayLabel_.setText("DUB DELAY", juce::dontSendNotification);
+    dubDelayLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.5f).withStyle("Bold")));
+    dubDelayLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFF4CDFA8));
+    dubDelayLabel_.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(dubDelayLabel_);
+
+    dubDelayEnableBtn_.setButtonText("ON");
+    dubDelayEnableBtn_.setClickingTogglesState(true);
+    dubDelayEnableBtn_.onStateChange = [this] {
+        dspPipeline_.getDubDelay().setEnabled(dubDelayEnableBtn_.getToggleState());
+    };
+    addAndMakeVisible(dubDelayEnableBtn_);
+
+    dubDelayFreezeBtn_.setButtonText("FREEZE");
+    dubDelayFreezeBtn_.setClickingTogglesState(true);
+    dubDelayFreezeBtn_.onStateChange = [this] {
+        dspPipeline_.getDubDelay().setFreeze(dubDelayFreezeBtn_.getToggleState());
+    };
+    addAndMakeVisible(dubDelayFreezeBtn_);
+
+    auto setupDubSlider = [](juce::Slider& s, double lo, double hi, double def) {
+        s.setSliderStyle(juce::Slider::LinearHorizontal);
+        s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        s.setRange(lo, hi, 0.01);
+        s.setValue(def, juce::dontSendNotification);
+    };
+    setupDubSlider(dubDelaySendSlider_,     0.0, 1.0,  0.20);
+    setupDubSlider(dubDelayWetSlider_,      0.0, 1.0,  0.28);
+    setupDubSlider(dubDelayFeedbackSlider_, 0.0, 0.95, 0.48);
+    setupDubSlider(dubDelayToneSlider_,     0.0, 1.0,  0.55);
+    setupDubSlider(dubDelayDriveSlider_,    0.0, 1.0,  0.15);
+
+    dubDelaySendSlider_    .onValueChange = [this] { dspPipeline_.getDubDelay().setSend    (static_cast<float>(dubDelaySendSlider_    .getValue())); };
+    dubDelayWetSlider_     .onValueChange = [this] { dspPipeline_.getDubDelay().setWet     (static_cast<float>(dubDelayWetSlider_     .getValue())); };
+    dubDelayFeedbackSlider_.onValueChange = [this] { dspPipeline_.getDubDelay().setFeedback(static_cast<float>(dubDelayFeedbackSlider_.getValue())); };
+    dubDelayToneSlider_    .onValueChange = [this] { dspPipeline_.getDubDelay().setTone    (static_cast<float>(dubDelayToneSlider_    .getValue())); };
+    dubDelayDriveSlider_   .onValueChange = [this] { dspPipeline_.getDubDelay().setDrive   (static_cast<float>(dubDelayDriveSlider_   .getValue())); };
+
+    addAndMakeVisible(dubDelaySendSlider_);
+    addAndMakeVisible(dubDelayWetSlider_);
+    addAndMakeVisible(dubDelayFeedbackSlider_);
+    addAndMakeVisible(dubDelayToneSlider_);
+    addAndMakeVisible(dubDelayDriveSlider_);
+
+    dubDelayDivCombo_.addItem("1/8",   1);
+    dubDelayDivCombo_.addItem("1/4",   2);
+    dubDelayDivCombo_.addItem("1/2",   3);
+    dubDelayDivCombo_.addItem("1 bar", 4);
+    dubDelayDivCombo_.setSelectedId(2, juce::dontSendNotification);
+    dubDelayDivCombo_.onChange = [this] {
+        const auto div = static_cast<dsp::GridDiv>(dubDelayDivCombo_.getSelectedId() - 1);
+        dspPipeline_.getDubDelay().setDiv(div);
+    };
+    addAndMakeVisible(dubDelayDivCombo_);
+
     static const char* kNoteNames[12] = {
         "C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"
     };

@@ -1,5 +1,8 @@
 #include "PingPongDelay.h"
 #include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <algorithm>
 
 using namespace dsp;
@@ -22,6 +25,14 @@ void PingPongDelay::prepare(double sr, int maxBlock) noexcept
   lpStateL_ = lpStateR_ = 0.f;
   hpStateL_ = hpStateR_ = 0.f;
   aLP_ = 0.0f; aHP_ = 0.0f;
+  // initialize HP/LP coefficients from current tone mapping
+  const float tRaw = tone_.load();
+  float t = tRaw < 0.0f ? 0.0f : (tRaw > 1.0f ? 1.0f : tRaw);
+  const float t2 = t * t; // perceptual cubic curve could be applied here
+  const float lpHz = 1800.0f * (1.0f - t2) + 8000.0f * t2;
+  const float hpHz = 90.0f * (1.0f - t2) + 40.0f * t2;
+  aLP_ = std::exp(-2.0f * M_PI * lpHz / static_cast<float>(sampleRate_));
+  aHP_ = std::exp(-2.0f * M_PI * hpHz / static_cast<float>(sampleRate_));
 }
 
 void PingPongDelay::reset() noexcept

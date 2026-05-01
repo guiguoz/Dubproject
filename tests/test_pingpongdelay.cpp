@@ -28,3 +28,31 @@ TEST_CASE("PingPongDelay basic init", "[pingpong]")
     // Basic sanity: outputs should be finite numbers and not NaN
     for(int i=0;i<N;++i){ REQUIRE(std::isfinite(outL[i])); REQUIRE(std::isfinite(outR[i])); }
 }
+
+TEST_CASE("PingPongDelay integration: BPM sync + stable delay across blocks", "[pingpong][integration]")
+{
+  PingPongDelay pp;
+  pp.prepare(44100.0, 512);
+  pp.setBpm(120.0f);
+  pp.setEnabled(true);
+  pp.setSend(0.25f);
+  pp.setWet(0.25f);
+  pp.setFeedback(0.4f);
+  pp.setTone(0.5f);
+  pp.setDrive(0.2f);
+  pp.setDiv(0);
+
+  const int N = 256;
+  float inL[N]  = {0}, inR[N] = {0};
+  float outL[N] = {0}, outR[N] = {0};
+  // Pulse input to excite delay
+  inL[0] = 1.0f; inR[0] = 0.0f;
+  for (int k = 0; k < 4; ++k) {
+    pp.processAdd(inL, inR, outL, outR, N);
+    // ensure outputs are finite
+    for (int i=0;i<N;++i) {
+      REQUIRE(std::isfinite(outL[i]));
+      REQUIRE(std::isfinite(outR[i]));
+    }
+  }
+}

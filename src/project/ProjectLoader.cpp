@@ -80,6 +80,19 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     data.version     = static_cast<int>(root.getProperty("version", 1));
     data.bpm         = getFloat(root, "bpm", 120.f);  // v4
 
+    // Migration: silent defaults for PingPongDelay / dub delay bus when missing
+    // If the project save does not contain dubDelay fields (older projects),
+    // apply safe defaults so open works without audible surprises.
+    if (!root.hasProperty("dubDelayEnabled")) {
+        data.dubDelayEnabled  = false;
+        data.dubDelaySend     = 0.20f;
+        data.dubDelayWet      = 0.28f;
+        data.dubDelayFeedback = 0.48f;
+        data.dubDelayTone     = 0.55f;
+        data.dubDelayDrive    = 0.15f;
+        data.dubDelayDiv      = 1;
+    }
+
     // ── Effect chain ──────────────────────────────────────────────────────────
     if (data.version >= 2)
     {
@@ -256,6 +269,18 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     if (data.version >= 10)
         data.soloPreset = static_cast<int>(root.getProperty("soloPreset", 0));
 
+    // ── v11 — dub delay global bus ────────────────────────────────────────────
+    if (data.version >= 11)
+    {
+        data.dubDelayEnabled  = getBool (root, "dubDelayEnabled",  false);
+        data.dubDelaySend     = getFloat(root, "dubDelaySend",     0.20f);
+        data.dubDelayWet      = getFloat(root, "dubDelayWet",      0.28f);
+        data.dubDelayFeedback = getFloat(root, "dubDelayFeedback", 0.48f);
+        data.dubDelayTone     = getFloat(root, "dubDelayTone",     0.55f);
+        data.dubDelayDrive    = getFloat(root, "dubDelayDrive",    0.15f);
+        data.dubDelayDiv      = static_cast<int>(root.getProperty("dubDelayDiv", 1));
+    }
+
     return data;
 }
 
@@ -265,7 +290,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     10);  // always write latest format
+    root->setProperty("version",     11);  // always write latest format
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
 
@@ -429,6 +454,15 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             kpArr.add(static_cast<double>(p));
         root->setProperty("keyboardParams", kpArr);
     }
+
+    // ── v11 — dub delay global bus ────────────────────────────────────────────
+    root->setProperty("dubDelayEnabled",  data.dubDelayEnabled);
+    root->setProperty("dubDelaySend",     static_cast<double>(data.dubDelaySend));
+    root->setProperty("dubDelayWet",      static_cast<double>(data.dubDelayWet));
+    root->setProperty("dubDelayFeedback", static_cast<double>(data.dubDelayFeedback));
+    root->setProperty("dubDelayTone",     static_cast<double>(data.dubDelayTone));
+    root->setProperty("dubDelayDrive",    static_cast<double>(data.dubDelayDrive));
+    root->setProperty("dubDelayDiv",      data.dubDelayDiv);
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);

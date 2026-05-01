@@ -111,6 +111,14 @@ struct ProjectData
     bool                             keyboardMono   { false };
     // v10 — solo assistant preset (0=Off, 1=Prudent, 2=Dub)
     int                              soloPreset     { 0 };
+    // v11 — dub delay global bus
+    bool                             dubDelayEnabled  { false };
+    float                            dubDelaySend     { 0.20f };
+    float                            dubDelayWet      { 0.28f };
+    float                            dubDelayFeedback { 0.48f };
+    float                            dubDelayTone     { 0.55f };
+    float                            dubDelayDrive    { 0.15f };
+    int                              dubDelayDiv      { 1 };  // GridDiv::Quarter
 };
 
 } // namespace project

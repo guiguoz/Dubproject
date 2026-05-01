@@ -90,6 +90,7 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/EffectChainOptimizer.cpp
     src/dsp/EffectFactory.cpp
     src/dsp/SynthEffect.cpp
+    src/dsp/PingPongDelay.cpp
     src/dsp/AiContentClassifier.cpp
     src/dsp/AiMixEngine.cpp
     src/dsp/FeatureExtractor.cpp
