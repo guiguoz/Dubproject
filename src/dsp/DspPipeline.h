@@ -6,6 +6,7 @@
 #include "KeyboardSynth.h"
 #include "LockFreeQueue.h"
 #include "MasterLimiter.h"
+#include "PingPongDelay.h"
 #include "Sampler.h"
 #include "YinPitchTracker.h"
 
@@ -64,8 +65,11 @@ class DspPipeline
     // Forward the master BPM to sampler + tempo-synced effects (Delay).
     void setBpm(float bpm) noexcept
     {
+        bpm_.store(bpm, std::memory_order_relaxed);
         sampler_.setBpm(bpm);
         effectChain_.setBpm(bpm);
+        dubDelay_.setBpm(bpm);
+        pingPongDelay_.setBpm(bpm);
     }
 
     // ── Effect Chain and other sub-modules ──────────────────────────────────
@@ -74,6 +78,7 @@ class DspPipeline
     Sampler& getSampler() noexcept { return sampler_; }
     BpmDetector& getBpmDetector() noexcept { return bpmDetector_; }
     ExpressionMapper& getExpressionMapper() noexcept { return expressionMapper_; }
+    PingPongDelay& getDubDelay() noexcept { return dubDelay_; }
 
     /// Queue used by MidiManager to push SamplerEvents (lock-free).
     LockFreeQueue<SamplerEvent, 64>& getMidiEventQueue() noexcept
@@ -137,6 +142,8 @@ class DspPipeline
     BpmDetector      bpmDetector_;
     ExpressionMapper expressionMapper_;
     MasterLimiter    masterLimiter_;
+    PingPongDelay    dubDelay_;
+    PingPongDelay    pingPongDelay_;
 
     LockFreeQueue<SamplerEvent,   64> midiEventQueue_;
     LockFreeQueue<KeyboardEvent,  64> keyboardEventQueue_;
@@ -163,6 +170,8 @@ class DspPipeline
 
     // Forced pitch from piano keyboard (0 = off)
     std::atomic<float> forcedPitchHz_{ 0.f };
+
+    std::atomic<float> bpm_{ 120.f };  // cached for dubDelay_ (GUI thread writes, audio reads)
 
     // ── Mono-sub < 120 Hz (PA mono compatibility) ───────────────────────────
     struct MonoSubFilter {

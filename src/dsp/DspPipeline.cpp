@@ -14,11 +14,14 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     sampler_.prepare(sampleRate, maxBlockSize);
     keyboardSynth_.prepare(sampleRate, maxBlockSize);
     bpmDetector_.prepare(sampleRate);
+    dubDelay_.prepare(sampleRate, maxBlockSize);
+    pingPongDelay_.prepare(sampleRate, maxBlockSize);
 
     tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
     tempBufL_.resize(std::max(maxBlockSize, 256), 0.0f);
     tempBufR_.resize(std::max(maxBlockSize, 256), 0.0f);
     monoSubFilter_.prepare(sampleRate);
+    dubDelay_.setBpm(bpm_.load(std::memory_order_relaxed));
 }
 
 void DspPipeline::reset() noexcept
@@ -27,6 +30,7 @@ void DspPipeline::reset() noexcept
     effectChain_.reset();
     sampler_.reset();
     bpmDetector_.reset();
+    dubDelay_.reset();
     rmsRunning_ = 0.0f;
     smoothDuck_ = 1.0f;
     monoSubFilter_.reset();
@@ -316,6 +320,12 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
             }
             currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
         }
+
+        // 7b. Dub delay send/return (post-duck sampler signal)
+        dubDelay_.processAdd(tempBufL_.data(), tempBufR_.data(), left, right, numSamples);
+        // Ping-Pong Delay post-duck integration
+        if (numSamples > 0)
+            pingPongDelay_.processAdd(tempBufL_.data(), tempBufR_.data(), left, right, numSamples);
     }
     else
     {
