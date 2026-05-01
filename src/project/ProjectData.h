@@ -89,7 +89,7 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 10 };
+    int                         version     { 6 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;
