@@ -3,6 +3,7 @@
 #include <atomic>
 #include <vector>
 #include <cmath>
+#include "DspCommon.h"
 
 namespace dsp {
 
@@ -23,7 +24,8 @@ public:
   void setFeedback(float) noexcept; // clamp to 0..0.95
   void setTone(float) noexcept;     // 0..1 (dub-friendly)
   void setDrive(float) noexcept;    // 0..1
-  void setDiv(int div) noexcept;    // atomic int to store the grid division
+  void setDiv(int div) noexcept;     // store as int (atomic)
+  void setFreeze(bool) noexcept;     // optional freeze state for transitions
 
   // Core processing: inL/inR are the inputs for this block; outputs written to outL/outR
   void processAdd(const float* inL, const float* inR,
@@ -42,7 +44,8 @@ private:
   std::atomic<float> fb_   { 0.40f };
   std::atomic<float> tone_ { 0.50f };
   std::atomic<float> drive_ { 0.15f };
-  std::atomic<int>   div_   { 0 };
+  std::atomic<int> div_   { 0 };
+  std::atomic<bool> freeze_ { false };
   bool enabled_ { true };
 
   // State for simple 1-pole filters (HP/LP) on the output path

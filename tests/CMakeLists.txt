@@ -44,6 +44,7 @@ add_executable(SaxFXTests
     ../src/dsp/Flanger.cpp
     ../src/dsp/Harmonizer.cpp
     ../src/dsp/Sampler.cpp
+    ../src/dsp/PingPongDelay.cpp
     ../src/dsp/KeyboardSynth.cpp
     ../src/dsp/DspPipeline.cpp
     # Sprint 4 DSP layer (pure C++, no JUCE — ReverbEffect excluded)

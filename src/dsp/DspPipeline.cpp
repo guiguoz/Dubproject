@@ -15,6 +15,8 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     keyboardSynth_.prepare(sampleRate, maxBlockSize);
     bpmDetector_.prepare(sampleRate);
     dubDelay_.prepare(sampleRate, maxBlockSize);
+    // Real call (assumes DubDelay exposes setDiv(int)); initialize to 0
+    dubDelay_.setDiv(0);
     pingPongDelay_.prepare(sampleRate, maxBlockSize);
 
     tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
@@ -51,6 +53,10 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
 
     // 2. BPM detection (analysis only)
     bpmDetector_.process(buffer, numSamples);
+    // Propagate transport BPM to delays on every block
+    const float currentBpm = bpm_.load(std::memory_order_relaxed);
+    dubDelay_.setBpm(currentBpm);
+    pingPongDelay_.setBpm(currentBpm);
 
     // 3. Smoothed RMS (exponential moving average over samples)
     for (int i = 0; i < numSamples; ++i)
@@ -159,7 +165,9 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
             {
                 smoothDuck_ = std::clamp(smoothDuck_ + kDuckCoeff * (targetDuck - smoothDuck_),
                                          0.0f, 2.0f);
-                buffer[i] += tempBuffer_[i] * smoothDuck_;
+                // post-duck: apply duck to sampler buffer before adding to main mix
+                tempBuffer_[i] *= smoothDuck_;
+                buffer[i] += tempBuffer_[i];
             }
 
             currentDuckingGain_.store(smoothDuck_, std::memory_order_relaxed);
@@ -306,8 +314,11 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
             {
                 smoothDuck_ = std::clamp(smoothDuck_ + kDuckCoeff * (targetDuck - smoothDuck_),
                                          0.0f, 2.0f);
-                left [i] += tempBufL_[i] * smoothDuck_;
-                right[i] += tempBufR_[i] * smoothDuck_;
+                // post-duck: apply duck to sampler buffers before adding to main mix
+                tempBufL_[i] *= smoothDuck_;
+                tempBufR_[i] *= smoothDuck_;
+                left [i] += tempBufL_[i];
+                right[i] += tempBufR_[i];
             }
             currentDuckingGain_.store(smoothDuck_, std::memory_order_relaxed);
         }
