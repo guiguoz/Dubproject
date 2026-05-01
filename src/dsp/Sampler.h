@@ -52,8 +52,20 @@ public:
 
     // Trigger / stop — safe to call from any thread (audio or MIDI).
     void trigger(int slot) noexcept;
-    void stop(int slot) noexcept;
-    void stopAllSlots() noexcept;  // immediately stops all playing slots
+
+    // StopMode controls the fade-out duration applied when stopping a slot.
+    // Encoded as int so it fits in a single atomic<int> (stopPending).
+    // 0 = no stop pending; 1..4 = mode values.
+    enum class StopMode : int
+    {
+        Normal    = 1,  // 350 ms — extinction douce (pads, basses)
+        SceneSwap = 2,  // 20 ms  — coupure nette avant crossfade de scene
+        Retrigger = 3,  // 6 ms   — choke rapide (hihat, perc)
+        Instant   = 4   // 0 ms   — coupure immediate
+    };
+
+    void stop(int slot, StopMode mode = StopMode::Normal) noexcept;
+    void stopAllSlots(StopMode mode = StopMode::Normal) noexcept;
 
     // Sidechain: sourceSlot (e.g. KICK) ducks targetSlot (e.g. BASS) in real-time.
     // Call from GUI thread after magic mix. Max kMaxSidechainPairs pairs.
@@ -153,7 +165,7 @@ private:
     struct PlayState
     {
         std::atomic<bool> triggerPending  { false };
-        std::atomic<bool> stopPending     { false };
+        std::atomic<int>  stopPending     { 0 };  // 0=none, encodes StopMode
         std::atomic<bool> quantTrigPending{ false };
         std::atomic<int>  quantDiv        { static_cast<int>(GridDiv::Quarter) };
         
@@ -193,6 +205,19 @@ private:
     std::array<std::array<float, kHaasDelayMax>, kMaxSlots> haasDelay_ {};
     std::array<int, kMaxSlots> haasWritePos_    {};  // audio thread only
     std::array<int, kMaxSlots> haasDelaySamples_{};  // 0 = off; written by GUI thread
+
+    // Returns fade-out length in samples for a given StopMode.
+    int stopFadeSamples(StopMode mode) const noexcept
+    {
+        switch (mode)
+        {
+            case StopMode::SceneSwap: return static_cast<int>(sampleRate_ * 0.020);
+            case StopMode::Retrigger: return 256;
+            case StopMode::Instant:   return 0;
+            case StopMode::Normal:
+            default:                  return static_cast<int>(sampleRate_ * 0.350);
+        }
+    }
 
     // Applies Haas delay ring buffer for one slot and returns delayed sample.
     inline float applyHaasDelay(int slot, float sample) noexcept;

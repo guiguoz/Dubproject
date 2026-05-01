@@ -131,17 +131,17 @@ bool Sampler::isPendingTrigger(int slot) const noexcept
         .quantTrigPending.load(std::memory_order_acquire);
 }
 
-void Sampler::stop(int slot) noexcept
+void Sampler::stop(int slot, StopMode mode) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
     playStates_[static_cast<std::size_t>(slot)]
-        .stopPending.store(true, std::memory_order_release);
+        .stopPending.store(static_cast<int>(mode), std::memory_order_release);
 }
 
-void Sampler::stopAllSlots() noexcept
+void Sampler::stopAllSlots(StopMode mode) noexcept
 {
     for (int i = 0; i < kMaxSlots; ++i)
-        stop(i);
+        stop(i, mode);
 }
 
 void Sampler::setSidechainPair(int sourceSlot, int targetSlot) noexcept
@@ -325,20 +325,21 @@ void Sampler::process(float* buffer, int numSamples) noexcept
             }
         }
 
-        static constexpr int kFadeInLen  =  88;
+        static constexpr int kFadeInLen          = 88;
         static constexpr int kRetriggerFadeOutLen = 256;
-        const int kStopFadeOutLen = static_cast<int>(sampleRate_ * 0.35);
 
-        if (ps.stopPending.load(std::memory_order_acquire))
+        const int stopMode = ps.stopPending.load(std::memory_order_acquire);
+        if (stopMode != 0)
         {
-            ps.stopPending.store(false, std::memory_order_release);
+            ps.stopPending.store(0, std::memory_order_release);
+            const int fadeLen = stopFadeSamples(static_cast<StopMode>(stopMode));
             for (int vi = 0; vi < 2; ++vi)
             {
                 if (ps.voices[vi].playing)
                 {
-                    ps.voices[vi].fadeOut      = kStopFadeOutLen;
-                    ps.voices[vi].fadeOutTotal = kStopFadeOutLen;
-                    ps.voices[vi].retriggering = true;
+                    ps.voices[vi].fadeOut          = fadeLen;
+                    ps.voices[vi].fadeOutTotal     = (fadeLen > 0) ? fadeLen : 1;
+                    ps.voices[vi].retriggering     = true;
                     ps.voices[vi].stopAfterFadeOut = true;
                 }
             }
@@ -375,9 +376,10 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                         // Polyphonic fade-out of current voice
                         if (ps.voices[cv].playing)
                         {
-                            ps.voices[cv].fadeOut      = kStopFadeOutLen;
-                            ps.voices[cv].fadeOutTotal = kStopFadeOutLen;
-                            ps.voices[cv].retriggering = true;
+                            const int kNormalFade = stopFadeSamples(StopMode::Normal);
+                            ps.voices[cv].fadeOut          = kNormalFade;
+                            ps.voices[cv].fadeOutTotal     = kNormalFade;
+                            ps.voices[cv].retriggering     = true;
                             ps.voices[cv].stopAfterFadeOut = true;
                         }
                         
@@ -514,7 +516,7 @@ void Sampler::reset() noexcept
         auto& ps = playStates_[static_cast<std::size_t>(v)];
         ps.triggerPending.store(false, std::memory_order_relaxed);
         ps.quantTrigPending.store(false, std::memory_order_relaxed);
-        ps.stopPending.store(false, std::memory_order_relaxed);
+        ps.stopPending.store(0, std::memory_order_relaxed);
         for (int vi=0; vi<2; ++vi) {
             ps.voices[vi].playing = false;
             ps.voices[vi].readPos = 0;
@@ -635,9 +637,8 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         }
     }
 
-    static constexpr int kFadeInLen  =  88;
+    static constexpr int kFadeInLen          = 88;
     static constexpr int kRetriggerFadeOutLen = 256;
-    const int kStopFadeOutLen = static_cast<int>(sampleRate_ * 0.35);
 
     for (int v = 0; v < kMaxSlots; ++v)
     {
@@ -645,16 +646,18 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         auto&       ps     = playStates_[idx];
         const auto& sl     = slots_[idx];
 
-        if (ps.stopPending.load(std::memory_order_acquire))
+        const int stopMode = ps.stopPending.load(std::memory_order_acquire);
+        if (stopMode != 0)
         {
-            ps.stopPending.store(false, std::memory_order_release);
+            ps.stopPending.store(0, std::memory_order_release);
+            const int fadeLen = stopFadeSamples(static_cast<StopMode>(stopMode));
             for (int vi = 0; vi < 2; ++vi)
             {
                 if (ps.voices[vi].playing)
                 {
-                    ps.voices[vi].fadeOut      = kStopFadeOutLen;
-                    ps.voices[vi].fadeOutTotal = kStopFadeOutLen;
-                    ps.voices[vi].retriggering = true;
+                    ps.voices[vi].fadeOut          = fadeLen;
+                    ps.voices[vi].fadeOutTotal     = (fadeLen > 0) ? fadeLen : 1;
+                    ps.voices[vi].retriggering     = true;
                     ps.voices[vi].stopAfterFadeOut = true;
                 }
             }
@@ -691,9 +694,10 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
                         // Polyphonic switch
                         if (ps.voices[cv].playing)
                         {
-                            ps.voices[cv].fadeOut      = kStopFadeOutLen;
-                            ps.voices[cv].fadeOutTotal = kStopFadeOutLen;
-                            ps.voices[cv].retriggering = true;
+                            const int kNormalFade = stopFadeSamples(StopMode::Normal);
+                            ps.voices[cv].fadeOut          = kNormalFade;
+                            ps.voices[cv].fadeOutTotal     = kNormalFade;
+                            ps.voices[cv].retriggering     = true;
                             ps.voices[cv].stopAfterFadeOut = true;
                         }
                         

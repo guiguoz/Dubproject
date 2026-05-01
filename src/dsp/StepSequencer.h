@@ -217,6 +217,13 @@ public:
         return fired;
     }
 
+    /// Returns true if a quantized scene transition is already armed.
+    /// GUI thread: use this to block a second navigateScene() call while one is pending.
+    bool hasPendingTransition() const noexcept
+    {
+        return pendingTransLen_.load(std::memory_order_relaxed) > 0;
+    }
+
 private:
     bool   steps_[kTracks][kMaxSteps] {};
     int    trackStepCount_[kTracks]   = { kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,

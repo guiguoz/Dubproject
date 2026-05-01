@@ -252,7 +252,7 @@ MainComponent::MainComponent()
         const int nSteps = stepSequencer_.getTrackStepCount(track);
         for (int s = 0; s < nSteps; ++s)
             if (stepSequencer_.getStep(track, s)) return;  // at least one step still on
-        dspPipeline_.getSampler().stop(track);
+        dspPipeline_.getSampler().stop(track, dsp::Sampler::StopMode::Retrigger);
     };
 
     // Slot cleared: unload PCM and clear engine path
@@ -278,7 +278,7 @@ MainComponent::MainComponent()
     {
         if (!playing)
         {
-            dspPipeline_.getSampler().stopAllSlots();
+            dspPipeline_.getSampler().stopAllSlots(dsp::Sampler::StopMode::Normal);
             // Appliquer toute transition en attente immédiatement au stop
             const int pending = pendingScene_.exchange(-1, std::memory_order_relaxed);
             if (pending >= 0)
@@ -2157,9 +2157,8 @@ void MainComponent::applyScene(int idx)
         stepSequencer_.resetPhase();
 
     // Stop all slots on scene change -- sequencer re-triggers at step 0.
-    // Without this, a one-shot triggered at end of previous scene keeps playing
-    // into the new scene (hihat/perc inertia bug).
-    dspPipeline_.getSampler().stopAllSlots();
+    // StopMode::SceneSwap = 20 ms fade-out, coupure nette avant crossfade de gains (300 ms).
+    dspPipeline_.getSampler().stopAllSlots(dsp::Sampler::StopMode::SceneSwap);
 
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
@@ -2254,6 +2253,13 @@ void MainComponent::navigateScene(int delta)
         currentScene_ = target;
         applyScene(currentScene_);
         updateSceneLabel();
+        return;
+    }
+
+    // P0.3 — bloquer si une transition quantisée est déjà en cours
+    if (stepSequencer_.hasPendingTransition())
+    {
+        DBG("navigateScene: transition already pending, ignoring.");
         return;
     }
 
