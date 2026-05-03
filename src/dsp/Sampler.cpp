@@ -3,6 +3,10 @@
 #include <cassert>
 #include <cmath>
 
+// RT-safety guarantee: atomic<float> must be lock-free (single instruction load/store).
+static_assert(std::atomic<float>::is_always_lock_free,
+              "std::atomic<float> is not lock-free on this platform — audio thread will block");
+
 namespace {
 
 // Equal-power overlap crossfade at loop wrap (~23 ms @ 44.1 kHz). Dub-friendly for sub bass.
@@ -186,6 +190,19 @@ void Sampler::setSlotMuted(int slot, bool muted) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
     slots_[static_cast<std::size_t>(slot)].muted.store(muted, std::memory_order_relaxed);
+}
+
+void Sampler::setSlotDelaySend(int slot, float send) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    const float clamped = send < 0.f ? 0.f : (send > 1.f ? 1.f : send);
+    slots_[static_cast<std::size_t>(slot)].delaySend.store(clamped, std::memory_order_relaxed);
+}
+
+float Sampler::getSlotDelaySend(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    return slots_[static_cast<std::size_t>(slot)].delaySend.load(std::memory_order_relaxed);
 }
 
 bool Sampler::isLoaded(int slot) const noexcept
@@ -590,7 +607,8 @@ inline float Sampler::applyHaasDelay(int slot, float sample) noexcept
 // For pan < 0 (left-heavy):  right gets delayed (Haas on R).
 // For pan = 0 (centre):      right gets delayed (subtle stereo width).
 // ─────────────────────────────────────────────────────────────────────────────
-void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
+void Sampler::processStereo(float* left, float* right, int numSamples,
+                             float* sendBufL, float* sendBufR) noexcept
 {
     constexpr float kSCThresh  = 0.25f;
     constexpr float kSCRatio   = 4.0f;
@@ -818,6 +836,14 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
             }
 
             const float s_final = sidechainGains_[idx] * s_mix;
+
+            if (sendBufL != nullptr) {
+                const float sendGain = sl.delaySend.load(std::memory_order_relaxed);
+                if (sendGain > 0.f) {
+                    sendBufL[i] += s_final * sendGain;
+                    sendBufR[i] += s_final * sendGain;
+                }
+            }
 
             if (haasOnLeft)
             {

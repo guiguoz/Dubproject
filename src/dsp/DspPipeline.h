@@ -157,6 +157,8 @@ class DspPipeline
     std::vector<float> tempBuffer_; // Used for sampler ducking (mono path)
     std::vector<float> tempBufL_;   // Stereo path: sampler left  temp
     std::vector<float> tempBufR_;   // Stereo path: sampler right temp
+    std::vector<float> tempSendL_;  // Delay send bus: pre-pan mono left
+    std::vector<float> tempSendR_;  // Delay send bus: pre-pan mono right
 
     // Latest pitch (written by audio thread, read by GUI thread)
     // lastPitchHz_ contains the STABLE pitch (after gating + smoothing), not raw YIN.

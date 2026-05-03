@@ -348,6 +348,46 @@ MainComponent::MainComponent()
         }
         spatialViz_.setSaxActive(true);
         stepSeqPanel_.setMagicActive(true);
+
+        // Delay send per slot — KICK et BASS exclus, le reste nourrit le bus delay
+        using CT = ::dsp::SmartSamplerEngine::ContentType;
+        auto& sampler = dspPipeline_.getSampler();
+        for (int i = 0; i < 9; ++i)
+        {
+            float send = 0.f;
+            if (dspPipeline_.getSampler().isLoaded(i))
+            {
+                switch (samplerEngine_.getDetectedType(i))
+                {
+                    case CT::KICK:  send = 0.00f; break;
+                    case CT::BASS:  send = 0.00f; break;
+                    case CT::SNARE: send = 0.15f; break;
+                    case CT::HIHAT: send = 0.25f; break;
+                    case CT::PERC:  send = 0.30f; break;
+                    case CT::LOOP:  send = 0.40f; break;
+                    case CT::SYNTH: send = 0.65f; break;
+                    case CT::PAD:   send = 0.80f; break;
+                    default:        send = 0.40f; break;
+                }
+            }
+            sampler.setSlotDelaySend(i, send);
+        }
+
+        // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
+        auto& dd = dspPipeline_.getDubDelay();
+        dd.setEnabled(true);
+        dd.setSend   (0.25f);
+        dd.setWet    (0.30f);
+        dd.setFeedback(0.50f);
+        dd.setTone   (0.55f);
+        dd.setDrive  (0.15f);
+        dd.setDiv    (1);   // Quarter note par défaut
+
+        // Sync visuel du bouton ON (pas obligatoire mais cohérent)
+        juce::MessageManager::callAsync([this]
+        {
+            dubDelayEnableBtn_.setToggleState(true, juce::dontSendNotification);
+        });
     };
 
     // onDone : si revert → effacer les tags, re-appliquer trim, relancer IA si reload en attente
@@ -1263,6 +1303,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.trackBarCounts = src.trackBarCounts;
         dst.trimStart      = src.trimStart;
         dst.trimEnd        = src.trimEnd;
+        dst.delaySends     = src.delaySends;
         for (int t = 0; t < 9; ++t)
         {
             const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1502,6 +1543,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.trackBarCounts = src.trackBarCounts;
             dst.trimStart      = src.trimStart;
             dst.trimEnd        = src.trimEnd;
+            dst.delaySends     = src.delaySends;
             for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -2177,6 +2219,7 @@ void MainComponent::captureCurrentScene()
         sc.filePaths    [idx]  = stepSeqPanel_.getSlotFilePath(i);
         sc.mutes        [idx]  = sampler.isSlotMuted(i);
         sc.gains        [idx]  = sampler.getSlotGain(i);
+        sc.delaySends   [idx]  = sampler.getSlotDelaySend(i);
         sc.trackBarCounts[idx] = stepSequencer_.getTrackBarCount(i);
         for (int s = 0; s < numSteps; ++s)
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
@@ -2252,8 +2295,9 @@ void MainComponent::applyScene(int idx)
             samplerEngine_.setSlotFilePath(i, newPath);
         }
 
-        dspPipeline_.getSampler().setSlotMuted(i, sc.mutes[i]);
-        dspPipeline_.getSampler().setSlotGain (i, sc.gains[sidx]);
+        dspPipeline_.getSampler().setSlotMuted    (i, sc.mutes[i]);
+        dspPipeline_.getSampler().setSlotGain     (i, sc.gains[sidx]);
+        dspPipeline_.getSampler().setSlotDelaySend(i, sc.delaySends[sidx]);
         stepSeqPanel_.setSlotMuted(i, sc.mutes[i]);
         for (int s = 0; s < numSteps; ++s)
         {

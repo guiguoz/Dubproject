@@ -24,6 +24,7 @@ struct SampleSlot
     std::atomic<bool>  oneShot     { true };
     std::atomic<bool>  loaded      { false }; // set after data is ready
     std::atomic<bool>  muted       { false }; // silenced but keeps playing
+    std::atomic<float> delaySend   { 0.0f };  // 0=dry-only, 1=full send to delay bus
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,6 +91,8 @@ public:
     void setSlotLoop(int slot, bool loop) noexcept;
     void setSlotOneShot(int slot, bool oneShot) noexcept;
     void setSlotMuted(int slot, bool muted) noexcept;
+    void setSlotDelaySend(int slot, float send) noexcept;
+    float getSlotDelaySend(int slot) const noexcept;
 
     // Solo: only the solo slot produces audio; -1 = no solo.
     // Safe to call from any thread (atomic).
@@ -133,7 +136,9 @@ public:
     // Mixes sampler output into STEREO L/R buffers (additive, realtime-safe).
     // Pan law: equal-power (-3dB centre).
     // Width: Haas effect delay on the weaker channel (set via setSlotHaasDelay).
-    void processStereo(float* left, float* right, int numSamples) noexcept;
+    // sendBufL/R: optional pre-pan mono send bus (accumulated per slot delaySend).
+    void processStereo(float* left, float* right, int numSamples,
+                       float* sendBufL = nullptr, float* sendBufR = nullptr) noexcept;
 
     // Set panoramic position for a slot.  pan in [-1.0, +1.0].
     // Converts to equal-power L/R gains stored as atomics.

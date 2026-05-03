@@ -81,6 +81,7 @@ struct SceneSaveData
     std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };  // v6
     std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };  // v7
     std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
+    std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };  // v8
     bool                                  used          { false };
 };
 
@@ -89,7 +90,7 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 6 };
+    int                         version     { 7 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
     std::vector<EffectSlotData> effectChain;

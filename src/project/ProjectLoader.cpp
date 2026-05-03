@@ -249,6 +249,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     for (int i = 0; i < 9 && i < teArr->size(); ++i)
                         sc.trimEnd[static_cast<std::size_t>(i)] =
                             static_cast<int>((*teArr)[i]);
+
+                // v8 — delay sends per slot (default 0 for backward compat)
+                if (const auto* dsArr = entry["delaySends"].getArray())
+                    for (int i = 0; i < 9 && i < dsArr->size(); ++i)
+                        sc.delaySends[static_cast<std::size_t>(i)] =
+                            juce::jlimit(0.f, 1.f, static_cast<float>((*dsArr)[i]));
             }
         }
     }
@@ -437,6 +443,12 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             }
             entry->setProperty("trimStart", trimStartArr);
             entry->setProperty("trimEnd",   trimEndArr);
+
+            // v8 — delay sends
+            juce::Array<juce::var> delaySendsArr;
+            for (int i = 0; i < 9; ++i)
+                delaySendsArr.add(sc.delaySends[static_cast<std::size_t>(i)]);
+            entry->setProperty("delaySends", delaySendsArr);
 
             scenesArr.add(juce::var(entry.get()));
         }

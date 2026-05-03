@@ -72,11 +72,14 @@ void PingPongDelay::processAdd(const float* inL, const float* inR,
     return;
 
   const float wet   = wet_.load();
+  const float send  = send_.load();
   const float fb    = fb_.load();
   const float bpm   = bpm_.load();
   const float drive = drive_.load();
 
-  const float delaySec = (60.0f / bpm) * 0.25f; // quarter-note
+  static constexpr float kDivBeats[] = { 0.5f, 1.0f, 2.0f, 4.0f };
+  const int divIdx = std::clamp(div_.load(), 0, 3);
+  const float delaySec = (60.0f / bpm) * kDivBeats[divIdx];
   const int delaySamples = std::max(2, std::min(maxDelaySamples_ - 2,
       static_cast<int>(std::ceil(delaySec * static_cast<float>(sampleRate_)))));
 
@@ -91,8 +94,8 @@ void PingPongDelay::processAdd(const float* inL, const float* inR,
     const float dr = delayR_[readPos];
 
     // Ping-pong: write input + cross-feedback into delay lines
-    delayL_[writePos_] = il * wet + dr * fb;
-    delayR_[writePos_] = ir * wet + dl * fb;
+    delayL_[writePos_] = il * send + dr * fb;
+    delayR_[writePos_] = ir * send + dl * fb;
 
     // Wet only: dry is already in outL/outR — applying filters to dl/dr only
     lpStateL_ = (1.0f - aLP_) * dl + aLP_ * lpStateL_;

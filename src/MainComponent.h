@@ -166,6 +166,7 @@ private:
         std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };
         std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };
         std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };
+        std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };
         bool                                  used          { false };
     };
 
