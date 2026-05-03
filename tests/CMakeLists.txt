@@ -38,6 +38,7 @@ add_executable(SaxFXTests
     test_feature_extractor.cpp
     test_ai_mix_engine.cpp
     test_keyboard_synth.cpp
+    test_pingpongdelay.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/YinPitchTracker.cpp
     ../src/dsp/WsolaShifter.cpp

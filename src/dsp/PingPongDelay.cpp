@@ -12,7 +12,7 @@ PingPongDelay::PingPongDelay()
   // defaults set in prepare(); keep constructor lightweight
 }
 
-void PingPongDelay::prepare(double sr, int maxBlock) noexcept
+void PingPongDelay::prepare(double sr, int /*maxBlock*/) noexcept
 {
   sampleRate_ = sr;
   // 5 seconds buffer by default
@@ -76,7 +76,6 @@ void PingPongDelay::processAdd(const float* inL, const float* inR,
   // Local copies to avoid read/write hazards if inL/inR = outL/outR
   const float wet = wet_.load();
   const float fb  = fb_.load();
-  const float s = send_.load();
   const float bpm = bpm_.load();
   // Simple fixed delay calculation (quarter-note default)
   float delayBeats = 0.25f; // 1/4 note

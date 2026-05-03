@@ -252,7 +252,7 @@ MainComponent::MainComponent()
         const int nSteps = stepSequencer_.getTrackStepCount(track);
         for (int s = 0; s < nSteps; ++s)
             if (stepSequencer_.getStep(track, s)) return;  // at least one step still on
-        dspPipeline_.getSampler().stop(track, dsp::Sampler::StopMode::Retrigger);
+        dspPipeline_.getSampler().stop(track, ::dsp::Sampler::StopMode::Retrigger);
     };
 
     // Slot cleared: unload PCM and clear engine path
@@ -278,7 +278,7 @@ MainComponent::MainComponent()
     {
         if (!playing)
         {
-            dspPipeline_.getSampler().stopAllSlots(dsp::Sampler::StopMode::Normal);
+            dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Normal);
             // Appliquer toute transition en attente immédiatement au stop
             const int pending = pendingScene_.exchange(-1, std::memory_order_relaxed);
             if (pending >= 0)
@@ -574,8 +574,8 @@ MainComponent::MainComponent()
     dubDelayDivCombo_.addItem("1 bar", 4);
     dubDelayDivCombo_.setSelectedId(2, juce::dontSendNotification);
     dubDelayDivCombo_.onChange = [this] {
-        const auto div = static_cast<dsp::GridDiv>(dubDelayDivCombo_.getSelectedId() - 1);
-        dspPipeline_.getDubDelay().setDiv(div);
+        const auto div = static_cast<::dsp::GridDiv>(dubDelayDivCombo_.getSelectedId() - 1);
+        dspPipeline_.getDubDelay().setDiv(static_cast<int>(div));
     };
     addAndMakeVisible(dubDelayDivCombo_);
 
@@ -2214,7 +2214,7 @@ void MainComponent::applyScene(int idx)
 
     // Stop all slots on scene change -- sequencer re-triggers at step 0.
     // StopMode::SceneSwap = 20 ms fade-out, coupure nette avant crossfade de gains (300 ms).
-    dspPipeline_.getSampler().stopAllSlots(dsp::Sampler::StopMode::SceneSwap);
+    dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::SceneSwap);
 
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
