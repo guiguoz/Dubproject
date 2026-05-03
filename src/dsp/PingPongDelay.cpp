@@ -67,53 +67,48 @@ void PingPongDelay::setFreeze(bool f) noexcept { freeze_.store(f); }
 void PingPongDelay::processAdd(const float* inL, const float* inR,
                               float* outL, float* outR, int n) noexcept
 {
-  if (freeze_.load(std::memory_order_relaxed)) {
-    // Freeze state: bypass processing to avoid glitches during scene changes
-    for (int i = 0; i < n; ++i) { outL[i] = inL[i]; outR[i] = inR[i]; }
+  // Bypass: leave outL/outR untouched (they already hold the full main mix)
+  if (!enabled_ || freeze_.load(std::memory_order_relaxed))
     return;
-  }
-  if (!enabled_){ for(int i=0;i<n;++i){ outL[i]=inL[i]; outR[i]=inR[i]; } return; }
-  // Local copies to avoid read/write hazards if inL/inR = outL/outR
-  const float wet = wet_.load();
-  const float fb  = fb_.load();
-  const float bpm = bpm_.load();
-  // Simple fixed delay calculation (quarter-note default)
-  float delayBeats = 0.25f; // 1/4 note
-  float delaySec = (60.0f / bpm) * delayBeats;
-  int delaySamples = std::max(2, std::min(maxDelaySamples_ - 2, static_cast<int>(std::ceil(delaySec * static_cast<float>(sampleRate_)))));
-  if (delaySamples <= 0) delaySamples = 1;
+
+  const float wet   = wet_.load();
+  const float fb    = fb_.load();
+  const float bpm   = bpm_.load();
+  const float drive = drive_.load();
+
+  const float delaySec = (60.0f / bpm) * 0.25f; // quarter-note
+  const int delaySamples = std::max(2, std::min(maxDelaySamples_ - 2,
+      static_cast<int>(std::ceil(delaySec * static_cast<float>(sampleRate_)))));
 
   int readPos = writePos_ - delaySamples;
   if (readPos < 0) readPos += maxDelaySamples_;
 
   for (int i = 0; i < n; ++i)
   {
-    float il = inL[i];
-    float ir = inR[i];
-    float dl = delayL_[readPos];
-    float dr = delayR_[readPos];
-    float fbL = dr * fb;
-    float fbR = dl * fb;
-    delayL_[writePos_] = il * wet + fbL;
-    delayR_[writePos_] = ir * wet + fbR;
-    float oL = il * (1.0f - wet) + dl * wet; // direct + delayed
-    float oR = ir * (1.0f - wet) + dr * wet;
-    // simple LP/HP path (1-pole) and soft clipping
-    // LP
-    lpStateL_ = (1.0f - aLP_) * oL + aLP_ * lpStateL_;
-    lpStateR_ = (1.0f - aLP_) * oR + aLP_ * lpStateR_;
-    float hpL = oL - lpStateL_;
-    float hpR = oR - lpStateR_;
-    float drive = drive_.load();
-    float satL = std::tanh((1.0f + 4.0f * drive) * hpL);
-    float satR = std::tanh((1.0f + 4.0f * drive) * hpR);
-    // Final LP after saturation
+    const float il = inL[i];
+    const float ir = inR[i];
+    const float dl = delayL_[readPos];
+    const float dr = delayR_[readPos];
+
+    // Ping-pong: write input + cross-feedback into delay lines
+    delayL_[writePos_] = il * wet + dr * fb;
+    delayR_[writePos_] = ir * wet + dl * fb;
+
+    // Wet only: dry is already in outL/outR — applying filters to dl/dr only
+    lpStateL_ = (1.0f - aLP_) * dl + aLP_ * lpStateL_;
+    lpStateR_ = (1.0f - aLP_) * dr + aLP_ * lpStateR_;
+    const float hpL = dl - lpStateL_;
+    const float hpR = dr - lpStateR_;
+    const float satL = std::tanh((1.0f + 4.0f * drive) * hpL);
+    const float satR = std::tanh((1.0f + 4.0f * drive) * hpR);
     lpStateL_ = (1.0f - aLP_) * satL + aLP_ * lpStateL_;
     lpStateR_ = (1.0f - aLP_) * satR + aLP_ * lpStateR_;
-    outL[i] = lpStateL_;
-    outR[i] = lpStateR_;
-    writePos_  = (writePos_  + 1) % maxDelaySamples_;
+
+    // ADD to main mix — never overwrite
+    outL[i] += lpStateL_ * wet;
+    outR[i] += lpStateR_ * wet;
+
+    writePos_ = (writePos_ + 1) % maxDelaySamples_;
     readPos   = (readPos   + 1) % maxDelaySamples_;
   }
-  // end for
 }
