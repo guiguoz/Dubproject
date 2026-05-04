@@ -8,7 +8,6 @@
 #include "midi/MidiManager.h"
 #include "project/ProjectLoader.h"
 #include "ui/EffectChainEditor.h"
-#include "ui/PianoKeyboardPanel.h"
 #include "ui/NeonButton.h"
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
@@ -93,20 +92,15 @@ private:
 
     // ── Modular Effects ──────────────────────────────────────────────────────
     ui::EffectChainEditor  effectChainEditor_{dspPipeline_.getEffectChain()};
-    ui::PianoKeyboardPanel pianoKeyboardPanel_;
     ui::SaxStaffPanel          saxStaffPanel_;
     ui::SpatialVisualization   spatialViz_;
     juce::Label fxLabel_;
 
     // ── View switching ────────────────────────────────────────────────────────
-    enum class ViewMode { Effects, Keyboard, Staff };
+    enum class ViewMode { Effects, Staff };
     ViewMode         currentViewMode_ { ViewMode::Effects };
-    juce::TextButton viewKeyboardBtn_;  // 🎹
     juce::TextButton viewStaffBtn_;     // 🎼
     void             updateViewVisibility();
-
-    // ── Keyboard synth state (shadow for project save) ───────────────────────
-    int              keyboardPresetIdx_ { -1 };  // -1 = no preset selected
 
     // ── Master key (tonalité de référence) ───────────────────────────────────
     int              masterKeyRoot_  { 0 };     // 0=C .. 11=B

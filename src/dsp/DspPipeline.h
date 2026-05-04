@@ -3,7 +3,6 @@
 #include "BpmDetector.h"
 #include "EffectChain.h"
 #include "ExpressionMapper.h"
-#include "KeyboardSynth.h"
 #include "LockFreeQueue.h"
 #include "MasterLimiter.h"
 #include "PingPongDelay.h"
@@ -16,12 +15,6 @@
 
 namespace dsp
 {
-
-struct KeyboardEvent {
-    int   note;   // MIDI note 0-127
-    float vel;    // 0..1
-    bool  on;
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DspPipeline
@@ -95,9 +88,7 @@ class DspPipeline
         return rmsLevel_.load(std::memory_order_relaxed);
     }
 
-    // ── Keyboard forced pitch (GUI thread) ──────────────────────────────────
-    // When > 0, the piano keyboard panel overrides the YIN-detected pitch for
-    // the effect chain (SynthEffect follows it).  0 = use live YIN pitch.
+    // ── Forced pitch override (GUI thread) ──────────────────────────────────
     void setForcedPitch(float hz) noexcept
     {
         forcedPitchHz_.store(hz, std::memory_order_relaxed);
@@ -123,22 +114,10 @@ class DspPipeline
     void setMasterLimiterEnabled(bool enabled) noexcept { masterLimiter_.setEnabled(enabled); }
     bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }
 
-    // ── Keyboard synth (GUI thread) ──────────────────────────────────────────
-    // Instrument indépendant, mixé dans le bus master après le sampler.
-    void keyboardNoteOn (int midiNote, float vel = 1.f) noexcept;
-    void keyboardNoteOff(int midiNote)                  noexcept;
-    void  setKeyboardParam   (int idx, float value) noexcept { keyboardSynth_.setParam(idx, value); }
-    void  setKeyboardGain    (float g)              noexcept { keyboardSynth_.setGain(g); }
-    void  applyKeyboardPreset(int idx)              noexcept { keyboardSynth_.applyPreset(idx); }
-    float getKeyboardParam   (int idx)        const noexcept { return keyboardSynth_.getParam(idx); }
-    float getKeyboardGain    ()               const noexcept { return keyboardSynth_.getGain(); }
-    bool  getKeyboardMono    ()               const noexcept { return keyboardSynth_.getMonoMode(); }
-
   private:
     YinPitchTracker  pitchTracker_;
     EffectChain      effectChain_;
     Sampler          sampler_;
-    KeyboardSynth    keyboardSynth_;
     BpmDetector      bpmDetector_;
     ExpressionMapper expressionMapper_;
     MasterLimiter    masterLimiter_;
@@ -146,7 +125,6 @@ class DspPipeline
     PingPongDelay    pingPongDelay_;
 
     LockFreeQueue<SamplerEvent,   64> midiEventQueue_;
-    LockFreeQueue<KeyboardEvent,  64> keyboardEventQueue_;
 
     std::atomic<bool> samplerEnabled_{true};
     std::atomic<bool> duckingEnabled_{false};

@@ -431,18 +431,6 @@ MainComponent::MainComponent()
         }
     };
 
-    // Keyboard gain suggestion fired by SmartSamplerEngine at end of magic mix.
-    // Called on the mix background thread — dspPipeline_.setKeyboardGain() is
-    // atomic-safe; UI update is posted to the message thread.
-    samplerEngine_.onKeyboardGainSuggested = [this](float g)
-    {
-        dspPipeline_.setKeyboardGain(g);
-        juce::MessageManager::callAsync([this, g]
-        {
-            pianoKeyboardPanel_.setVolumeValue(g);
-        });
-    };
-
     // Override manuel du type par slot (right-click sur l'indicateur)
     stepSeqPanel_.onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
@@ -650,26 +638,13 @@ MainComponent::MainComponent()
     globalScaleCombo_.setSelectedId(1, juce::dontSendNotification);
     globalScaleCombo_.onChange = [this] {
         const int selectedId = globalScaleCombo_.getSelectedId() - 1;
-        const auto st = static_cast<ui::PianoKeyboardPanel::ScaleType>(selectedId);
-        pianoKeyboardPanel_.setScaleType(st);
-        saxStaffPanel_     .setScaleType(st);
+        const auto st = static_cast<ui::ScaleType>(selectedId);
+        saxStaffPanel_.setScaleType(st);
         soloAssistant_.configure(masterKeyRoot_, selectedId);
-        pianoKeyboardPanel_.clearSuggestions();
     };
     addAndMakeVisible(globalScaleCombo_);
 
     // ── View switch buttons ───────────────────────────────────────────────────
-    viewKeyboardBtn_.setButtonText(juce::CharPointer_UTF8("\xf0\x9f\x8e\xb9"));  // 🎹
-    viewKeyboardBtn_.setClickingTogglesState(false);
-    viewKeyboardBtn_.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF131314));
-    viewKeyboardBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
-    viewKeyboardBtn_.onClick = [this] {
-        currentViewMode_ = (currentViewMode_ == ViewMode::Keyboard)
-                           ? ViewMode::Effects : ViewMode::Keyboard;
-        updateViewVisibility();
-    };
-    addAndMakeVisible(viewKeyboardBtn_);
-
     viewStaffBtn_.setButtonText(juce::CharPointer_UTF8("\xf0\x9f\x8e\xbc"));  // 🎼
     viewStaffBtn_.setClickingTogglesState(false);
     viewStaffBtn_.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF131314));
@@ -680,38 +655,6 @@ MainComponent::MainComponent()
         updateViewVisibility();
     };
     addAndMakeVisible(viewStaffBtn_);
-
-    // ── Piano keyboard panel ──────────────────────────────────────────────────
-    pianoKeyboardPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
-    // onNoteOn / onNoteOff non câblés — le clavier est un instrument indépendant
-    pianoKeyboardPanel_.onKeyNoteOn  = [this](int note) {
-        dspPipeline_.keyboardNoteOn(note);
-        soloAssistant_.recordNote(note);
-        pianoKeyboardPanel_.setSuggestions(soloAssistant_.suggest(36, 96));
-    };
-    pianoKeyboardPanel_.onKeyNoteOff = [this](int note) {
-        dspPipeline_.keyboardNoteOff(note);
-    };
-    pianoKeyboardPanel_.onSynthParam = [this](int paramIdx, float value) {
-        dspPipeline_.setKeyboardParam(paramIdx, value);
-    };
-    pianoKeyboardPanel_.onVolumeChanged = [this](float gain) {
-        dspPipeline_.setKeyboardGain(gain);
-    };
-    pianoKeyboardPanel_.onPreset = [this](int idx) {
-        keyboardPresetIdx_ = idx;
-        if (idx >= 0)
-            dspPipeline_.applyKeyboardPreset(idx);
-        samplerEngine_.setKeyboardPreset(idx);   // -1 = désactivé (pas de ducking)
-        if (samplerEngine_.isMagicActive())
-            samplerEngine_.applyMagicMix();       // recalcule immédiatement avec le nouveau contexte
-    };
-    pianoKeyboardPanel_.onSoloPresetChanged = [this](int idx) {
-        soloAssistant_.setPreset(static_cast<::dsp::SoloPreset>(idx));
-        pianoKeyboardPanel_.clearSuggestions();
-    };
-    pianoKeyboardPanel_.setVisible(false);
-    addAndMakeVisible(pianoKeyboardPanel_);
 
     // ── Sax staff panel ───────────────────────────────────────────────────────
     saxStaffPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
@@ -1101,16 +1044,10 @@ void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::updateViewVisibility()
 {
-    effectChainEditor_  .setVisible(currentViewMode_ == ViewMode::Effects);
-    pianoKeyboardPanel_ .setVisible(currentViewMode_ == ViewMode::Keyboard);
-    saxStaffPanel_      .setVisible(currentViewMode_ == ViewMode::Staff);
-    fxLabel_            .setVisible(currentViewMode_ == ViewMode::Effects);
+    effectChainEditor_.setVisible(currentViewMode_ == ViewMode::Effects);
+    saxStaffPanel_    .setVisible(currentViewMode_ == ViewMode::Staff);
+    fxLabel_          .setVisible(currentViewMode_ == ViewMode::Effects);
 
-    // Update button highlight colours
-    viewKeyboardBtn_.setColour(juce::TextButton::buttonColourId,
-        currentViewMode_ == ViewMode::Keyboard
-            ? juce::Colour(0xFF4CDFA8).withAlpha(0.20f)
-            : juce::Colour(0xFF131314));
     viewStaffBtn_.setColour(juce::TextButton::buttonColourId,
         currentViewMode_ == ViewMode::Staff
             ? juce::Colour(0xFF4CDFA8).withAlpha(0.20f)
@@ -1122,10 +1059,8 @@ void MainComponent::updateViewVisibility()
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::applyMasterKey()
 {
-    pianoKeyboardPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
-    saxStaffPanel_     .setMasterKey(masterKeyRoot_, masterKeyMajor_);
+    saxStaffPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
     soloAssistant_.configure(masterKeyRoot_, globalScaleCombo_.getSelectedId() - 1);
-    pianoKeyboardPanel_.clearSuggestions();
 
     // Update the existing MusicContext used by HarmonizerEffect / SmartMixEngine
     auto ctx     = effectChainEditor_.getMusicContext();
@@ -1315,13 +1250,6 @@ void MainComponent::saveProjectToFile(const juce::File& f)
 
     // ── Solo assistant preset (v10) ───────────────────────────────────────────
     data.soloPreset = static_cast<int>(soloAssistant_.preset());
-
-    // ── Keyboard synth state (v9) ─────────────────────────────────────────────
-    data.keyboardPreset = keyboardPresetIdx_;
-    data.keyboardGain   = dspPipeline_.getKeyboardGain();
-    data.keyboardMono   = dspPipeline_.getKeyboardMono();
-    for (int i = 0; i < ::dsp::KeyboardSynth::kParamCount; ++i)
-        data.keyboardParams[static_cast<std::size_t>(i)] = dspPipeline_.getKeyboardParam(i);
 
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
@@ -1559,32 +1487,9 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateSceneLabel();
     }
 
-    // ── v9 — keyboard synth state ─────────────────────────────────────────────
-    if (data.version >= 9)
-    {
-        // Restore all 13 params to the DSP engine
-        for (int i = 0; i < ::dsp::KeyboardSynth::kParamCount; ++i)
-            dspPipeline_.setKeyboardParam(i, data.keyboardParams[static_cast<std::size_t>(i)]);
-        dspPipeline_.setKeyboardGain(data.keyboardGain);
-        // Mono mode is encoded in the params array (preset applies it), but set explicitly
-        // in case the user tweaked it independently of a preset.
-
-        keyboardPresetIdx_ = data.keyboardPreset;
-        samplerEngine_.setKeyboardPreset(keyboardPresetIdx_);
-
-        // Update UI (must be on message thread — we are already on it here)
-        pianoKeyboardPanel_.setPresetSelection(keyboardPresetIdx_);
-        pianoKeyboardPanel_.setVolumeValue(data.keyboardGain);
-        for (int i = 0; i < 8; ++i)   // only the 8 sliders exposed in the UI
-            pianoKeyboardPanel_.setParamValue(i, data.keyboardParams[static_cast<std::size_t>(i)]);
-    }
-
     // ── v10 — solo assistant preset ───────────────────────────────────────────
     if (data.version >= 10)
-    {
         soloAssistant_.setPreset(static_cast<::dsp::SoloPreset>(data.soloPreset));
-        pianoKeyboardPanel_.setSoloPreset(data.soloPreset);
-    }
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 
@@ -2011,9 +1916,8 @@ void MainComponent::resized()
         masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4, yFlow, halfW, 26);
         yFlow += 30;  // 26 + 4 gap
 
-        // Clavier / Portée
-        viewKeyboardBtn_.setBounds(sbBtnX,             yFlow, halfW, 24);
-        viewStaffBtn_   .setBounds(sbBtnX + halfW + 4, yFlow, halfW, 24);
+        // Portée musicale
+        viewStaffBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 24);
         yFlow += 30;  // 24 + 6 gap
 
         // PLAY (50px)
@@ -2040,9 +1944,8 @@ void MainComponent::resized()
     fxLabel_.setBounds(16, fxTop, 180, 16);
 
     const auto panelBounds = juce::Rectangle<int>(16, fxTop + 20, mainW, 390);
-    effectChainEditor_  .setBounds(panelBounds);
-    pianoKeyboardPanel_ .setBounds(panelBounds);
-    saxStaffPanel_      .setBounds(panelBounds);
+    effectChainEditor_.setBounds(panelBounds);
+    saxStaffPanel_    .setBounds(panelBounds);
 
     // Step sequencer section
     const int seqTop = fxTop + 20 + 390 + 28;

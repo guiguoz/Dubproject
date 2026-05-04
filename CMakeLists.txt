@@ -69,7 +69,6 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/Flanger.cpp
     src/dsp/Harmonizer.cpp
     src/dsp/Sampler.cpp
-    src/dsp/KeyboardSynth.cpp
     src/dsp/DspPipeline.cpp
     src/dsp/FlangerEffect.cpp
     src/dsp/HarmonizerEffect.cpp

@@ -259,18 +259,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         }
     }
 
-    // ── v9 — keyboard synth state ─────────────────────────────────────────────
-    if (data.version >= 9)
-    {
-        data.keyboardPreset = static_cast<int>(root.getProperty("keyboardPreset", -1));
-        data.keyboardGain   = getFloat(root, "keyboardGain", 0.5f);
-        data.keyboardMono   = getBool(root, "keyboardMono", false);
-        if (const auto* kpArr = root["keyboardParams"].getArray())
-            for (int i = 0; i < 13 && i < kpArr->size(); ++i)
-                data.keyboardParams[static_cast<std::size_t>(i)] =
-                    static_cast<float>(static_cast<double>((*kpArr)[i]));
-    }
-
     // ── v10 — solo assistant preset ───────────────────────────────────────────
     if (data.version >= 10)
         data.soloPreset = static_cast<int>(root.getProperty("soloPreset", 0));
@@ -455,17 +443,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         root->setProperty("scenes", scenesArr);
     }
 
-    // ── v9 — keyboard synth state ─────────────────────────────────────────────
-    root->setProperty("soloPreset",     data.soloPreset);      // v10
-    root->setProperty("keyboardPreset", data.keyboardPreset);
-    root->setProperty("keyboardGain",   static_cast<double>(data.keyboardGain));
-    root->setProperty("keyboardMono",   data.keyboardMono);
-    {
-        juce::Array<juce::var> kpArr;
-        for (float p : data.keyboardParams)
-            kpArr.add(static_cast<double>(p));
-        root->setProperty("keyboardParams", kpArr);
-    }
+    root->setProperty("soloPreset", data.soloPreset);  // v10
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
     root->setProperty("dubDelayEnabled",  data.dubDelayEnabled);

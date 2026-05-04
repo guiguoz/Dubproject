@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Colours.h"
-#include "PianoKeyboardPanel.h"
+#include "ScaleType.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -34,7 +34,7 @@ public:
         scaleCombo_.addItem("Dorien",           6);
         scaleCombo_.setSelectedId(1, juce::dontSendNotification);
         scaleCombo_.onChange = [this] {
-            scaleType_ = static_cast<PianoKeyboardPanel::ScaleType>(scaleCombo_.getSelectedId() - 1);
+            scaleType_ = static_cast<ScaleType>(scaleCombo_.getSelectedId() - 1);
             repaint();
         };
         addAndMakeVisible(scaleCombo_);
@@ -58,7 +58,7 @@ public:
         repaint();
     }
 
-    void setScaleType(PianoKeyboardPanel::ScaleType t) noexcept
+    void setScaleType(ScaleType t) noexcept
     {
         scaleType_ = t;
         scaleCombo_.setSelectedId(static_cast<int>(t) + 1, juce::dontSendNotification);
@@ -118,12 +118,12 @@ private:
     {
         switch (scaleType_)
         {
-            case PianoKeyboardPanel::ScaleType::Major:         return {{0,0},{2,1},{4,2},{5,3},{7,4},{9,5},{11,6}};
-            case PianoKeyboardPanel::ScaleType::Minor:         return {{0,0},{2,1},{3,2},{5,3},{7,4},{8,5},{10,6}};
-            case PianoKeyboardPanel::ScaleType::PentatonicMaj: return {{0,0},{2,1},{4,2},{7,4},{9,5}};
-            case PianoKeyboardPanel::ScaleType::PentatonicMin: return {{0,0},{3,2},{5,3},{7,4},{10,6}};
-            case PianoKeyboardPanel::ScaleType::Blues:         return {{0,0},{3,2},{5,3},{6,3},{7,4},{10,6}}; // Degree 3 used twice intentionally (e.g., F and F#)
-            case PianoKeyboardPanel::ScaleType::Dorian:        return {{0,0},{2,1},{3,2},{5,3},{7,4},{9,5},{10,6}};
+            case ScaleType::Major:         return {{0,0},{2,1},{4,2},{5,3},{7,4},{9,5},{11,6}};
+            case ScaleType::Minor:         return {{0,0},{2,1},{3,2},{5,3},{7,4},{8,5},{10,6}};
+            case ScaleType::PentatonicMaj: return {{0,0},{2,1},{4,2},{7,4},{9,5}};
+            case ScaleType::PentatonicMin: return {{0,0},{3,2},{5,3},{7,4},{10,6}};
+            case ScaleType::Blues:         return {{0,0},{3,2},{5,3},{6,3},{7,4},{10,6}}; // Degree 3 used twice intentionally (e.g., F and F#)
+            case ScaleType::Dorian:        return {{0,0},{2,1},{3,2},{5,3},{7,4},{9,5},{10,6}};
         }
         return {};
     }
@@ -134,11 +134,11 @@ private:
         
         // 1. Determine key signature of the scale's relative major
         int majorRoot = rootPitch;
-        if (scaleType_ == PianoKeyboardPanel::ScaleType::Minor ||
-            scaleType_ == PianoKeyboardPanel::ScaleType::PentatonicMin ||
-            scaleType_ == PianoKeyboardPanel::ScaleType::Blues) {
+        if (scaleType_ == ScaleType::Minor ||
+            scaleType_ == ScaleType::PentatonicMin ||
+            scaleType_ == ScaleType::Blues) {
             majorRoot = (rootPitch + 3) % 12;
-        } else if (scaleType_ == PianoKeyboardPanel::ScaleType::Dorian) {
+        } else if (scaleType_ == ScaleType::Dorian) {
             majorRoot = (rootPitch - 2 + 12) % 12;
         }
 
@@ -216,10 +216,10 @@ private:
 
         // 3. Determine Key Signature
         int majorRoot = rootPitch;
-        if (scaleType_ == PianoKeyboardPanel::ScaleType::Minor ||
-            scaleType_ == PianoKeyboardPanel::ScaleType::PentatonicMin ||
-            scaleType_ == PianoKeyboardPanel::ScaleType::Blues) majorRoot = (rootPitch + 3) % 12;
-        else if (scaleType_ == PianoKeyboardPanel::ScaleType::Dorian) majorRoot = (rootPitch - 2 + 12) % 12;
+        if (scaleType_ == ScaleType::Minor ||
+            scaleType_ == ScaleType::PentatonicMin ||
+            scaleType_ == ScaleType::Blues) majorRoot = (rootPitch + 3) % 12;
+        else if (scaleType_ == ScaleType::Dorian) majorRoot = (rootPitch - 2 + 12) % 12;
 
         static const int majorPitchToK[12] = {0, -5, 2, -3, 4, -1, -6, 1, -4, 3, -2, 5};
         int K = majorPitchToK[majorRoot];
@@ -324,12 +324,12 @@ private:
     {
         switch (scaleType_)
         {
-            case PianoKeyboardPanel::ScaleType::Major:         return "Majeur";
-            case PianoKeyboardPanel::ScaleType::Minor:         return "Mineur";
-            case PianoKeyboardPanel::ScaleType::PentatonicMaj: return "Pentatonique Maj";
-            case PianoKeyboardPanel::ScaleType::PentatonicMin: return "Pentatonique Min";
-            case PianoKeyboardPanel::ScaleType::Blues:         return "Blues";
-            case PianoKeyboardPanel::ScaleType::Dorian:        return "Dorien";
+            case ScaleType::Major:         return "Majeur";
+            case ScaleType::Minor:         return "Mineur";
+            case ScaleType::PentatonicMaj: return "Pentatonique Maj";
+            case ScaleType::PentatonicMin: return "Pentatonique Min";
+            case ScaleType::Blues:         return "Blues";
+            case ScaleType::Dorian:        return "Dorien";
         }
         return "";
     }
@@ -339,7 +339,7 @@ private:
 
     int         masterKey_   = 0;
     bool        masterMajor_ = true;
-    PianoKeyboardPanel::ScaleType scaleType_ = PianoKeyboardPanel::ScaleType::Major;
+    ScaleType scaleType_ = ScaleType::Major;
     Transposition trans_ = Transposition::TenorBb;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SaxStaffPanel)

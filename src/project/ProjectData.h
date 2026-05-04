@@ -103,13 +103,6 @@ struct ProjectData
     std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
     int                              currentScene   { 0 };
-    // v9 — keyboard synth global state (preset + custom params + volume)
-    int                              keyboardPreset { -1 };    // -1 = no preset
-    std::array<float, 13>            keyboardParams { 0.25f, 0.5f, 0.5f, 0.75f, 0.2f,
-                                                      0.02f, 0.25f, 1.f, 0.7f, 0.15f,
-                                                      0.f, 0.5f, 0.f };
-    float                            keyboardGain   { 0.5f };
-    bool                             keyboardMono   { false };
     // v10 — solo assistant preset (0=Off, 1=Prudent, 2=Dub)
     int                              soloPreset     { 0 };
     // v11 — dub delay global bus

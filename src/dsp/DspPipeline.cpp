@@ -12,7 +12,6 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     pitchTracker_.prepare(sampleRate, maxBlockSize);
     effectChain_.prepare(sampleRate, maxBlockSize);
     sampler_.prepare(sampleRate, maxBlockSize);
-    keyboardSynth_.prepare(sampleRate, maxBlockSize);
     bpmDetector_.prepare(sampleRate);
     dubDelay_.prepare(sampleRate, maxBlockSize);
     // Real call (assumes DubDelay exposes setDiv(int)); initialize to 0
@@ -186,18 +185,7 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
         currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
     }
 
-    // 7. Keyboard synth indépendant — drain queue + mix additif mono
-    {
-        KeyboardEvent kevt;
-        while (keyboardEventQueue_.tryPop(kevt))
-        {
-            if (kevt.on) keyboardSynth_.noteOn(kevt.note, kevt.vel);
-            else         keyboardSynth_.noteOff(kevt.note);
-        }
-        keyboardSynth_.processMonoAdd(buffer, numSamples);
-    }
-
-    // 8. Final Master Limiter (Soft-Clipper safety net)
+    // 7. Final Master Limiter (Soft-Clipper safety net)
     masterLimiter_.process(buffer, numSamples);
 }
 
@@ -346,18 +334,7 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
     }
 
-    // 8. Keyboard synth indépendant — drain queue + mix additif stéréo
-    {
-        KeyboardEvent kevt;
-        while (keyboardEventQueue_.tryPop(kevt))
-        {
-            if (kevt.on) keyboardSynth_.noteOn(kevt.note, kevt.vel);
-            else         keyboardSynth_.noteOff(kevt.note);
-        }
-        keyboardSynth_.processStereoAdd(left, right, numSamples);
-    }
-
-    // 9. Mono-sub < 120 Hz (dub techno / PA mono compatibility)
+    // 8. Mono-sub < 120 Hz (dub techno / PA mono compatibility)
     for (int i = 0; i < numSamples; ++i)
         monoSubFilter_.process(left[i], right[i]);
 
@@ -377,16 +354,6 @@ void DspPipeline::setSamplerEnabled(bool enabled) noexcept
 bool DspPipeline::isSamplerEnabled() const noexcept
 {
     return samplerEnabled_.load(std::memory_order_acquire);
-}
-
-void DspPipeline::keyboardNoteOn(int midiNote, float vel) noexcept
-{
-    keyboardEventQueue_.tryPush(KeyboardEvent{ midiNote, vel, true });
-}
-
-void DspPipeline::keyboardNoteOff(int midiNote) noexcept
-{
-    keyboardEventQueue_.tryPush(KeyboardEvent{ midiNote, 0.f, false });
 }
 
 PitchResult DspPipeline::getLastPitch() const noexcept

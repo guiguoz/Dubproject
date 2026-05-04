@@ -47,10 +47,9 @@ Ordre logique stéréo (résumé) :
 2. **RMS** lissé sur la gauche (VU, expression, ducking éventuel).
 3. `std::copy(left -> right)` puis **`EffectChain::processStereo(left, right)`** — vrai stéréo : `ReverbEffect` utilise `juce::dsp::Reverb::processStereo()` (Freeverb filtres peigne séparés L/R), `DelayEffect` fait le ping-pong L->R->L->R (second `RingBuffer` heap-allocated). Les effets sans override utilisent le défaut dual-mono (`process(L); process(R)`), ce qui préserve toute divergence stéréo amont.
 4. **ExpressionMapper** — peut pousser un paramètre d'effet selon le RMS.
-5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine).
-6. **KeyboardSynth::processStereoAdd()** — spread compact `kWidth=0.15` (était 0.35).
-7. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
-8. **MasterLimiter** sur L et R.
+5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine). Bus send par slot (`delaySend` atomique) alimente les delays séparément du mix principal.
+6. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
+7. **MasterLimiter** sur L et R.
 
 **Synth** : effet **100 % wet** sur le sax ; le sax sec disparaît quand le synth est audible — voir `SynthEffect` et README section Synth.
 
@@ -72,7 +71,6 @@ Ordre logique stéréo (résumé) :
 | Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin. Si l'effet a un comportement stéréo (L!=R), surcharger `processStereo()` ; sinon le défaut dual-mono suffit. |
 | Pipeline / ordre traitement | `DspPipeline.*`, éventuellement `MainComponent` (routing) |
 | Sampler / grille | `Sampler.*`, `StepSequencer.*`, `SmartSamplerEngine.*`, UI `StepSequencerPanel` |
-| Clavier / synthé solo | `KeyboardSynth.*`, `DspPipeline.*` (intégration SPSC noteOn/noteOff), `PianoKeyboardPanel.h` |
 | Sauvegarde projet | `ProjectData.h`, `ProjectLoader.cpp` (migrations **version** JSON), toute UI qui sérialise |
 | Thème / boutons | `SaxOsLookAndFeel`, `NeonButton`, `Colours`, `SaxFXLayout` / `SaxFXFonts` |
 

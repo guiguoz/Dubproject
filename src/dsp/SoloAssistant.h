@@ -57,7 +57,7 @@ public:
     }
 
 private:
-    // Scale intervals matching PianoKeyboardPanel::ScaleType order
+    // Scale intervals matching ui::ScaleType order
     static const int* scaleIntervals(int t, int& len) noexcept
     {
         static constexpr int kMaj[7]  = { 0,2,4,5,7,9,11 };
