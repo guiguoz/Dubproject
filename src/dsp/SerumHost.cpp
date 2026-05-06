@@ -15,9 +15,16 @@ SerumHost::~SerumHost()
 // ─────────────────────────────────────────────────────────────────────────────
 // load — message thread only
 // ─────────────────────────────────────────────────────────────────────────────
-bool SerumHost::load(const juce::String& vst3Path, double sampleRate, int blockSize)
+bool SerumHost::load(const juce::String& vst3Path, double sampleRate, int blockSize,
+                     juce::String* outError)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+
+    auto setErr = [&](const juce::String& msg)
+    {
+        juce::Logger::writeToLog("SerumHost: " + msg);
+        if (outError != nullptr) *outError = msg;
+    };
 
     unload();
 
@@ -27,22 +34,21 @@ bool SerumHost::load(const juce::String& vst3Path, double sampleRate, int blockS
     juce::OwnedArray<juce::PluginDescription> results;
     juce::VST3PluginFormat vst3;
 
-    // Scan the specific file (fast — no full directory scan)
     vst3.findAllTypesForFile(results, vst3Path);
 
     if (results.isEmpty())
     {
-        DBG("SerumHost: no VST3 found at " << vst3Path);
+        setErr("no VST3 found at: " + vst3Path);
         return false;
     }
 
-    juce::String error;
+    juce::String instError;
     plugin_ = formatManager_.createPluginInstance(
-        *results[0], sampleRate_, blockSize_, error);
+        *results[0], sampleRate_, blockSize_, instError);
 
     if (plugin_ == nullptr)
     {
-        DBG("SerumHost: failed to instantiate — " << error);
+        setErr("instantiation failed — " + instError);
         return false;
     }
 

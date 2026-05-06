@@ -29,8 +29,9 @@ public:
     // ── Lifecycle (message thread only) ──────────────────────────────────────
 
     // Load the VST3 at vst3Path, prepare it for playback.
-    // Returns true on success. Thread-safe flag isLoaded() updated atomically.
-    bool load(const juce::String& vst3Path, double sampleRate, int blockSize);
+    // Returns true on success. outError receives a human-readable diagnostic on failure.
+    bool load(const juce::String& vst3Path, double sampleRate, int blockSize,
+              juce::String* outError = nullptr);
 
     // Release the plugin. Call only when processingEnabled_ is false.
     void unload();

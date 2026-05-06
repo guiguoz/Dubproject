@@ -199,17 +199,33 @@ MainComponent::MainComponent()
 
     // ── EWI Synth section ─────────────────────────────────────────────────────
     styleSideBtn(serumLoadBtn_, "LOAD VST3");
+    styleSideBtn(serumShowUiBtn_, "SHOW UI");
+    serumShowUiBtn_.onClick = [this] { openSerumEditor(); };
+    addAndMakeVisible(serumShowUiBtn_);
+
     serumLoadBtn_.onClick = [this]
     {
         serumFileChooser_ = std::make_unique<juce::FileChooser>(
             "Select Serum VST3", juce::File{}, "*.vst3");
         serumFileChooser_->launchAsync(
             juce::FileBrowserComponent::openMode |
-            juce::FileBrowserComponent::canSelectFiles,
+            juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::canSelectDirectories,
             [this](const juce::FileChooser& fc)
             {
-                const auto f = fc.getResult();
-                if (f.existsAsFile())
+                // Walk up from the selected path to find the .vst3 bundle root.
+                // The native dialog navigates inside the bundle, so the user may
+                // end up selecting an internal file (PlugIn.ico, desktop.ini, etc.)
+                auto f = fc.getResult();
+                while (f.exists())
+                {
+                    if (f.getFileExtension().equalsIgnoreCase(".vst3"))
+                        break;
+                    const auto parent = f.getParentDirectory();
+                    if (parent == f) { f = juce::File{}; break; }
+                    f = parent;
+                }
+                if (f.exists())
                     loadSerumPlugin(f.getFullPathName());
             });
     };
@@ -1709,16 +1725,56 @@ void MainComponent::releaseResources()
 void MainComponent::loadSerumPlugin(const juce::String& vst3Path)
 {
     jassert(currentSampleRate_ > 0 && currentBufferSize_ > 0);
-    if (currentSampleRate_ == 0.0) return;
-    if (serumHost_.load(vst3Path, currentSampleRate_, currentBufferSize_))
+    if (currentSampleRate_ == 0.0)
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon, "Serum",
+            "Démarre le moteur audio avant de charger un VST3.", this);
+        return;
+    }
+    juce::String err;
+    if (serumHost_.load(vst3Path, currentSampleRate_, currentBufferSize_, &err))
+    {
         serumStatusLabel_.setText(serumHost_.getPluginName(), juce::dontSendNotification);
+        openSerumEditor();
+    }
     else
-        serumStatusLabel_.setText("load failed", juce::dontSendNotification);
+    {
+        const juce::String msg = err.isEmpty() ? "Echec inconnu" : err;
+        serumStatusLabel_.setText(msg, juce::dontSendNotification);
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon, "Serum — echec chargement", msg, this);
+    }
 }
 
 void MainComponent::unloadSerumPlugin()
 {
+    serumEditorWindow_.reset();
     serumHost_.unload();
+}
+
+void MainComponent::openSerumEditor()
+{
+    if (!serumHost_.isLoaded()) return;
+
+    if (serumEditorWindow_ != nullptr)
+    {
+        serumEditorWindow_->toFront(true);
+        return;
+    }
+
+    auto* editor = serumHost_.createEditor();
+    if (editor == nullptr) return;
+
+    serumEditorWindow_ = std::make_unique<SampleEditorWindow>(
+        serumHost_.getPluginName(), juce::Colours::black);
+    serumEditorWindow_->onClose = [this] { serumEditorWindow_.reset(); };
+    serumEditorWindow_->setContentOwned(editor, true);
+    serumEditorWindow_->setResizable(true, false);
+    serumEditorWindow_->setUsingNativeTitleBar(true);
+    serumEditorWindow_->centreWithSize(editor->getWidth(), editor->getHeight());
+    serumEditorWindow_->setVisible(true);
+    serumEditorWindow_->toFront(true);
 }
 
 //==============================================================================
@@ -2014,8 +2070,13 @@ void MainComponent::resized()
         yFlow += 58;  // 50 + 8 gap
 
         // ── EWI SYNTH section (labels drawn in paint()) ──────────────────────
-        // "EWI SYNTH" header at yFlow (10px), then load button 12px below
-        serumLoadBtn_    .setBounds(sbBtnX, yFlow + 12, sbBtnW, 22); yFlow += 38; // 12+22+4
+        // "EWI SYNTH" header at yFlow (10px), then buttons 12px below
+        {
+            const int halfB = (sbBtnW - 4) / 2;
+            serumLoadBtn_  .setBounds(sbBtnX,           yFlow + 12, halfB, 22);
+            serumShowUiBtn_.setBounds(sbBtnX + halfB + 4, yFlow + 12, halfB, 22);
+        }
+        yFlow += 38; // 12+22+4
         serumStatusLabel_.setBounds(sbBtnX, yFlow,      sbBtnW, 12); yFlow += 16; // 12+4
         // "EWI DEVICE" header at yFlow (10px), then editor 10px below
         ewiDeviceEditor_ .setBounds(sbBtnX, yFlow + 10, sbBtnW, 20); yFlow += 38; // 10+20+8

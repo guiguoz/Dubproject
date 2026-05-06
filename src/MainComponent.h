@@ -49,6 +49,7 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     // Must be called after prepareToPlay() so sampleRate / blockSize are known.
     void loadSerumPlugin(const juce::String& vst3Path);
     void unloadSerumPlugin();
+    void openSerumEditor();
 
     //==========================================================================
     // Component — rendu GUI
@@ -87,10 +88,12 @@ private:
     juce::MidiBuffer         ewiMidiBuffer_;
 
     // ── EWI Synth UI ─────────────────────────────────────────────────────────
-    juce::TextButton                  serumLoadBtn_;
-    juce::Label                       serumStatusLabel_;
-    juce::TextEditor                  ewiDeviceEditor_;
+    juce::TextButton                   serumLoadBtn_;
+    juce::TextButton                   serumShowUiBtn_;
+    juce::Label                        serumStatusLabel_;
+    juce::TextEditor                   ewiDeviceEditor_;
     std::unique_ptr<juce::FileChooser> serumFileChooser_;
+    std::unique_ptr<SampleEditorWindow> serumEditorWindow_;
 
     //==========================================================================
     // GUI — contrôles audio
