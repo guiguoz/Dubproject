@@ -1,9 +1,8 @@
 #pragma once
 
 #include "BpmDetector.h"
-#include "KeyDetector.h"
+#include "MusicContext.h"
 #include "Sampler.h"
-#include "SmartMixEngine.h"    // for MusicContext
 #include "WsolaShifter.h"
 #include "AiContentClassifier.h"
 
@@ -1180,18 +1179,7 @@ private:
         // ── Trim leading silence — align first transient to beat 1 ───────────
         bool modified = (trimLeadingSilence(pcm, sr) > 0);
 
-        // ── Key detection ────────────────────────────────────────────────────
-        KeyDetector keyDet;
-        constexpr int kChunk = 4096;
-        for (int off = 0; off < nSamples; off += kChunk)
-        {
-            if (thread && thread->threadShouldExit()) return false;
-            const int n = std::min(kChunk, nSamples - off);
-            keyDet.process(pcm.data() + off, n, sr);
-        }
-        if (thread && thread->threadShouldExit()) return false;
-
-        const int sourceKey = (keyDet.getResult().key >= 0) ? keyDet.getResult().key : -1;
+        const int sourceKey = -1; // key detection removed (EWI replaces sax)
 
         // ── BPM detection ─────────────────────────────────────────────────────
         const float slotBpm = BpmDetector::detectOffline(pcm.data(), nSamples, sr);

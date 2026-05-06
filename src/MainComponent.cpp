@@ -1,14 +1,7 @@
 #include "MainComponent.h"
 
 #include "dsp/BpmDetector.h"
-#include "dsp/DelayEffect.h"
 #include "dsp/FeatureExtractor.h"
-#include "dsp/FlangerEffect.h"
-#include "dsp/HarmonizerEffect.h"
-#include "dsp/KeyDetector.h"
-#include "dsp/OctaverEffect.h"
-#include "dsp/SynthEffect.h"
-#include "dsp/WsolaShifter.h"
 
 #include <cmath>
 #include <future>
@@ -36,12 +29,6 @@ MainComponent::MainComponent()
     infoLabel_.setColour(juce::Label::textColourId, juce::Colours::grey);
     addAndMakeVisible(infoLabel_);
 
-    pitchLabel_.setJustificationType(juce::Justification::centred);
-    pitchLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(16.0f).withStyle("Bold")));
-    pitchLabel_.setColour(juce::Label::textColourId, juce::Colours::cyan);
-    pitchLabel_.setText("--", juce::dontSendNotification);
-    addAndMakeVisible(pitchLabel_);
-
     // ── Main mix slider (output gain) ─────────────────────────────────────────
     mainMixSlider_.setSliderStyle(juce::Slider::LinearVertical);
     mainMixSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -59,41 +46,6 @@ MainComponent::MainComponent()
     mainMixLabel_.setJustificationType(juce::Justification::centred);
     mainMixLabel_.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible(mainMixLabel_);
-
-    // ── Effect chain ──────────────────────────────────────────────────────────
-    fxLabel_.setText("EFFECT CHAIN", juce::dontSendNotification);
-    fxLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(10.0f).withStyle("Bold")));
-    fxLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFFE5E2E3).withAlpha(0.85f));
-    addAndMakeVisible(fxLabel_);
-    addAndMakeVisible(effectChainEditor_);
-
-    auto& chain = dspPipeline_.getEffectChain();
-    {
-        auto synth = std::make_unique<::dsp::SynthEffect>();
-        synth->enabled.store(true, std::memory_order_relaxed);
-        synth->setParam(7, 0.0f);   // volume 0 au démarrage — activer via le knob
-        chain.addEffect(std::move(synth));
-    }
-    {
-        auto harm = std::make_unique<::dsp::HarmonizerEffect>();
-        harm->setParam(2, 0.15f);
-        chain.addEffect(std::move(harm));
-    }
-    {
-        auto flan = std::make_unique<::dsp::FlangerEffect>();
-        flan->setParam(3, 0.15f);
-        chain.addEffect(std::move(flan));
-    }
-    {
-        auto del = std::make_unique<::dsp::DelayEffect>();
-        del->enabled.store(false);
-        chain.addEffect(std::move(del));
-    }
-    {
-        auto oct = std::make_unique<::dsp::OctaverEffect>();
-        oct->enabled.store(false);
-        chain.addEffect(std::move(oct));
-    }
 
     // ── Step Sequencer label ──────────────────────────────────────────────────
     samplerLabel_.setText("RHYTHM MATRIX", juce::dontSendNotification);
@@ -322,9 +274,6 @@ MainComponent::MainComponent()
     {
         stepSequencer_.setBpm(bpm);
         dspPipeline_.setBpm(bpm);
-        auto ctx = effectChainEditor_.getMusicContext();
-        ctx.bpm  = bpm;
-        effectChainEditor_.setMusicContext(ctx);
         updateSidebarBpm(bpm);
     };
 
@@ -683,39 +632,6 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(masterKeyModeCombo_);
 
-    // ── Global scale selector (sidebar) ──────────────────────────────────────
-    globalScaleCombo_.addItem("Major",            1);
-    globalScaleCombo_.addItem("Minor",            2);
-    globalScaleCombo_.addItem("Pentatonique Maj", 3);
-    globalScaleCombo_.addItem("Pentatonique Min", 4);
-    globalScaleCombo_.addItem("Blues",            5);
-    globalScaleCombo_.addItem("Dorian",           6);
-    globalScaleCombo_.setSelectedId(1, juce::dontSendNotification);
-    globalScaleCombo_.onChange = [this] {
-        const int selectedId = globalScaleCombo_.getSelectedId() - 1;
-        const auto st = static_cast<ui::ScaleType>(selectedId);
-        saxStaffPanel_.setScaleType(st);
-        soloAssistant_.configure(masterKeyRoot_, selectedId);
-    };
-    addAndMakeVisible(globalScaleCombo_);
-
-    // ── View switch buttons ───────────────────────────────────────────────────
-    viewStaffBtn_.setButtonText(juce::CharPointer_UTF8("\xf0\x9f\x8e\xbc"));  // 🎼
-    viewStaffBtn_.setClickingTogglesState(false);
-    viewStaffBtn_.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF131314));
-    viewStaffBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
-    viewStaffBtn_.onClick = [this] {
-        currentViewMode_ = (currentViewMode_ == ViewMode::Staff)
-                           ? ViewMode::Effects : ViewMode::Staff;
-        updateViewVisibility();
-    };
-    addAndMakeVisible(viewStaffBtn_);
-
-    // ── Sax staff panel ───────────────────────────────────────────────────────
-    saxStaffPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
-    saxStaffPanel_.setVisible(false);
-    addAndMakeVisible(saxStaffPanel_);
-
     // ── Spatial visualization ─────────────────────────────────────────────────
     addAndMakeVisible(spatialViz_);
 
@@ -791,18 +707,6 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
         auto pcm = sampler.getSlotPcmSnapshot(slot);
         stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(pcm));
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// findSynthEffect — returns first SynthEffect in chain, or nullptr
-// ─────────────────────────────────────────────────────────────────────────────
-::dsp::SynthEffect* MainComponent::findSynthEffect() noexcept
-{
-    auto& chain = dspPipeline_.getEffectChain();
-    for (int i = 0; i < chain.effectCount(); ++i)
-        if (auto* se = dynamic_cast<::dsp::SynthEffect*>(chain.getEffect(i)))
-            return se;
-    return nullptr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -947,18 +851,7 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
 
                 if (shutdownFlag_.load(std::memory_order_acquire)) return;
 
-                // 3. Key detection
-                ::dsp::KeyDetector kd;
-                kd.process(raw.data(), static_cast<int>(raw.size()), sr);
-                const auto keyResult = kd.getResult();
-                float keyShiftSemitones = 0.f;
-                if (keyResult.key >= 0)
-                {
-                    int delta = masterKeyRoot_ - keyResult.key;
-                    while (delta >  6) delta -= 12;
-                    while (delta < -6) delta += 12;
-                    keyShiftSemitones = static_cast<float>(delta);
-                }
+                const float keyShiftSemitones = 0.f; // key detection removed
 
                 // totalSemitones: key correction + pre-compensation for the pitch
                 // drop that Hermite resample will introduce in Pass 2.
@@ -1095,33 +988,14 @@ void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// updateViewVisibility — show/hide effects / keyboard / staff panels
-// ─────────────────────────────────────────────────────────────────────────────
-void MainComponent::updateViewVisibility()
-{
-    effectChainEditor_.setVisible(currentViewMode_ == ViewMode::Effects);
-    saxStaffPanel_    .setVisible(currentViewMode_ == ViewMode::Staff);
-    fxLabel_          .setVisible(currentViewMode_ == ViewMode::Effects);
-
-    viewStaffBtn_.setColour(juce::TextButton::buttonColourId,
-        currentViewMode_ == ViewMode::Staff
-            ? juce::Colour(0xFF4CDFA8).withAlpha(0.20f)
-            : juce::Colour(0xFF131314));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// applyMasterKey — propagate master key to panels + MusicContext
+// applyMasterKey — propagate master key to MusicContext
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::applyMasterKey()
 {
-    saxStaffPanel_.setMasterKey(masterKeyRoot_, masterKeyMajor_);
-    soloAssistant_.configure(masterKeyRoot_, globalScaleCombo_.getSelectedId() - 1);
-
-    // Update the existing MusicContext used by HarmonizerEffect / SmartMixEngine
-    auto ctx     = effectChainEditor_.getMusicContext();
+    ::dsp::MusicContext ctx;
     ctx.keyRoot  = masterKeyRoot_;
     ctx.isMajor  = masterKeyMajor_;
-    effectChainEditor_.setMusicContext(ctx);
+    samplerEngine_.setMusicContext(ctx);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1236,16 +1110,9 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     data.projectName = "SaxFX Project";
     data.bpm         = stepSequencer_.getBpm();
 
-    // ── Effect chain ──────────────────────────────────────────────────────
-    const auto aiFlags = effectChainEditor_.captureAiManagedFlags();
-    project::ProjectLoader::captureChain(dspPipeline_.getEffectChain(), data, aiFlags);
-
     // ── Music context ─────────────────────────────────────────────────────
-    const auto& ctx  = effectChainEditor_.getMusicContext();
-    data.musicContext.bpm     = ctx.bpm;
-    data.musicContext.keyRoot = ctx.keyRoot;
-    data.musicContext.isMajor = ctx.isMajor;
-    data.musicContext.style   = static_cast<int>(ctx.style);
+    data.musicContext.keyRoot = masterKeyRoot_;
+    data.musicContext.isMajor = masterKeyMajor_;
 
     // ── Sampler slots + step patterns ─────────────────────────────────────
     auto& sampler = dspPipeline_.getSampler();
@@ -1302,9 +1169,6 @@ void MainComponent::saveProjectToFile(const juce::File& f)
                     src.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s)];
         }
     }
-
-    // ── Solo assistant preset (v10) ───────────────────────────────────────────
-    data.soloPreset = static_cast<int>(soloAssistant_.preset());
 
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
@@ -1455,27 +1319,10 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         stepSeqPanel_.setSlotMuted(i, sc.muted);
     }
 
-    // Apply effect chain — rebuild UI *immediately* so EffectRackUnit cards
-    // never reference deleted IEffect objects (fixes crash on Load Project).
-    project::ProjectLoader::applyChain(data, dspPipeline_.getEffectChain());
-    effectChainEditor_.forceRebuild();
-
+    if (data.musicContext.keyRoot >= 0)
     {
-        std::vector<bool> aiFlags;
-        aiFlags.reserve(data.effectChain.size());
-        for (const auto& slot : data.effectChain)
-            aiFlags.push_back(slot.aiManaged);
-        effectChainEditor_.applyAiManagedFlags(aiFlags);
-    }
-
-    if (data.musicContext.bpm > 0.f)
-    {
-        ::dsp::MusicContext ctx;
-        ctx.bpm     = data.musicContext.bpm;
-        ctx.keyRoot = data.musicContext.keyRoot;
-        ctx.isMajor = data.musicContext.isMajor;
-        ctx.style   = static_cast<::dsp::MusicContext::Style>(data.musicContext.style);
-        effectChainEditor_.setMusicContext(ctx);
+        masterKeyRoot_  = data.musicContext.keyRoot;
+        masterKeyMajor_ = data.musicContext.isMajor;
     }
 
     // Restore MIDI mappings
@@ -1542,10 +1389,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateSceneLabel();
     }
 
-    // ── v10 — solo assistant preset ───────────────────────────────────────────
-    if (data.version >= 10)
-        soloAssistant_.setPreset(static_cast<::dsp::SoloPreset>(data.soloPreset));
-
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 
     // Re-lancer l'IA après chargement de projet
@@ -1593,6 +1436,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     stepSequencer_.prepare(sampleRate);
     samplerEngine_.setSampleRate(sampleRate);
     dspPipeline_.prepare(sampleRate, samplesPerBlockExpected);
+    serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
 
     juce::Logger::writeToLog(juce::String("Audio prepared: ") + juce::String(sampleRate) +
                              " Hz, buffer " + juce::String(samplesPerBlockExpected) + " samples (" +
@@ -1641,17 +1485,70 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
         dspPipeline_.processStereo(left, right, numSamples);
 
-        // Mix Serum synth output (EWI instrument) into the main mix
+        // ── Serum mix + AI gain rider ─────────────────────────────────────────
         if (serumHost_.isLoaded())
         {
             const auto& sb = serumHost_.getOutputBuffer();
             const float* sL = sb.getReadPointer(0);
             const float* sR = sb.getReadPointer(1);
+
+            // Snapshot every 100 blocks for off-RT classification (timerCallback reads)
+            if (++serumAnalysisCounter_ >= 100)
+            {
+                serumAnalysisCounter_ = 0;
+                if (numSamples <= static_cast<int>(serumSnapBuf_.size()))
+                {
+                    juce::SpinLock::ScopedTryLockType sl(serumSnapLock_);
+                    if (sl.isLocked())
+                    {
+                        for (int i = 0; i < numSamples; ++i)
+                            serumSnapBuf_[i] = (sL[i] + sR[i]) * 0.5f;
+                        serumSnapReady_ = true;
+                    }
+                }
+            }
+
+            // Target RMS per content type (empirical targets for live mix)
+            float targetRms;
+            switch (serumContentType_.load(std::memory_order_relaxed))
+            {
+                case ::dsp::ContentCategory::BASS:  targetRms = 0.09f; break; // ~-21 dBFS
+                case ::dsp::ContentCategory::PAD:   targetRms = 0.10f; break; // ~-20 dBFS
+                default:                            targetRms = 0.12f; break; // ~-18 dBFS (SYNTH/lead)
+            }
+
+            // Measure Serum RMS this block
+            float sumSq = 0.f;
+            for (int i = 0; i < numSamples; ++i)
+                sumSq += (sL[i] * sL[i] + sR[i] * sR[i]) * 0.5f;
+            const float serumRms = std::sqrt(sumSq / static_cast<float>(numSamples));
+
+            // Gain rider: drive toward targetRms, duck when sampler is loud
+            float targetGain = (serumRms > 0.001f) ? targetRms / serumRms : 1.f;
+            const float mixRms = dspPipeline_.getLastRms();
+            if (mixRms > 0.08f)
+                targetGain *= std::max(0.5f, 1.f - (mixRms - 0.08f) * 2.5f);
+            targetGain = std::clamp(targetGain, 0.15f, 2.5f);
+
+            // EMA smooth (~150 ms at 48kHz/512) — prevents gain pumping
+            static constexpr float kAlpha = 0.997f;
+            serumGainSmooth_ = kAlpha * serumGainSmooth_ + (1.f - kAlpha) * targetGain;
+            serumHost_.setOutputGain(serumGainSmooth_);
+
+            // Mix into main stereo bus
+            const float g = serumGainSmooth_;
             for (int i = 0; i < numSamples; ++i)
             {
-                left [i] += sL[i];
-                right[i] += sR[i];
+                left [i] += sL[i] * g;
+                right[i] += sR[i] * g;
             }
+        }
+
+        // ── Final master limiter (sampler + Serum combined) ───────────────────
+        {
+            auto& lim = dspPipeline_.getMasterLimiter();
+            lim.process(left,  numSamples);
+            lim.process(right, numSamples);
         }
 
         // Apply master output gain to both channels
@@ -1686,14 +1583,16 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         // ── Mono fallback path ────────────────────────────────────────────────
         dspPipeline_.process(left, numSamples);
 
-        // Mix Serum mono (sum L+R * 0.5)
+        // Mix Serum mono (gain rider déjà calculé sur chemin stéréo)
         if (serumHost_.isLoaded())
         {
             const auto& sb = serumHost_.getOutputBuffer();
             const float* sL = sb.getReadPointer(0);
             const float* sR = sb.getReadPointer(1);
+            const float g = serumGainSmooth_;
             for (int i = 0; i < numSamples; ++i)
-                left[i] += (sL[i] + sR[i]) * 0.5f;
+                left[i] += (sL[i] + sR[i]) * 0.5f * g;
+            dspPipeline_.getMasterLimiter().process(left, numSamples);
         }
 
         const float outGain = outputGain_.load(std::memory_order_relaxed);
@@ -1812,12 +1711,6 @@ void MainComponent::paint(juce::Graphics& g)
         g.setColour(ui::SaxFXColours::vuLow);
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(15.f).withStyle("Bold")));
         g.drawText("DubEngine", titleX, 0, 160, kHeaderH, juce::Justification::centredLeft);
-
-        // Pitch display
-        g.setColour(juce::Colours::cyan.withAlpha(0.85f));
-        g.setFont(juce::Font(juce::FontOptions{}.withHeight(13.f).withStyle("Bold")));
-        g.drawText(pitchLabel_.getText(), sidebarX - 180, 0, 170, kHeaderH,
-                   juce::Justification::centredRight);
 
         // Indicateur autosave (fade sur 4 s)
         if (autosaveFadeTimer_ > 0)
@@ -2061,10 +1954,6 @@ void MainComponent::resized()
         masterKeyModeCombo_.setBounds(sbBtnX + halfW + 4, yFlow, halfW, 26);
         yFlow += 30;  // 26 + 4 gap
 
-        // Portée musicale
-        viewStaffBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 24);
-        yFlow += 30;  // 24 + 6 gap
-
         // PLAY (50px)
         sidebarPlayBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 50);
         yFlow += 58;  // 50 + 8 gap
@@ -2086,26 +1975,14 @@ void MainComponent::resized()
         const int cloudH      = juce::jmax(40, cloudBottom - yFlow);
         aiCloud_.setBounds(sidebarX, yFlow, kSidebarW, cloudH);
 
-        globalScaleCombo_.setBounds(0, 0, 0, 0);           // supprimé — doublon
     }
 
     // ════════════════════════════════════════════════════════════════════════
     // MAIN CONTENT AREA
     // ════════════════════════════════════════════════════════════════════════
 
-    // Pitch label hidden from main area (shown in header via paint())
-    pitchLabel_.setBounds(0, 0, 0, 0);
-
-    // Effect chain section + swappable panels (same bounds)
-    const int fxTop = kHeaderH + 16;
-    fxLabel_.setBounds(16, fxTop, 180, 16);
-
-    const auto panelBounds = juce::Rectangle<int>(16, fxTop + 20, mainW, 390);
-    effectChainEditor_.setBounds(panelBounds);
-    saxStaffPanel_    .setBounds(panelBounds);
-
-    // Step sequencer section
-    const int seqTop = fxTop + 20 + 390 + 28;
+    // Step sequencer section — occupe toute la hauteur disponible
+    const int seqTop = kHeaderH + 54;
     samplerLabel_.setBounds(16, seqTop - 20, 200, 16);
     stepSeqPanel_.setBounds(16, seqTop, mainW, H - seqTop - kStatusH - kPad);
 }
@@ -2135,7 +2012,18 @@ void MainComponent::timerCallback()
         }
     }
 
-    dspPipeline_.getEffectChain().collectGarbage();
+
+    // Serum content classification (FeatureExtractor = FFT, must NOT run on audio thread)
+    if (serumHost_.isLoaded())
+    {
+        juce::SpinLock::ScopedLockType sl(serumSnapLock_);
+        if (serumSnapReady_ && !serumSnapBuf_.empty())
+        {
+            serumSnapReady_ = false;
+            const auto feat = ::dsp::FeatureExtractor::extract(serumSnapBuf_, currentSampleRate_);
+            serumContentType_.store(feat.contentType, std::memory_order_relaxed);
+        }
+    }
 
     // Crossfade entre scènes : interpolation de gains sur ~300ms
     if (crossfade_.active)
@@ -2186,35 +2074,11 @@ void MainComponent::timerCallback()
                                juce::String(currentBufferSize_) + " smp",
                            juce::dontSendNotification);
 
-        const auto pitch = dspPipeline_.getLastPitch();
-        if (pitch.frequencyHz > 0.0f && pitch.confidence > 0.3f)
-            pitchLabel_.setText(frequencyToNoteName(pitch.frequencyHz) + "  " +
-                                    juce::String(pitch.frequencyHz, 0) + " Hz",
-                                juce::dontSendNotification);
-        else
-            pitchLabel_.setText("--", juce::dontSendNotification);
     }
     else
     {
         infoLabel_.setText("No audio device", juce::dontSendNotification);
-        pitchLabel_.setText("--", juce::dontSendNotification);
     }
-}
-
-//==============================================================================
-juce::String MainComponent::frequencyToNoteName(float hz)
-{
-    static const char* noteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                      "F#", "G",  "G#", "A",  "A#", "B"};
-    if (hz <= 0.0f) return "--";
-
-    const float midi    = 69.0f + 12.0f * std::log2(hz / 440.0f);
-    const int midiInt   = static_cast<int>(std::round(midi));
-    if (midiInt < 0 || midiInt > 127) return "--";
-
-    const int octave  = midiInt / 12 - 1;
-    const int noteIdx = midiInt % 12;
-    return juce::String(noteNames[noteIdx]) + juce::String(octave);
 }
 
 //==============================================================================

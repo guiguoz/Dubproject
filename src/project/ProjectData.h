@@ -30,22 +30,6 @@ struct MidiMapping
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EffectSlotData — serialised state of one effect in the chain
-//
-// type      : string name matching dsp::effectTypeName()
-// enabled   : IEffect::enabled flag
-// params    : values in param-index order (IEffect::getParam(0..n-1))
-// aiManaged : true when SmartMixEngine last set the params (shows ◆ badge)
-// ─────────────────────────────────────────────────────────────────────────────
-struct EffectSlotData
-{
-    std::string        type;
-    bool               enabled   { true };
-    std::vector<float> params;
-    bool               aiManaged { false };  // v3
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // MusicContextData — master tempo + tonality detected from reference sample
 // ─────────────────────────────────────────────────────────────────────────────
 struct MusicContextData
@@ -93,7 +77,6 @@ struct ProjectData
     int                         version     { 7 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
-    std::vector<EffectSlotData> effectChain;
     std::array<SampleConfig, 9> samples {};
     std::vector<MidiMapping>    midiMappings;
     MusicContextData            musicContext;
@@ -103,8 +86,6 @@ struct ProjectData
     std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
     int                              currentScene   { 0 };
-    // v10 — solo assistant preset (0=Off, 1=Prudent, 2=Dub)
-    int                              soloPreset     { 0 };
     // v11 — dub delay global bus
     bool                             dubDelayEnabled  { false };
     float                            dubDelaySend     { 0.20f };

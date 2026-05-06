@@ -1,17 +1,11 @@
 #include "ProjectLoader.h"
 
-#include "dsp/EffectChain.h"
-#include "dsp/EffectFactory.h"
-
 #include <JuceHeader.h>
 
 #include <algorithm>
 
 namespace project {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// JSON helpers
-// ─────────────────────────────────────────────────────────────────────────────
 static float getFloat(const juce::var& obj, const char* key, float def)
 {
     return static_cast<float>(static_cast<double>(obj.getProperty(key, def)));
@@ -29,42 +23,6 @@ static std::string getString(const juce::var& obj, const char* key,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Migration: v1 → v2
-// ─────────────────────────────────────────────────────────────────────────────
-static void migrateV1Effects(const juce::var& root, ProjectData& data)
-{
-    const auto& fx = root["effects"];
-    if (!fx.isObject()) return;
-
-    // Harmonizer slot
-    {
-        EffectSlotData slot;
-        slot.type    = "Harmonizer";
-        slot.enabled = getBool(fx, "harmonizerEnabled", false);
-        slot.params  = {
-            getFloat(fx, "harmVoice0Interval", 3.0f),
-            getFloat(fx, "harmVoice1Interval", -5.0f),
-            getFloat(fx, "harmMix",             0.5f)
-        };
-        data.effectChain.push_back(std::move(slot));
-    }
-
-    // Flanger slot
-    {
-        EffectSlotData slot;
-        slot.type    = "Flanger";
-        slot.enabled = getBool(fx, "flangerEnabled", false);
-        slot.params  = {
-            getFloat(fx, "flangerRate",     0.5f),
-            getFloat(fx, "flangerDepth",    0.7f),
-            getFloat(fx, "flangerFeedback", 0.3f),
-            getFloat(fx, "flangerMix",      0.5f)
-        };
-        data.effectChain.push_back(std::move(slot));
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // load
 // ─────────────────────────────────────────────────────────────────────────────
 std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
@@ -78,11 +36,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     ProjectData data;
     data.projectName = getString(root, "projectName", "Untitled");
     data.version     = static_cast<int>(root.getProperty("version", 1));
-    data.bpm         = getFloat(root, "bpm", 120.f);  // v4
+    data.bpm         = getFloat(root, "bpm", 120.f);
 
-    // Migration: silent defaults for PingPongDelay / dub delay bus when missing
-    // If the project save does not contain dubDelay fields (older projects),
-    // apply safe defaults so open works without audible surprises.
+    // Silent defaults for dub delay bus when missing from older projects
     if (!root.hasProperty("dubDelayEnabled")) {
         data.dubDelayEnabled  = false;
         data.dubDelaySend     = 0.20f;
@@ -91,34 +47,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         data.dubDelayTone     = 0.55f;
         data.dubDelayDrive    = 0.15f;
         data.dubDelayDiv      = 1;
-    }
-
-    // ── Effect chain ──────────────────────────────────────────────────────────
-    if (data.version >= 2)
-    {
-        if (const auto* arr = root["effectChain"].getArray())
-        {
-            for (const auto& entry : *arr)
-            {
-                EffectSlotData slot;
-                slot.type      = getString(entry, "type");
-                slot.enabled   = getBool(entry,   "enabled",   true);
-                slot.aiManaged = getBool(entry,   "aiManaged", false);  // v3
-
-                if (const auto* paramsArr = entry["params"].getArray())
-                    for (const auto& p : *paramsArr)
-                        slot.params.push_back(static_cast<float>(static_cast<double>(p)));
-
-                if (!slot.type.empty())
-                    data.effectChain.push_back(std::move(slot));
-            }
-        }
-    }
-    else
-    {
-        // v1 compatibility
-        migrateV1Effects(root, data);
-        data.version = 2;  // upgrade in memory
     }
 
     // ── Samples ───────────────────────────────────────────────────────────────
@@ -133,10 +61,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
             sc.gain     = getFloat(entry,  "gain",    1.0f);
             sc.loop     = getBool(entry,   "loop",    false);
             sc.oneShot  = getBool(entry,   "oneShot", true);
-            sc.muted    = getBool(entry,   "muted",   false);                   // v3
-            sc.gridDiv  = static_cast<int>(entry.getProperty("gridDiv", 1));    // v3
+            sc.muted    = getBool(entry,   "muted",   false);
+            sc.gridDiv  = static_cast<int>(entry.getProperty("gridDiv", 1));
 
-            // v4 — step pattern
             if (const auto* stepsArr = entry["steps"].getArray())
             {
                 for (int s = 0; s < 16 && s < stepsArr->size(); ++s)
@@ -178,7 +105,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         data.masterKeyMajor = getBool(root, "masterKeyMajor", true);
         data.currentScene   = static_cast<int>(root.getProperty("currentScene",   0));
 
-        // Slot mix states
         if (const auto* mixArr = root["slotMix"].getArray())
         {
             for (const auto& entry : *mixArr)
@@ -194,18 +120,16 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
             }
         }
 
-        // Scenes
         if (const auto* scenesArr = root["scenes"].getArray())
         {
             for (const auto& entry : *scenesArr)
             {
                 const int si = static_cast<int>(entry.getProperty("index", -1));
-                if (si < 0 || si >= 8) continue;  // max 8 scenes (kMaxScenes)
+                if (si < 0 || si >= 8) continue;
                 auto& sc  = data.scenes[static_cast<std::size_t>(si)];
                 sc.bpm    = getFloat(entry, "bpm", 120.f);
                 sc.used   = getBool(entry,  "used", false);
 
-                // v6 — bar counts per track (default 1 for v5 compat)
                 if (const auto* bcArr = entry["trackBarCounts"].getArray())
                     for (int i = 0; i < 9 && i < bcArr->size(); ++i)
                         sc.trackBarCounts[static_cast<std::size_t>(i)] =
@@ -239,7 +163,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     }
                 }
 
-                // v7 — trim points (default 0/-1 = pas de trim pour compat v6)
                 if (const auto* tsArr = entry["trimStart"].getArray())
                     for (int i = 0; i < 9 && i < tsArr->size(); ++i)
                         sc.trimStart[static_cast<std::size_t>(i)] =
@@ -250,7 +173,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                         sc.trimEnd[static_cast<std::size_t>(i)] =
                             static_cast<int>((*teArr)[i]);
 
-                // v8 — delay sends per slot (default 0 for backward compat)
                 if (const auto* dsArr = entry["delaySends"].getArray())
                     for (int i = 0; i < 9 && i < dsArr->size(); ++i)
                         sc.delaySends[static_cast<std::size_t>(i)] =
@@ -258,10 +180,6 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
             }
         }
     }
-
-    // ── v10 — solo assistant preset ───────────────────────────────────────────
-    if (data.version >= 10)
-        data.soloPreset = static_cast<int>(root.getProperty("soloPreset", 0));
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
     if (data.version >= 11)
@@ -284,27 +202,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     11);  // always write latest format
+    root->setProperty("version",     11);
     root->setProperty("projectName", juce::String(data.projectName));
-    root->setProperty("bpm",         static_cast<double>(data.bpm));  // v4
-
-    // ── Effect chain ──────────────────────────────────────────────────────────
-    juce::Array<juce::var> chainArr;
-    for (const auto& slot : data.effectChain)
-    {
-        juce::DynamicObject::Ptr entry = new juce::DynamicObject();
-        entry->setProperty("type",      juce::String(slot.type));
-        entry->setProperty("enabled",   slot.enabled);
-        entry->setProperty("aiManaged", slot.aiManaged);  // v3
-
-        juce::Array<juce::var> paramsArr;
-        for (float p : slot.params)
-            paramsArr.add(static_cast<double>(p));
-        entry->setProperty("params", paramsArr);
-
-        chainArr.add(juce::var(entry.get()));
-    }
-    root->setProperty("effectChain", chainArr);
+    root->setProperty("bpm",         static_cast<double>(data.bpm));
 
     // ── Samples ───────────────────────────────────────────────────────────────
     juce::Array<juce::var> samplesArr;
@@ -318,17 +218,14 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         entry->setProperty("gain",    static_cast<double>(sc.gain));
         entry->setProperty("loop",    sc.loop);
         entry->setProperty("oneShot", sc.oneShot);
-        entry->setProperty("muted",   sc.muted);           // v3
-        entry->setProperty("gridDiv", sc.gridDiv);         // v3
-
-        // v4 — step pattern (always write 16 booleans)
+        entry->setProperty("muted",   sc.muted);
+        entry->setProperty("gridDiv", sc.gridDiv);
         {
             juce::Array<juce::var> stepsArr;
             for (int s = 0; s < 16; ++s)
                 stepsArr.add(sc.stepPattern[s]);
             entry->setProperty("steps", stepsArr);
         }
-
         samplesArr.add(juce::var(entry.get()));
     }
     root->setProperty("samples", samplesArr);
@@ -344,7 +241,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     }
     root->setProperty("midiMappings", mappingsArr);
 
-    // ── Music context (v3) ────────────────────────────────────────────────────
+    // ── Music context ─────────────────────────────────────────────────────────
     {
         juce::DynamicObject::Ptr mc = new juce::DynamicObject();
         mc->setProperty("bpm",     static_cast<double>(data.musicContext.bpm));
@@ -354,12 +251,11 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         root->setProperty("musicContext", juce::var(mc.get()));
     }
 
-    // ── v5 — master key ───────────────────────────────────────────────────────
     root->setProperty("masterKeyRoot",  data.masterKeyRoot);
     root->setProperty("masterKeyMajor", data.masterKeyMajor);
     root->setProperty("currentScene",   data.currentScene);
 
-    // ── v5 — slot mix states ──────────────────────────────────────────────────
+    // ── Slot mix states ───────────────────────────────────────────────────────
     {
         juce::Array<juce::var> mixArr;
         for (int i = 0; i < 9; ++i)
@@ -378,7 +274,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         root->setProperty("slotMix", mixArr);
     }
 
-    // ── v5 — scenes ───────────────────────────────────────────────────────────
+    // ── Scenes ────────────────────────────────────────────────────────────────
     {
         juce::Array<juce::var> scenesArr;
         for (int si = 0; si < 8; ++si)
@@ -422,7 +318,6 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             }
             entry->setProperty("steps", tracksArr);
 
-            // v7 — trim points
             juce::Array<juce::var> trimStartArr, trimEndArr;
             for (int i = 0; i < 9; ++i)
             {
@@ -432,7 +327,6 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             entry->setProperty("trimStart", trimStartArr);
             entry->setProperty("trimEnd",   trimEndArr);
 
-            // v8 — delay sends
             juce::Array<juce::var> delaySendsArr;
             for (int i = 0; i < 9; ++i)
                 delaySendsArr.add(sc.delaySends[static_cast<std::size_t>(i)]);
@@ -442,8 +336,6 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         }
         root->setProperty("scenes", scenesArr);
     }
-
-    root->setProperty("soloPreset", data.soloPreset);  // v10
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
     root->setProperty("dubDelayEnabled",  data.dubDelayEnabled);
@@ -456,68 +348,6 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// captureChain — snapshot live EffectChain → ProjectData
-// ─────────────────────────────────────────────────────────────────────────────
-void ProjectLoader::captureChain(const ::dsp::EffectChain& chain,
-                                  ProjectData& data,
-                                  const std::vector<bool>& aiManagedFlags) noexcept
-{
-    data.effectChain.clear();
-    // EffectChain::getEffect is non-const; use const_cast (GUI thread only)
-    auto& mutableChain = const_cast<::dsp::EffectChain&>(chain);
-    const int count = mutableChain.effectCount();
-    for (int i = 0; i < count; ++i)
-    {
-        ::dsp::IEffect* fx = mutableChain.getEffect(i);
-        if (!fx) continue;
-
-        EffectSlotData slot;
-        slot.type      = ::dsp::effectTypeName(fx->type());
-        slot.enabled   = fx->enabled.load(std::memory_order_acquire);
-        slot.aiManaged = (i < static_cast<int>(aiManagedFlags.size()))
-                             ? aiManagedFlags[static_cast<std::size_t>(i)]
-                             : false;
-        const int pc = fx->paramCount();
-        slot.params.resize(static_cast<std::size_t>(pc));
-        for (int p = 0; p < pc; ++p)
-            slot.params[static_cast<std::size_t>(p)] = fx->getParam(p);
-
-        data.effectChain.push_back(std::move(slot));
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// applyChain — recreate IEffect objects and populate EffectChain
-// ─────────────────────────────────────────────────────────────────────────────
-void ProjectLoader::applyChain(const ProjectData& data,
-                                ::dsp::EffectChain&  chain,
-                                bool clearFirst) noexcept
-{
-    if (clearFirst)
-    {
-        // Remove all current effects (from last to first to keep indices valid)
-        for (int i = chain.effectCount() - 1; i >= 0; --i)
-            chain.removeEffect(i);
-        chain.collectGarbage();
-    }
-
-    for (const auto& slot : data.effectChain)
-    {
-        auto fx = ::dsp::createEffect(slot.type);
-        if (!fx) continue;
-
-        // Apply saved params
-        const int pc = fx->paramCount();
-        for (int p = 0; p < pc && p < static_cast<int>(slot.params.size()); ++p)
-            fx->setParam(p, slot.params[static_cast<std::size_t>(p)]);
-
-        fx->enabled.store(slot.enabled, std::memory_order_relaxed);
-
-        chain.addEffect(std::move(fx));
-    }
 }
 
 } // namespace project

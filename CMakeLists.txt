@@ -64,31 +64,10 @@ juce_add_gui_app(SaxFXLive
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
-    src/dsp/YinPitchTracker.cpp
     src/dsp/WsolaShifter.cpp
-    src/dsp/Flanger.cpp
-    src/dsp/Harmonizer.cpp
     src/dsp/Sampler.cpp
     src/dsp/DspPipeline.cpp
-    src/dsp/FlangerEffect.cpp
-    src/dsp/HarmonizerEffect.cpp
-    src/dsp/PitchForkEffect.cpp
-    src/dsp/EnvelopeFilterEffect.cpp
-    src/dsp/DelayEffect.cpp
-    src/dsp/WhammyEffect.cpp
-    src/dsp/OctaverEffect.cpp
-    src/dsp/TunerEffect.cpp
-    src/dsp/SlicerEffect.cpp
-    src/dsp/ReverbEffect.cpp
-    src/dsp/EffectChain.cpp
     src/dsp/BpmDetector.cpp
-    src/dsp/ExpressionMapper.cpp
-    src/dsp/ScaleHarmonizer.cpp
-    src/dsp/AutoPitchCorrect.cpp
-    src/dsp/KeyDetector.cpp
-    src/dsp/EffectChainOptimizer.cpp
-    src/dsp/EffectFactory.cpp
-    src/dsp/SynthEffect.cpp
     src/dsp/PingPongDelay.cpp
     src/dsp/AiContentClassifier.cpp
     src/dsp/AiMixEngine.cpp
