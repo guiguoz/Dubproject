@@ -53,6 +53,21 @@ public:
         return lastBreath_.load(std::memory_order_relaxed);
     }
 
+    // ── MIDI Learn support ───────────────────────────────────────────────────
+    // Latest value [0..1] for any received CC (written MIDI thread, read GUI timer).
+    float getCcValue(int cc) const noexcept
+    {
+        if (cc < 0 || cc >= 128) return 0.f;
+        return ccLatest_[static_cast<std::size_t>(cc)].load(std::memory_order_relaxed);
+    }
+
+    // Returns the last received CC number and resets it to -1 (one-shot, acq_rel).
+    // Returns -1 if no CC was received since last call.
+    int getLastCC() const noexcept
+    {
+        return lastCC_.exchange(-1, std::memory_order_acq_rel);
+    }
+
 private:
     void handleIncomingMidiMessage(juce::MidiInput* source,
                                    const juce::MidiMessage& message) override;
@@ -73,6 +88,10 @@ private:
 
     // CC2 breath [0..1] — written MIDI thread, read audio thread
     std::atomic<float> lastBreath_ { 0.f };
+
+    // MIDI Learn: CC latency cache (written MIDI thread, read GUI timer)
+    std::array<std::atomic<float>, 128> ccLatest_ {};
+    mutable std::atomic<int>            lastCC_   { -1 };
 };
 
 } // namespace midi

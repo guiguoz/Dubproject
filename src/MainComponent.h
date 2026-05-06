@@ -6,6 +6,7 @@
 #include "dsp/SmartSamplerEngine.h"
 #include "dsp/StepSequencer.h"
 #include "midi/MidiManager.h"
+#include "midi/MidiLearnMap.h"
 #include "project/ProjectLoader.h"
 #include "ui/NeonButton.h"
 #include "ui/SaxOsLookAndFeel.h"
@@ -79,7 +80,8 @@ private:
     std::vector<float>       serumSnapBuf_;
     juce::SpinLock           serumSnapLock_;
     bool                     serumSnapReady_       { false };
-    float                    serumGainSmooth_      { 0.5f };
+    std::atomic<float>       serumGainSmooth_      { 0.5f };  // audio thread r/w + GUI r
+    std::atomic<float>       serumUserGain_        { 1.0f };  // MIDI learn multiplier (GUI w, audio r)
     std::atomic<::dsp::ContentCategory> serumContentType_ { ::dsp::ContentCategory::SYNTH };
     int                      serumAnalysisCounter_ { 0 };
 
@@ -215,6 +217,30 @@ private:
     std::atomic<float> outputGain_     {1.0f};
     double             currentSampleRate_{0.0};
     int                currentBufferSize_{0};
+
+    //==========================================================================
+    // MIDI Learn
+    //==========================================================================
+    std::vector<midi::MidiLearnBinding>                midiLearnBindings_;
+    int                                                 learningTarget_   { -1 };
+    bool                                                midiLearnVisible_ { false };
+    bool                                                applyingMidi_     { false };
+    std::array<float, midi::kNumTargets>                targetSmoothed_   {};
+
+    // UI panel + controls
+    juce::Component                                     midiLearnPanel_;
+    juce::TextButton                                    midiLearnBtn_;
+    std::array<juce::Label,      midi::kNumTargets>     mlTargetLabels_;
+    std::array<juce::Label,      midi::kNumTargets>     mlCcLabels_;
+    std::array<juce::TextButton, midi::kNumTargets>     mlLearnBtns_;
+    std::array<juce::TextButton, midi::kNumTargets>     mlClearBtns_;
+
+    void applyMidiMappings();
+    void startLearning(int targetIdx);
+    void stopLearning();
+    void clearMapping(int targetIdx);
+    void updateMidiLearnUI();
+    void applyMappingValue(midi::MappingTarget t, float rawValue);
 
     //==========================================================================
     // Helpers

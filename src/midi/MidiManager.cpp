@@ -81,6 +81,16 @@ void MidiManager::handleIncomingMidiMessage(juce::MidiInput* source,
                                              const juce::MidiMessage& message)
 {
     // This runs on the MIDI system thread — NO allocation, NO locks.
+
+    // Cache all CC values globally for MIDI learn (any device)
+    if (message.isController())
+    {
+        const int cc = message.getControllerNumber();
+        ccLatest_[static_cast<std::size_t>(cc)].store(
+            message.getControllerValue() / 127.f, std::memory_order_relaxed);
+        lastCC_.store(cc, std::memory_order_relaxed);
+    }
+
     const juce::String deviceName = (source != nullptr) ? source->getName() : juce::String{};
     const bool fromEwi = isEwiDevice(deviceName);
 

@@ -193,6 +193,21 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         data.dubDelayDiv      = static_cast<int>(root.getProperty("dubDelayDiv", 1));
     }
 
+    // ── v12 — MIDI learn bindings (backwards-compatible: absent = empty) ─────
+    if (const auto* learnArr = root["midiLearn"].getArray())
+    {
+        for (const auto& entry : *learnArr)
+        {
+            MidiLearnEntry e;
+            e.target = static_cast<int>(entry.getProperty("target", -1));
+            e.cc     = static_cast<int>(entry.getProperty("cc",     -1));
+            e.min    = getFloat(entry, "min", 0.f);
+            e.max    = getFloat(entry, "max", 1.f);
+            if (e.target >= 0 && e.cc >= 0 && e.cc < 128)
+                data.midiLearnEntries.push_back(e);
+        }
+    }
+
     return data;
 }
 
@@ -345,6 +360,21 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     root->setProperty("dubDelayTone",     static_cast<double>(data.dubDelayTone));
     root->setProperty("dubDelayDrive",    static_cast<double>(data.dubDelayDrive));
     root->setProperty("dubDelayDiv",      data.dubDelayDiv);
+
+    // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
+    {
+        juce::Array<juce::var> learnArr;
+        for (const auto& e : data.midiLearnEntries)
+        {
+            juce::DynamicObject::Ptr entry = new juce::DynamicObject();
+            entry->setProperty("target", e.target);
+            entry->setProperty("cc",     e.cc);
+            entry->setProperty("min",    static_cast<double>(e.min));
+            entry->setProperty("max",    static_cast<double>(e.max));
+            learnArr.add(juce::var(entry.get()));
+        }
+        root->setProperty("midiLearn", learnArr);
+    }
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);

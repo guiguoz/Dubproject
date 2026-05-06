@@ -70,6 +70,17 @@ struct SceneSaveData
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MidiLearnEntry — one MIDI CC → parameter binding (v12)
+// ─────────────────────────────────────────────────────────────────────────────
+struct MidiLearnEntry
+{
+    int   target { -1 };   // midi::MappingTarget cast to int
+    int   cc     { -1 };   // MIDI CC number [0..127]
+    float min    { 0.f };
+    float max    { 1.f };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ProjectData — full project snapshot (version 5 format)
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
@@ -94,6 +105,8 @@ struct ProjectData
     float                            dubDelayTone     { 0.55f };
     float                            dubDelayDrive    { 0.15f };
     int                              dubDelayDiv      { 1 };  // GridDiv::Quarter
+    // v12 — MIDI learn bindings
+    std::vector<MidiLearnEntry>      midiLearnEntries;
 };
 
 } // namespace project

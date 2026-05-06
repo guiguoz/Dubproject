@@ -204,6 +204,49 @@ MainComponent::MainComponent()
         { midiManager_.setEwiDeviceName(ewiDeviceEditor_.getText()); };
     addAndMakeVisible(ewiDeviceEditor_);
 
+    // ── MIDI Learn panel ──────────────────────────────────────────────────────
+    midiLearnBindings_.resize(midi::kNumTargets);
+    for (int i = 0; i < midi::kNumTargets; ++i)
+        midiLearnBindings_[static_cast<std::size_t>(i)].target =
+            static_cast<midi::MappingTarget>(i);
+
+    for (int i = 0; i < midi::kNumTargets; ++i)
+    {
+        const std::size_t si = static_cast<std::size_t>(i);
+        const auto t = static_cast<midi::MappingTarget>(i);
+
+        mlTargetLabels_[si].setText(midi::mappingTargetName(t), juce::dontSendNotification);
+        mlTargetLabels_[si].setFont(juce::Font(juce::FontOptions{}.withHeight(10.f)));
+        mlTargetLabels_[si].setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        midiLearnPanel_.addAndMakeVisible(mlTargetLabels_[si]);
+
+        mlCcLabels_[si].setText("--", juce::dontSendNotification);
+        mlCcLabels_[si].setFont(juce::Font(juce::FontOptions{}.withHeight(10.f)));
+        mlCcLabels_[si].setColour(juce::Label::textColourId, juce::Colour(0xFF4CDFA8));
+        mlCcLabels_[si].setJustificationType(juce::Justification::centred);
+        midiLearnPanel_.addAndMakeVisible(mlCcLabels_[si]);
+
+        mlLearnBtns_[si].setButtonText("LEARN");
+        mlLearnBtns_[si].onClick = [this, i] { startLearning(i); };
+        midiLearnPanel_.addAndMakeVisible(mlLearnBtns_[si]);
+
+        mlClearBtns_[si].setButtonText("X");
+        mlClearBtns_[si].onClick = [this, i] { clearMapping(i); };
+        midiLearnPanel_.addAndMakeVisible(mlClearBtns_[si]);
+    }
+
+    addChildComponent(midiLearnPanel_);  // invisible par défaut
+
+    midiLearnBtn_.setButtonText("MIDI LEARN");
+    midiLearnBtn_.setClickingTogglesState(true);
+    midiLearnBtn_.onClick = [this] {
+        midiLearnVisible_ = midiLearnBtn_.getToggleState();
+        midiLearnPanel_.setVisible(midiLearnVisible_);
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(midiLearnBtn_);
+
     // ── Project buttons (masqués — accessibles via menu FILES) ───────────────
     saveProjectButton_.setButtonText("SAVE PROJECT");
     saveProjectButton_.onClick = [this] { saveProject(); };
@@ -1170,6 +1213,28 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         }
     }
 
+    // ── v11 — dub delay global bus ────────────────────────────────────────────
+    data.dubDelayEnabled  = dubDelayEnableBtn_.getToggleState();
+    data.dubDelaySend     = static_cast<float>(dubDelaySendSlider_    .getValue());
+    data.dubDelayWet      = static_cast<float>(dubDelayWetSlider_     .getValue());
+    data.dubDelayFeedback = static_cast<float>(dubDelayFeedbackSlider_.getValue());
+    data.dubDelayTone     = static_cast<float>(dubDelayToneSlider_    .getValue());
+    data.dubDelayDrive    = static_cast<float>(dubDelayDriveSlider_   .getValue());
+    data.dubDelayDiv      = dubDelayDivCombo_.getSelectedId() - 1;
+
+    // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
+    data.midiLearnEntries.clear();
+    for (const auto& b : midiLearnBindings_)
+    {
+        if (b.cc < 0) continue;
+        project::MidiLearnEntry e;
+        e.target = static_cast<int>(b.target);
+        e.cc     = b.cc;
+        e.min    = b.min;
+        e.max    = b.max;
+        data.midiLearnEntries.push_back(e);
+    }
+
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
     else
@@ -1389,6 +1454,48 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateSceneLabel();
     }
 
+    // ── v11 — dub delay global bus ────────────────────────────────────────────
+    if (data.version >= 11)
+    {
+        dubDelayEnableBtn_  .setToggleState(data.dubDelayEnabled,                        juce::dontSendNotification);
+        dubDelaySendSlider_ .setValue      (static_cast<double>(data.dubDelaySend),      juce::dontSendNotification);
+        dubDelayWetSlider_  .setValue      (static_cast<double>(data.dubDelayWet),       juce::dontSendNotification);
+        dubDelayFeedbackSlider_.setValue   (static_cast<double>(data.dubDelayFeedback),  juce::dontSendNotification);
+        dubDelayToneSlider_ .setValue      (static_cast<double>(data.dubDelayTone),      juce::dontSendNotification);
+        dubDelayDriveSlider_.setValue      (static_cast<double>(data.dubDelayDrive),     juce::dontSendNotification);
+        dubDelayDivCombo_   .setSelectedId (data.dubDelayDiv + 1,                        juce::dontSendNotification);
+
+        auto& dd = dspPipeline_.getDubDelay();
+        dd.setEnabled (data.dubDelayEnabled);
+        dd.setSend    (data.dubDelaySend);
+        dd.setWet     (data.dubDelayWet);
+        dd.setFeedback(data.dubDelayFeedback);
+        dd.setTone    (data.dubDelayTone);
+        dd.setDrive   (data.dubDelayDrive);
+        dd.setDiv     (data.dubDelayDiv);
+    }
+
+    // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
+    if (data.version >= 12)
+    {
+        for (auto& b : midiLearnBindings_)
+            b.cc = -1;
+
+        for (const auto& e : data.midiLearnEntries)
+        {
+            if (e.target < 0 || e.target >= midi::kNumTargets) continue;
+            if (e.cc < 0 || e.cc >= 128) continue;
+            auto& b = midiLearnBindings_[static_cast<std::size_t>(e.target)];
+            b.cc  = e.cc;
+            b.min = e.min;
+            b.max = e.max;
+            // Initialiser le smoothing à la valeur CC courante
+            targetSmoothed_[static_cast<std::size_t>(e.target)] =
+                e.min + midiManager_.getCcValue(e.cc) * (e.max - e.min);
+        }
+        updateMidiLearnUI();
+    }
+
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 
     // Re-lancer l'IA après chargement de projet
@@ -1532,11 +1639,14 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
             // EMA smooth (~150 ms at 48kHz/512) — prevents gain pumping
             static constexpr float kAlpha = 0.997f;
-            serumGainSmooth_ = kAlpha * serumGainSmooth_ + (1.f - kAlpha) * targetGain;
-            serumHost_.setOutputGain(serumGainSmooth_);
+            const float prevG = serumGainSmooth_.load(std::memory_order_relaxed);
+            const float newG  = kAlpha * prevG + (1.f - kAlpha) * targetGain;
+            serumGainSmooth_.store(newG, std::memory_order_relaxed);
+            const float userG = serumUserGain_.load(std::memory_order_relaxed);
+            serumHost_.setOutputGain(newG * userG);
 
             // Mix into main stereo bus
-            const float g = serumGainSmooth_;
+            const float g = newG * userG;
             for (int i = 0; i < numSamples; ++i)
             {
                 left [i] += sL[i] * g;
@@ -1589,7 +1699,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             const auto& sb = serumHost_.getOutputBuffer();
             const float* sL = sb.getReadPointer(0);
             const float* sR = sb.getReadPointer(1);
-            const float g = serumGainSmooth_;
+            const float g = serumGainSmooth_.load(std::memory_order_relaxed)
+                           * serumUserGain_.load(std::memory_order_relaxed);
             for (int i = 0; i < numSamples; ++i)
                 left[i] += (sL[i] + sR[i]) * 0.5f * g;
             dspPipeline_.getMasterLimiter().process(left, numSamples);
@@ -1884,6 +1995,19 @@ void MainComponent::paint(juce::Graphics& g)
             g.fillRect(gx, gy, 1.5f, 1.5f);
         }
     }
+
+    // ── MIDI Learn panel background (drawn under children) ───────────────────
+    if (midiLearnVisible_)
+    {
+        const auto pb = midiLearnPanel_.getBounds().toFloat();
+        g.setColour(juce::Colour(0xF2141414));
+        g.fillRoundedRectangle(pb, 6.f);
+        g.setColour(juce::Colour(0xFF4CDFA8));
+        g.drawRoundedRectangle(pb, 6.f, 1.f);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f).withStyle("Bold")));
+        g.drawText("MIDI LEARN", pb.withHeight(28.f), juce::Justification::centred);
+    }
 }
 
 void MainComponent::resized()
@@ -1970,6 +2094,9 @@ void MainComponent::resized()
         // "EWI DEVICE" header at yFlow (10px), then editor 10px below
         ewiDeviceEditor_ .setBounds(sbBtnX, yFlow + 10, sbBtnW, 20); yFlow += 38; // 10+20+8
 
+        // MIDI Learn toggle button
+        midiLearnBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 22); yFlow += 26;
+
         // Nuage IA — remplit l'espace restant jusqu'en bas de la sidebar
         const int cloudBottom = H - kStatusH - kPad;
         const int cloudH      = juce::jmax(40, cloudBottom - yFlow);
@@ -1985,10 +2112,49 @@ void MainComponent::resized()
     const int seqTop = kHeaderH + 54;
     samplerLabel_.setBounds(16, seqTop - 20, 200, 16);
     stepSeqPanel_.setBounds(16, seqTop, mainW, H - seqTop - kStatusH - kPad);
+
+    // MIDI Learn overlay panel (se superpose au step sequencer)
+    {
+        constexpr int kPanelW = 284;
+        const int panelH = juce::jmin(H - seqTop - kStatusH - kPad,
+                                      32 + midi::kNumTargets * 27 + 8);
+        midiLearnPanel_.setBounds(16, seqTop, kPanelW, panelH);
+
+        // Positionner les enfants (coordonnées locales au panneau)
+        for (int i = 0; i < midi::kNumTargets; ++i)
+        {
+            const std::size_t si = static_cast<std::size_t>(i);
+            const int y = 32 + i * 27;
+            mlTargetLabels_[si].setBounds(8,   y, 114, 22);
+            mlCcLabels_    [si].setBounds(124, y,  52, 22);
+            mlLearnBtns_   [si].setBounds(178, y,  54, 22);
+            mlClearBtns_   [si].setBounds(235, y,  26, 22);
+        }
+    }
 }
 
 void MainComponent::timerCallback()
 {
+    // ── MIDI Learn : consommer le dernier CC reçu ─────────────────────────────
+    if (learningTarget_ >= 0)
+    {
+        const int cc = midiManager_.getLastCC();
+        if (cc >= 0)
+        {
+            const std::size_t si = static_cast<std::size_t>(learningTarget_);
+            auto& binding = midiLearnBindings_[si];
+            binding.cc = cc;
+            // Initialiser le smoothing à la valeur CC courante (évite le cold-start)
+            targetSmoothed_[si] = binding.min
+                + midiManager_.getCcValue(cc) * (binding.max - binding.min);
+            stopLearning();
+            updateMidiLearnUI();
+        }
+    }
+
+    // ── Appliquer les mappings MIDI actifs ────────────────────────────────────
+    applyMidiMappings();
+
     // Autosave toutes les 5 min (30 fps × 300 s = 9000 ticks)
     if (++autosaveTick_ >= 9000)
     {
@@ -2078,6 +2244,95 @@ void MainComponent::timerCallback()
     else
     {
         infoLabel_.setText("No audio device", juce::dontSendNotification);
+    }
+}
+
+//==============================================================================
+// MIDI Learn
+//==============================================================================
+
+void MainComponent::applyMidiMappings()
+{
+    applyingMidi_ = true;
+    for (int i = 0; i < midi::kNumTargets; ++i)
+    {
+        const auto& b = midiLearnBindings_[static_cast<std::size_t>(i)];
+        if (b.cc < 0) continue;
+        const float raw = midiManager_.getCcValue(b.cc);
+        applyMappingValue(b.target, b.min + raw * (b.max - b.min));
+    }
+    applyingMidi_ = false;
+}
+
+void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
+{
+    const std::size_t idx = static_cast<std::size_t>(t);
+    targetSmoothed_[idx] += (rawValue - targetSmoothed_[idx]) * 0.1f;
+    const float v = targetSmoothed_[idx];
+
+    using MT = midi::MappingTarget;
+    switch (t)
+    {
+    case MT::MasterMix:
+        mainMixSlider_.setValue(v, juce::dontSendNotification);
+        outputGain_.store(v, std::memory_order_relaxed);
+        break;
+    case MT::DubDelaySend:
+        dubDelaySendSlider_.setValue(v, juce::dontSendNotification);
+        dspPipeline_.getDubDelay().setSend(v);
+        break;
+    case MT::DubDelayWet:
+        dubDelayWetSlider_.setValue(v, juce::dontSendNotification);
+        dspPipeline_.getDubDelay().setWet(v);
+        break;
+    case MT::DubDelayFeedback:
+        dubDelayFeedbackSlider_.setValue(v * 0.95f, juce::dontSendNotification);
+        dspPipeline_.getDubDelay().setFeedback(v * 0.95f);
+        break;
+    case MT::SerumGain:
+        serumUserGain_.store(v, std::memory_order_relaxed);
+        break;
+    case MT::Slot0Gain: case MT::Slot1Gain: case MT::Slot2Gain: case MT::Slot3Gain:
+    case MT::Slot4Gain: case MT::Slot5Gain: case MT::Slot6Gain: case MT::Slot7Gain:
+    {
+        const int slot = static_cast<int>(t) - static_cast<int>(MT::Slot0Gain);
+        dspPipeline_.getSampler().setSlotGain(slot, v);
+        break;
+    }
+    default: break;
+    }
+}
+
+void MainComponent::startLearning(int targetIdx)
+{
+    learningTarget_ = targetIdx;
+    mlLearnBtns_[static_cast<std::size_t>(targetIdx)].setButtonText("...");
+}
+
+void MainComponent::stopLearning()
+{
+    if (learningTarget_ >= 0)
+        mlLearnBtns_[static_cast<std::size_t>(learningTarget_)].setButtonText("LEARN");
+    learningTarget_ = -1;
+}
+
+void MainComponent::clearMapping(int targetIdx)
+{
+    auto& b = midiLearnBindings_[static_cast<std::size_t>(targetIdx)];
+    b.cc = -1;
+    targetSmoothed_[static_cast<std::size_t>(targetIdx)] = 0.f;
+    updateMidiLearnUI();
+}
+
+void MainComponent::updateMidiLearnUI()
+{
+    for (int i = 0; i < midi::kNumTargets; ++i)
+    {
+        const auto& b = midiLearnBindings_[static_cast<std::size_t>(i)];
+        const juce::String label = (b.cc >= 0)
+            ? ("CC " + juce::String(b.cc))
+            : "--";
+        mlCcLabels_[static_cast<std::size_t>(i)].setText(label, juce::dontSendNotification);
     }
 }
 
