@@ -197,6 +197,45 @@ MainComponent::MainComponent()
     addAndMakeVisible(sidebarBpmLabel_);
     addAndMakeVisible(aiCloud_);
 
+    // ── EWI Synth section ─────────────────────────────────────────────────────
+    styleSideBtn(serumLoadBtn_, "LOAD VST3");
+    serumLoadBtn_.onClick = [this]
+    {
+        serumFileChooser_ = std::make_unique<juce::FileChooser>(
+            "Select Serum VST3", juce::File{}, "*.vst3");
+        serumFileChooser_->launchAsync(
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc)
+            {
+                const auto f = fc.getResult();
+                if (f.existsAsFile())
+                    loadSerumPlugin(f.getFullPathName());
+            });
+    };
+    addAndMakeVisible(serumLoadBtn_);
+
+    serumStatusLabel_.setText("not loaded", juce::dontSendNotification);
+    serumStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+    serumStatusLabel_.setColour(juce::Label::textColourId,
+                                juce::Colour(0xFF888888));
+    serumStatusLabel_.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(serumStatusLabel_);
+
+    ewiDeviceEditor_.setText("EWI");
+    ewiDeviceEditor_.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f)));
+    ewiDeviceEditor_.setColour(juce::TextEditor::textColourId,
+                               juce::Colour(0xFFE5E2E3));
+    ewiDeviceEditor_.setColour(juce::TextEditor::backgroundColourId,
+                               juce::Colour(0xFF2A2A2A));
+    ewiDeviceEditor_.setColour(juce::TextEditor::outlineColourId,
+                               juce::Colour(0xFF4CDFA8));
+    ewiDeviceEditor_.onReturnKey = [this]
+        { midiManager_.setEwiDeviceName(ewiDeviceEditor_.getText()); };
+    ewiDeviceEditor_.onFocusLost = [this]
+        { midiManager_.setEwiDeviceName(ewiDeviceEditor_.getText()); };
+    addAndMakeVisible(ewiDeviceEditor_);
+
     // ── Project buttons (masqués — accessibles via menu FILES) ───────────────
     saveProjectButton_.setButtonText("SAVE PROJECT");
     saveProjectButton_.onClick = [this] { saveProject(); };
@@ -1571,6 +1610,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                                std::memory_order_relaxed);
     }
 
+    // Drain EWI MIDI for this block and forward to Serum synth
+    ewiMidiBuffer_.clear();
+    midiManager_.consumeEwiMidi(ewiMidiBuffer_, numSamples);
+    serumHost_.processBlock(ewiMidiBuffer_);
+
     // Step sequencer — triggers sampler slots at step boundaries (before DSP mix)
     stepSequencer_.process(numSamples, dspPipeline_.getSampler());
 
@@ -1580,6 +1624,19 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
 
         dspPipeline_.processStereo(left, right, numSamples);
+
+        // Mix Serum synth output (EWI instrument) into the main mix
+        if (serumHost_.isLoaded())
+        {
+            const auto& sb = serumHost_.getOutputBuffer();
+            const float* sL = sb.getReadPointer(0);
+            const float* sR = sb.getReadPointer(1);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                left [i] += sL[i];
+                right[i] += sR[i];
+            }
+        }
 
         // Apply master output gain to both channels
         const float outGain = outputGain_.load(std::memory_order_relaxed);
@@ -1610,8 +1667,18 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     }
     else
     {
-        // ── Mono fallback path (unchanged) ───────────────────────────────────
+        // ── Mono fallback path ────────────────────────────────────────────────
         dspPipeline_.process(left, numSamples);
+
+        // Mix Serum mono (sum L+R * 0.5)
+        if (serumHost_.isLoaded())
+        {
+            const auto& sb = serumHost_.getOutputBuffer();
+            const float* sL = sb.getReadPointer(0);
+            const float* sR = sb.getReadPointer(1);
+            for (int i = 0; i < numSamples; ++i)
+                left[i] += (sL[i] + sR[i]) * 0.5f;
+        }
 
         const float outGain = outputGain_.load(std::memory_order_relaxed);
         if (outGain != 1.0f)
@@ -1634,8 +1701,24 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
 void MainComponent::releaseResources()
 {
+    serumHost_.setProcessingEnabled(false);
     dspPipeline_.reset();
     juce::Logger::writeToLog("Audio resources released.");
+}
+
+void MainComponent::loadSerumPlugin(const juce::String& vst3Path)
+{
+    jassert(currentSampleRate_ > 0 && currentBufferSize_ > 0);
+    if (currentSampleRate_ == 0.0) return;
+    if (serumHost_.load(vst3Path, currentSampleRate_, currentBufferSize_))
+        serumStatusLabel_.setText(serumHost_.getPluginName(), juce::dontSendNotification);
+    else
+        serumStatusLabel_.setText("load failed", juce::dontSendNotification);
+}
+
+void MainComponent::unloadSerumPlugin()
+{
+    serumHost_.unload();
 }
 
 //==============================================================================
@@ -1792,6 +1875,12 @@ void MainComponent::paint(juce::Graphics& g)
                    juce::Justification::centredLeft);
         g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
+
+        // EWI SYNTH section (yFlow after PLAY = kHeaderH+637)
+        g.drawText("EWI SYNTH",  sidebarX + 12, kHeaderH + 637, kSidebarW - 24, 10,
+                   juce::Justification::centredLeft);
+        g.drawText("EWI DEVICE", sidebarX + 12, kHeaderH + 691, kSidebarW - 24, 10,
+                   juce::Justification::centredLeft);
     }
 
     // ── Main area section separators ─────────────────────────────────────────
@@ -1923,6 +2012,13 @@ void MainComponent::resized()
         // PLAY (50px)
         sidebarPlayBtn_.setBounds(sbBtnX, yFlow, sbBtnW, 50);
         yFlow += 58;  // 50 + 8 gap
+
+        // ── EWI SYNTH section (labels drawn in paint()) ──────────────────────
+        // "EWI SYNTH" header at yFlow (10px), then load button 12px below
+        serumLoadBtn_    .setBounds(sbBtnX, yFlow + 12, sbBtnW, 22); yFlow += 38; // 12+22+4
+        serumStatusLabel_.setBounds(sbBtnX, yFlow,      sbBtnW, 12); yFlow += 16; // 12+4
+        // "EWI DEVICE" header at yFlow (10px), then editor 10px below
+        ewiDeviceEditor_ .setBounds(sbBtnX, yFlow + 10, sbBtnW, 20); yFlow += 38; // 10+20+8
 
         // Nuage IA — remplit l'espace restant jusqu'en bas de la sidebar
         const int cloudBottom = H - kStatusH - kPad;

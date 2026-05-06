@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dsp/DspPipeline.h"
+#include "dsp/SerumHost.h"
 #include "dsp/SoloAssistant.h"
 #include "dsp/SynthEffect.h"
 #include "dsp/SmartSamplerEngine.h"
@@ -43,6 +44,12 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
     void releaseResources() override;
 
+    // ── EWI synth (VST3 host) ─────────────────────────────────────────────────
+    // Load / unload the Serum VST3 from the message thread.
+    // Must be called after prepareToPlay() so sampleRate / blockSize are known.
+    void loadSerumPlugin(const juce::String& vst3Path);
+    void unloadSerumPlugin();
+
     //==========================================================================
     // Component — rendu GUI
     //==========================================================================
@@ -72,10 +79,18 @@ private:
     // DSP + MIDI
     //==========================================================================
     ::dsp::DspPipeline       dspPipeline_;
+    ::dsp::SerumHost         serumHost_;
     ::dsp::SoloAssistant     soloAssistant_;
     ::dsp::SmartSamplerEngine samplerEngine_ { dspPipeline_.getSampler() };
     ::dsp::StepSequencer     stepSequencer_;
     midi::MidiManager        midiManager_{dspPipeline_.getMidiEventQueue()};
+    juce::MidiBuffer         ewiMidiBuffer_;
+
+    // ── EWI Synth UI ─────────────────────────────────────────────────────────
+    juce::TextButton                  serumLoadBtn_;
+    juce::Label                       serumStatusLabel_;
+    juce::TextEditor                  ewiDeviceEditor_;
+    std::unique_ptr<juce::FileChooser> serumFileChooser_;
 
     //==========================================================================
     // GUI — contrôles audio

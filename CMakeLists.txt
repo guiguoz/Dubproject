@@ -93,6 +93,7 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/AiContentClassifier.cpp
     src/dsp/AiMixEngine.cpp
     src/dsp/FeatureExtractor.cpp
+    src/dsp/SerumHost.cpp
     src/midi/MidiManager.cpp
     src/project/ProjectLoader.cpp
     src/ui/SaxFXLookAndFeel.cpp
@@ -126,6 +127,8 @@ target_compile_definitions(SaxFXLive PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_VERSION>"
     $<$<BOOL:${JUCE_ASIO}>:JUCE_ASIO=1>
     $<$<BOOL:${SAXFX_ENABLE_ONNX}>:SAXFX_HAS_ONNX=1>
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_VST=0
 )
 
 # ASIO include path
