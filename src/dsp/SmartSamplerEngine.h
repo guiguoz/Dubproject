@@ -705,6 +705,23 @@ private:
         }
     }
 
+    // ── ContentType → ContentCategory conversion (for SlotDynamics presets) ──
+
+    static ContentCategory contentTypeToDynamicsCategory(ContentType t) noexcept
+    {
+        switch (t)
+        {
+            case ContentType::KICK:  return ContentCategory::KICK;
+            case ContentType::SNARE: return ContentCategory::SNARE;
+            case ContentType::HIHAT: return ContentCategory::HIHAT;
+            case ContentType::BASS:  return ContentCategory::BASS;
+            case ContentType::SYNTH: return ContentCategory::SYNTH;
+            case ContentType::PAD:   return ContentCategory::PAD;
+            case ContentType::PERC:  return ContentCategory::PERC;
+            default:                 return ContentCategory::OTHER;
+        }
+    }
+
     // ── Target gain per instrument type ───────────────────────────────────────
 
     static float targetGainForType(ContentType type) noexcept
@@ -1099,6 +1116,15 @@ private:
         }
 
         lastMixUsedFallback_.store(!usedAi, std::memory_order_release);
+
+        // Phase 5: Per-slot dynamics presets (real-time feed-forward compressor).
+        for (int i = 0; i < kSamplerSlots; ++i)
+        {
+            if (!loaded[i]) continue;
+            const ContentType effectiveType = hasOverride_[static_cast<std::size_t>(i)]
+                ? overrideTypes_[static_cast<std::size_t>(i)] : types[i];
+            sampler_.getSlotDynamics(i).setPreset(contentTypeToDynamicsCategory(effectiveType));
+        }
     }
 
     // ── Revert to original PCM (called when magic is toggled off) ─────────────

@@ -2,6 +2,7 @@
 
 #include "BeatClock.h"
 #include "DspCommon.h"
+#include "SlotDynamics.h"
 #include <array>
 #include <atomic>
 #include <vector>
@@ -114,6 +115,9 @@ public:
     // Safe to call from the GUI thread (data is not modified by the audio thread).
     float getSlotPeakLevel(int slot) const noexcept;
 
+    SlotDynamics& getSlotDynamics(int slot) noexcept
+        { return slotDynamics_[static_cast<std::size_t>(slot)]; }
+
     // Returns the number of PCM samples in a slot (0 if not loaded).
     int getSlotSampleCount(int slot) const noexcept;
 
@@ -194,6 +198,7 @@ private:
     // Gain lissé per-sample (audio thread only) + coeff précalculé dans prepare().
     float gainSmoothed_  [kMaxSlots]   {};
     float gainRampCoeff_               { 0.998f };
+    std::array<SlotDynamics, kMaxSlots> slotDynamics_ {};
     std::atomic<int>   soloSlot_       { -1 };  // -1 = no solo
 
     // Per-slot output peak — written by audio thread, read by GUI (VU meter).

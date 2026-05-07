@@ -60,6 +60,7 @@ void Sampler::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
     gainRampCoeff_ = std::exp(-4.6052f / (0.050f * static_cast<float>(sampleRate)));
     for (int v = 0; v < kMaxSlots; ++v)
         gainSmoothed_[v] = slots_[static_cast<std::size_t>(v)].gain.load(std::memory_order_relaxed);
+    for (auto& d : slotDynamics_) d.prepare(sampleRate);
 }
 
 void Sampler::loadSample(int slot, const float* data, int numSamples,
@@ -750,6 +751,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples,
         const float gR = panR_[idx].load(std::memory_order_relaxed);
         const bool  haasOnLeft = (gL < gR);
 
+        slotDynamics_[idx].beginBlock();
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
@@ -835,7 +837,8 @@ void Sampler::processStereo(float* left, float* right, int numSamples,
                 ++vState.readPos;
             }
 
-            const float s_final = sidechainGains_[idx] * s_mix;
+            float s_final = sidechainGains_[idx] * s_mix;
+            slotDynamics_[idx].processSample(s_final);
 
             if (sendBufL != nullptr) {
                 const float sendGain = sl.delaySend.load(std::memory_order_relaxed);
@@ -860,6 +863,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples,
             blockPeak        = std::max(blockPeak, std::abs(s_final));
         }
         outputPeaks_[idx].store(blockPeak, std::memory_order_relaxed);
+        slotDynamics_[idx].endBlock();
     }
 }
 
