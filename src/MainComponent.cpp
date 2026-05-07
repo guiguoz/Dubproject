@@ -451,30 +451,22 @@ MainComponent::MainComponent()
             // Reload déclenché pendant mix actif → relancer l'IA sur PCM propres
             if (reloadPending_)
             {
-                reloadPending_ = false;
+                reloadPending_       = false;
+                trimAfterMixPending_ = true;  // revertToOriginals a chargé sans trim → réappliquer après mix
                 triggerAI();
                 return;
             }
 
             // Re-appliquer les trim points (revertToOriginals relit le fichier original)
-            const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
-            for (int i = 0; i < 9; ++i)
+            reApplyCurrentSceneTrims();
+        }
+        else
+        {
+            // Magic mix terminé après un revert+reload : PCM non-trimé → appliquer les trims sauvegardés
+            if (trimAfterMixPending_)
             {
-                const std::size_t sidx = static_cast<std::size_t>(i);
-                const int ts = sc.trimStart[sidx];
-                const int te = sc.trimEnd  [sidx];
-                if (ts > 0 || te >= 0)
-                {
-                    auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
-                    const int total = static_cast<int>(snap.size());
-                    if (total > 0)
-                    {
-                        const int s2 = juce::jlimit(0, total - 1, ts);
-                        const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
-                        std::vector<float> t2(snap.begin() + s2, snap.begin() + e2);
-                        dspPipeline_.getSampler().reloadSlotData(i, std::move(t2));
-                    }
-                }
+                trimAfterMixPending_ = false;
+                reApplyCurrentSceneTrims();
             }
         }
     };
@@ -2347,6 +2339,25 @@ void MainComponent::updateSidebarBpm(float bpm)
 {
     sidebarBpmLabel_.setText(juce::String(bpm, 2),
                              juce::dontSendNotification);
+}
+
+void MainComponent::reApplyCurrentSceneTrims()
+{
+    const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+    for (int i = 0; i < 9; ++i)
+    {
+        const std::size_t sidx = static_cast<std::size_t>(i);
+        const int ts = sc.trimStart[sidx];
+        const int te = sc.trimEnd  [sidx];
+        if (ts <= 0 && te < 0) continue;
+        auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
+        const int total = static_cast<int>(snap.size());
+        if (total <= 0) continue;
+        const int s2 = juce::jlimit(0, total - 1, ts);
+        const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
+        std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
+        dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
+    }
 }
 
 void MainComponent::updateSceneLabel()

@@ -115,6 +115,7 @@ private:
     juce::ComboBox   masterKeyCombo_;
     juce::ComboBox   masterKeyModeCombo_;
     void             applyMasterKey();
+    void             reApplyCurrentSceneTrims();
 
     // ── Sampler / Step Sequencer ──────────────────────────────────────────────
     juce::Label samplerLabel_;
@@ -129,7 +130,8 @@ private:
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
-    bool                    reloadPending_ { false };
+    bool                    reloadPending_       { false };
+    bool                    trimAfterMixPending_ { false };
     std::array<bool, 9>     manualTypeOverride_ {};
 
     // ── Dub Delay global bus ───────────────────────────────────────────────────
