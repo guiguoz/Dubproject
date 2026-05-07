@@ -305,11 +305,11 @@ MainComponent::MainComponent()
         dspPipeline_.getSampler().stop(track, ::dsp::Sampler::StopMode::Retrigger);
     };
 
-    // Slot cleared: unload PCM and clear engine path
+    // Slot cleared: unload PCM and clear engine state
     stepSeqPanel_.onSlotCleared = [this](int slot)
     {
         dspPipeline_.getSampler().clearSlot(slot);
-        samplerEngine_.setSlotFilePath(slot, "");
+        samplerEngine_.clearSlot(slot);
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
@@ -2470,6 +2470,7 @@ void MainComponent::applyScene(int idx)
             // Slot doit être vidé
             dspPipeline_.getSampler().clearSlot(i);
             stepSeqPanel_.setSlotFilePath(i, "");
+            samplerEngine_.clearSlot(i);
         }
         else if (!newPath.empty())
         {
@@ -2591,8 +2592,8 @@ void MainComponent::resetCurrentSceneFull()
     for (int i = 0; i < 9; ++i)
     {
         sampler.clearSlot(i);
+        samplerEngine_.clearSlot(i);
         stepSeqPanel_.setSlotFilePath(i, "");
-        samplerEngine_.setSlotFilePath(i, "");
         stepSeqPanel_.setSlotLoaded(i, false);
     }
     scenes_[static_cast<std::size_t>(currentScene_)].used = false;

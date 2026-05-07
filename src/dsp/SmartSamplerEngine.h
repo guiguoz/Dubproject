@@ -197,6 +197,18 @@ public:
         hasOverride_[static_cast<std::size_t>(slot)] = false;
     }
 
+    // Reset all per-slot state when a slot is unloaded (type, mix state, dynamics).
+    void clearSlot(int slot) noexcept
+    {
+        if (slot < 0 || slot >= kSamplerSlots) return;
+        const auto idx = static_cast<std::size_t>(slot);
+        detectedTypes_[idx] = ContentType::OTHER;
+        hasOverride_  [idx] = false;
+        lastMixState_ [idx] = {};
+        sampler_.getSlotDynamics(slot).reset();
+        filePaths_    [idx] = {};
+    }
+
     // ── Last mix state per slot (populated after magic mix, read by save) ────────
 
     struct SlotMixState
