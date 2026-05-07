@@ -66,6 +66,7 @@ struct SceneSaveData
     std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };  // v7
     std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
     std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };  // v8
+    std::array<float, 9>                  userGains     { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };  // v13
     bool                                  used          { false };
 };
 

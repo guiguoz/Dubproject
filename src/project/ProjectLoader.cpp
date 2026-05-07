@@ -177,6 +177,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     for (int i = 0; i < 9 && i < dsArr->size(); ++i)
                         sc.delaySends[static_cast<std::size_t>(i)] =
                             juce::jlimit(0.f, 1.f, static_cast<float>((*dsArr)[i]));
+
+                if (data.version >= 13)
+                    if (const auto* ugArr = entry["userGains"].getArray())
+                        for (int i = 0; i < 9 && i < ugArr->size(); ++i)
+                            sc.userGains[static_cast<std::size_t>(i)] =
+                                juce::jlimit(0.f, 2.f, static_cast<float>((*ugArr)[i]));
             }
         }
     }
@@ -217,7 +223,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     11);
+    root->setProperty("version",     13);
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));
 
@@ -346,6 +352,11 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             for (int i = 0; i < 9; ++i)
                 delaySendsArr.add(sc.delaySends[static_cast<std::size_t>(i)]);
             entry->setProperty("delaySends", delaySendsArr);
+
+            juce::Array<juce::var> userGainsArr;
+            for (int i = 0; i < 9; ++i)
+                userGainsArr.add(static_cast<double>(sc.userGains[static_cast<std::size_t>(i)]));
+            entry->setProperty("userGains", userGainsArr);
 
             scenesArr.add(juce::var(entry.get()));
         }

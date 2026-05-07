@@ -339,10 +339,14 @@ MainComponent::MainComponent()
         }
     };
 
-    // Volume per slot
-    stepSeqPanel_.onVolumeChanged = [this](int slot, float gain)
+    // Volume per slot — user fader, multiplied on top of AI normalization gain
+    stepSeqPanel_.onVolumeChanged = [this](int slot, float userGain)
     {
-        dspPipeline_.getSampler().setSlotGain(slot, gain);
+        auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+        sc.userGains[static_cast<std::size_t>(slot)] = userGain;
+        const auto ms = samplerEngine_.getSlotMixState(slot);
+        const float aiGain = ms.active ? ms.gain : 1.0f;
+        dspPipeline_.getSampler().setSlotGain(slot, aiGain * userGain);
     };
 
     // Mute per slot — re-run magic mix if active so gain/pan adapt to new mute state
@@ -462,11 +466,22 @@ MainComponent::MainComponent()
         }
         else
         {
-            // Magic mix terminé après un revert+reload : PCM non-trimé → appliquer les trims sauvegardés
+            // Magic mix apply terminé — PCM et gains IA sont posés par applyNeutronMix.
             if (trimAfterMixPending_)
             {
                 trimAfterMixPending_ = false;
                 reApplyCurrentSceneTrims();
+            }
+            // Appliquer les user gains sur les gains IA, mettre à jour sliders et scenes_.gains.
+            auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+            for (int i = 0; i < 9; ++i)
+            {
+                const auto ms = samplerEngine_.getSlotMixState(i);
+                if (!ms.active) continue;
+                const std::size_t idx = static_cast<std::size_t>(i);
+                sc.gains[idx] = ms.gain;
+                dspPipeline_.getSampler().setSlotGain(i, ms.gain * sc.userGains[idx]);
+                stepSeqPanel_.setSlotVolume(i, sc.userGains[idx]);
             }
         }
     };
@@ -1193,6 +1208,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.filePaths      = src.filePaths;
         dst.mutes          = src.mutes;
         dst.gains          = src.gains;
+        dst.userGains      = src.userGains;
         dst.trackBarCounts = src.trackBarCounts;
         dst.trimStart      = src.trimStart;
         dst.trimEnd        = src.trimEnd;
@@ -1428,6 +1444,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.filePaths      = src.filePaths;
             dst.mutes          = src.mutes;
             dst.gains          = src.gains;
+            dst.userGains      = src.userGains;
             dst.trackBarCounts = src.trackBarCounts;
             dst.trimStart      = src.trimStart;
             dst.trimEnd        = src.trimEnd;
@@ -2411,7 +2428,11 @@ void MainComponent::captureCurrentScene()
         const int numSteps     = stepSequencer_.getTrackStepCount(i);
         sc.filePaths    [idx]  = stepSeqPanel_.getSlotFilePath(i);
         sc.mutes        [idx]  = sampler.isSlotMuted(i);
-        sc.gains        [idx]  = sampler.getSlotGain(i);
+        {
+            const auto ms = samplerEngine_.getSlotMixState(i);
+            sc.gains    [idx]  = ms.active ? ms.gain : 1.0f;
+        }
+        // sc.userGains[idx] is maintained live by onVolumeChanged — do not overwrite here
         sc.delaySends   [idx]  = sampler.getSlotDelaySend(i);
         sc.trackBarCounts[idx] = stepSequencer_.getTrackBarCount(i);
         for (int s = 0; s < numSteps; ++s)
@@ -2490,9 +2511,10 @@ void MainComponent::applyScene(int idx)
         }
 
         dspPipeline_.getSampler().setSlotMuted    (i, sc.mutes[i]);
-        dspPipeline_.getSampler().setSlotGain     (i, sc.gains[sidx]);
+        dspPipeline_.getSampler().setSlotGain     (i, sc.gains[sidx] * sc.userGains[sidx]);
         dspPipeline_.getSampler().setSlotDelaySend(i, sc.delaySends[sidx]);
-        stepSeqPanel_.setSlotMuted(i, sc.mutes[i]);
+        stepSeqPanel_.setSlotMuted (i, sc.mutes[i]);
+        stepSeqPanel_.setSlotVolume(i, sc.userGains[sidx]);
         for (int s = 0; s < numSteps; ++s)
         {
             const bool active = sc.steps[sidx][static_cast<std::size_t>(s)];
