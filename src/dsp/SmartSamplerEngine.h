@@ -163,6 +163,14 @@ public:
     /// Direct apply (kept for compatibility).
     void applyMagicMix() { startWorker(false); }
 
+    /// Inject Serum signal features before triggering applyMagicMix().
+    /// Must be called from the GUI thread, before startWorker().
+    void setSerumContext(const ::dsp::MixFeatures& f, bool active) noexcept
+    {
+        serumFeatures_ = f;
+        serumActive_   = active;
+    }
+
     bool isBusy()              const noexcept { return busy_                .load(std::memory_order_acquire); }
     bool isMagicActive()       const noexcept { return magicActive_         .load(std::memory_order_acquire); }
     bool didLastMixUseFallback() const noexcept { return lastMixUsedFallback_.load(std::memory_order_acquire); }
@@ -831,12 +839,53 @@ private:
 
                 const auto decisions = aiMix->predict(slotFeatures);
 
+                // ── Serum masking compensation ────────────────────────────────
+                // Post-correct AI gains for slots that share frequency space with
+                // Serum (EWI instrument). Applied offline on static PCM — no artifacts.
+                auto compensated = decisions;
+                if (serumActive_ && serumFeatures_.rms > 0.02f)
+                {
+                    const float serumCentroid = serumFeatures_.spectralCentroid;
+                    // Ramp duck depth: 0 at rms=0.02, max 25%
+                    const float duckDepth = std::clamp(
+                        (serumFeatures_.rms - 0.02f) * 3.f, 0.f, 0.25f);
+
+                    for (int i = 0; i < kAiSlots; ++i)
+                    {
+                        if (!loaded[i]) continue;
+                        auto&       d  = compensated[i];
+                        const auto& sf = slotFeatures[i];
+
+                        // Proximity via log2 — gradual: 1.0=same oct, 0.0=±1 oct, <0=beyond
+                        if (serumCentroid > 0.f && sf.spectralCentroid > 0.f)
+                        {
+                            const float ratio = sf.spectralCentroid / (serumCentroid + 1e-6f);
+                            const float prox  = std::clamp(
+                                1.f - std::abs(std::log2(ratio)), 0.f, 1.f);
+                            if (prox > 0.f)
+                                d.volume = std::max(d.volume * (1.f - prox * duckDepth), 0.1f);
+                        }
+
+                        // EQ carving: if Serum is SYNTH/PAD, reduce mids/highs on similar slots
+                        using CC = ContentCategory;
+                        const bool serumSynthy = (serumFeatures_.contentType == CC::SYNTH
+                                               || serumFeatures_.contentType == CC::PAD);
+                        const bool slotSynthy  = (sf.contentType == CC::SYNTH
+                                               || sf.contentType == CC::PAD);
+                        if (serumSynthy && slotSynthy)
+                        {
+                            d.midGain  = std::max(d.midGain  - serumFeatures_.midFrac  * 4.f, -6.f);
+                            d.highGain = std::max(d.highGain - serumFeatures_.highFrac * 4.f, -6.f);
+                        }
+                    }
+                }
+
                 for (int i = 0; i < kAiSlots; ++i)
                 {
                     if (thread && thread->threadShouldExit()) return;
                     if (!loaded[i]) continue;
 
-                    const auto& d = decisions[static_cast<std::size_t>(i)];
+                    const auto& d = compensated[i];
 
                     // 3-band EQ from AI decision — corrected frequencies & order:
                     //   DC block (20Hz HP) → sub-bass shelf (100Hz) → presence peak (2500Hz)
@@ -1465,6 +1514,10 @@ private:
     bool        hasOverride_  [kSamplerSlots] {};
     std::array<SlotMixState, kSamplerSlots>  lastMixState_ {};
     std::unique_ptr<WorkerThread>            workerThread_;
+
+    // ── Serum context (set by GUI thread before startWorker) ──────────────────
+    ::dsp::MixFeatures                       serumFeatures_ {};
+    bool                                     serumActive_   { false };
     std::array<std::unique_ptr<OnLoadWorkerThread>, kSamplerSlots> onLoadWorkers_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SmartSamplerEngine)

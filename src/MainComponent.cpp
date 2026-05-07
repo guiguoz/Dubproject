@@ -355,6 +355,7 @@ MainComponent::MainComponent()
             for (int si = 0; si < kMaxScenes; ++si)
                 arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
             samplerEngine_.setArrangement(arr, currentScene_);
+            samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
             samplerEngine_.applyMagicMix();
         }
     };
@@ -1528,6 +1529,7 @@ void MainComponent::triggerAI()
     for (int si = 0; si < kMaxScenes; ++si)
         arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
     samplerEngine_.setArrangement(arr, currentScene_);
+    samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
     samplerEngine_.applyMagicMix();
 }
 
@@ -1703,8 +1705,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                            * serumUserGain_.load(std::memory_order_relaxed);
             for (int i = 0; i < numSamples; ++i)
                 left[i] += (sL[i] + sR[i]) * 0.5f * g;
-            dspPipeline_.getMasterLimiter().process(left, numSamples);
         }
+        dspPipeline_.getMasterLimiter().process(left, numSamples);
 
         const float outGain = outputGain_.load(std::memory_order_relaxed);
         if (outGain != 1.0f)
@@ -2188,6 +2190,7 @@ void MainComponent::timerCallback()
             serumSnapReady_ = false;
             const auto feat = ::dsp::FeatureExtractor::extract(serumSnapBuf_, currentSampleRate_);
             serumContentType_.store(feat.contentType, std::memory_order_relaxed);
+            serumMixFeatures_ = feat;
         }
     }
 

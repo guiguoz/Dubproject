@@ -83,6 +83,7 @@ private:
     std::atomic<float>       serumGainSmooth_      { 0.5f };  // audio thread r/w + GUI r
     std::atomic<float>       serumUserGain_        { 1.0f };  // MIDI learn multiplier (GUI w, audio r)
     std::atomic<::dsp::ContentCategory> serumContentType_ { ::dsp::ContentCategory::SYNTH };
+    ::dsp::MixFeatures       serumMixFeatures_ {};   // GUI thread only
     int                      serumAnalysisCounter_ { 0 };
 
     // ── EWI Synth UI ─────────────────────────────────────────────────────────
