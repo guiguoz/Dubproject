@@ -189,7 +189,7 @@ public:
             // Volume slider
             volSliders_[t].setSliderStyle(juce::Slider::LinearVertical);
             volSliders_[t].setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-            volSliders_[t].setRange(0.0, 1.0, 0.01);
+            volSliders_[t].setRange(0.0, 1.5, 0.01);
             volSliders_[t].setValue(1.0, juce::dontSendNotification);
             volSliders_[t].setColour(juce::Slider::trackColourId,
                                      trackColour(t).withAlpha(0.5f));

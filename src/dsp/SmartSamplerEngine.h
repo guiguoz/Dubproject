@@ -848,6 +848,8 @@ private:
         std::vector<float>    pcms     [kSamplerSlots];
         bool                  loaded   [kSamplerSlots] {};
         int                   numLoaded = 0;
+        std::array<float, kSamplerSlots> computedGains;
+        computedGains.fill(1.0f);  // unity — slots non traités ne mutent pas
 
         // Phase 1: read PCM from RAM + detect content type.
         // Muted slots are excluded — the mix will be computed only for active slots,
@@ -998,6 +1000,7 @@ private:
                         (d.volume * saxClearance(types[i])) / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
+                    computedGains[i] = gain;
                 }
                 usedAi = true;
 
@@ -1015,6 +1018,7 @@ private:
                         / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
+                    computedGains[i] = gain;
                 }
             }
             // If aiMix_ failed to load, fall through to heuristic below
@@ -1094,6 +1098,7 @@ private:
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));
                 sampler_.setSlotGain(i, gain);
+                computedGains[i] = gain;
             }
         }
 
@@ -1171,7 +1176,7 @@ private:
 
             // Cache mix state for project save
             auto& ms  = lastMixState_[static_cast<std::size_t>(i)];
-            ms.gain   = sampler_.getSlotGain(i);
+            ms.gain   = computedGains[i];
             ms.pan    = sp.pan;
             ms.width  = sp.width;
             ms.depth  = sp.depth;
