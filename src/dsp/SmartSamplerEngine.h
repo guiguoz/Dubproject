@@ -496,22 +496,19 @@ private:
 
     struct BiquadCoeffs { float b0, b1, b2, a1, a2; };  // a0 normalised to 1
 
-    // True-peak estimate via 4× linear oversampling (ITU-R BS.1770-4 simplified).
-    // Catches inter-sample peaks that exceed 0dBFS on a DAC even when PCM samples look safe.
+    // True-peak estimate via 2× linear oversampling — midpoint inter-sample check.
+    // Sufficient for live use; halves the cost vs 4× (was ITU-R BS.1770-4 broadcast spec).
     static float calculateTruePeak(const std::vector<float>& pcm)
     {
         const int n = static_cast<int>(pcm.size());
         if (n == 0) return 0.f;
         float peak = 0.f;
-        // Upsample 4× by linear interpolation and track max absolute value.
         for (int i = 0; i < n - 1; ++i)
         {
             const float s0 = pcm[static_cast<std::size_t>(i)];
             const float s1 = pcm[static_cast<std::size_t>(i + 1)];
             peak = std::max(peak, std::abs(s0));
-            peak = std::max(peak, std::abs(s0 + 0.25f * (s1 - s0)));
             peak = std::max(peak, std::abs(s0 + 0.50f * (s1 - s0)));
-            peak = std::max(peak, std::abs(s0 + 0.75f * (s1 - s0)));
         }
         peak = std::max(peak, std::abs(pcm.back()));
         return peak;
