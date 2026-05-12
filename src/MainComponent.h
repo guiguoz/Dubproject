@@ -203,10 +203,12 @@ private:
     //==========================================================================
     // Crossfade entre scènes
     //==========================================================================
+    static constexpr int kCrossfadeDurationMs = 150; // crossfade musical 50-200ms
+
     struct CrossfadeState {
         bool  active      { false };
         int   elapsedMs   { 0 };
-        int   durationMs  { 300 };
+        int   durationMs  { kCrossfadeDurationMs };
         std::array<float, 9> startGains  {};
         std::array<float, 9> targetGains {};
     };

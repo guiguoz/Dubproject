@@ -2480,7 +2480,8 @@ void MainComponent::captureCurrentScene()
 
 void MainComponent::applyScene(int idx)
 {
-    // Capturer les gains courants avant d'appliquer la nouvelle scène (pour le crossfade)
+    // Capturer les gains cibles courants avant changement — point de départ du crossfade.
+    // Lit slot.gain (target), pas gainSmoothed_ (audio-only) : précision suffisante.
     std::array<float, 9> gainsBeforeScene {};
     for (int i = 0; i < 9; ++i)
         gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
@@ -2506,10 +2507,6 @@ void MainComponent::applyScene(int idx)
     // Remettre le séquenceur au step 0 → nouvelle scène part toujours du début
     if (stepSequencer_.isPlaying())
         stepSequencer_.resetPhase();
-
-    // Stop all slots on scene change -- sequencer re-triggers at step 0.
-    // StopMode::SceneSwap = 20 ms fade-out, coupure nette avant crossfade de gains (300 ms).
-    dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::SceneSwap);
 
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
@@ -2581,12 +2578,12 @@ void MainComponent::applyScene(int idx)
         }
     }
 
-    // Crossfade : si le séquenceur joue, ramper les gains depuis l'ancienne scène
+    // Crossfade pur : ramper les gains depuis l'ancienne scène sans stopAllSlots.
     if (stepSequencer_.isPlaying())
     {
         for (int i = 0; i < 9; ++i)
             crossfade_.targetGains[i] = dspPipeline_.getSampler().getSlotGain(i);
-        // Réinitialiser les gains au départ
+        // Réinitialiser les gains au départ pour que le crossfade parte de la bonne valeur
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
         crossfade_.startGains = gainsBeforeScene;
