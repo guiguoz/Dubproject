@@ -19,6 +19,12 @@ namespace dsp
 //   - setBpm(), setPlaying(), setStep(), setTrackStepCount() → GUI thread
 //   - process() → audio thread only
 //   - getCurrentStep() → GUI thread, reads atomic
+//   - prepareStepBuffer() → GUI thread; flipIfPrepared() → audio thread
+//
+// Double-buffer pattern swap:
+//   GUI calls prepareStepBuffer(buf) to write the next scene into swapBufs_[writeSlot].
+//   At the next audio block (or bar boundary), flipIfPrepared() atomically swaps
+//   activeBuf_ to the prepared slot. Audio never reads a partially-written buffer.
 // ─────────────────────────────────────────────────────────────────────────────
 class StepSequencer
 {
@@ -28,6 +34,16 @@ public:
     static constexpr int kStepsPerBar   = 16;   // 1/16th-note resolution, 4/4 time
     static constexpr int kSteps         = 16;   // kept for legacy compat
     static constexpr int kMaxBars       = kMaxSteps / kStepsPerBar;  // 32
+
+    // ── Step buffer (one of two swap slots) ──────────────────────────────────
+
+    struct StepBuf
+    {
+        bool steps[kTracks][kMaxSteps] {};
+        int  trackStepCount[kTracks]   { kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
+                                         kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
+                                         kStepsPerBar };
+    };
 
     // ── Setup ────────────────────────────────────────────────────────────────
 
@@ -61,7 +77,7 @@ public:
         {
             phase_ = 0.0;
             stepAtomic_.store(0, std::memory_order_relaxed);
-            }
+        }
         playing_.store(play, std::memory_order_relaxed);
     }
 
@@ -71,27 +87,26 @@ public:
     }
 
     /// Set the active step count for a track (clamped to [1, kMaxSteps]).
+    /// Writes to both swap buffers to keep them in sync.
     void setTrackStepCount(int track, int count) noexcept
     {
-        if (track >= 0 && track < kTracks)
-        {
-            if (count < 1)         count = 1;
-            if (count > kMaxSteps) count = kMaxSteps;
-            trackStepCount_[track] = count;
-        }
+        if (track < 0 || track >= kTracks) return;
+        if (count < 1)         count = 1;
+        if (count > kMaxSteps) count = kMaxSteps;
+        swapBufs_[0].trackStepCount[track] = count;
+        swapBufs_[1].trackStepCount[track] = count;
     }
 
     int getTrackStepCount(int track) const noexcept
     {
-        if (track >= 0 && track < kTracks)
-            return trackStepCount_[track];
-        return kMaxSteps;
+        if (track < 0 || track >= kTracks) return kMaxSteps;
+        return swapBufs_[activeBuf_.load(std::memory_order_relaxed)].trackStepCount[track];
     }
 
     /// Convenience: set pattern length in bars (1–kMaxBars). Each bar = kStepsPerBar steps.
     void setTrackBarCount(int track, int bars) noexcept
     {
-        if (bars < 1)      bars = 1;
+        if (bars < 1)        bars = 1;
         if (bars > kMaxBars) bars = kMaxBars;
         setTrackStepCount(track, bars * kStepsPerBar);
     }
@@ -103,18 +118,18 @@ public:
         return (steps + kStepsPerBar - 1) / kStepsPerBar;
     }
 
-    /// Toggle or set a step. Safe to call from GUI thread while sequencer runs.
+    /// Toggle or set a step. Writes to both swap buffers (live edit, keeps bufs in sync).
     void setStep(int track, int step, bool active) noexcept
     {
-        if (track >= 0 && track < kTracks && step >= 0 && step < kMaxSteps)
-            steps_[track][step] = active;
+        if (track < 0 || track >= kTracks || step < 0 || step >= kMaxSteps) return;
+        swapBufs_[0].steps[track][step] = active;
+        swapBufs_[1].steps[track][step] = active;
     }
 
     bool getStep(int track, int step) const noexcept
     {
-        if (track >= 0 && track < kTracks && step >= 0 && step < kMaxSteps)
-            return steps_[track][step];
-        return false;
+        if (track < 0 || track >= kTracks || step < 0 || step >= kMaxSteps) return false;
+        return swapBufs_[activeBuf_.load(std::memory_order_relaxed)].steps[track][step];
     }
 
     /// Current playhead step (0 .. max active steps-1). GUI thread reads for animation.
@@ -128,22 +143,39 @@ public:
         phase_ = 0.0;
         stepAtomic_.store(0, std::memory_order_relaxed);
         playing_.store(false, std::memory_order_relaxed);
-        for (int t = 0; t < kTracks; ++t)
-        {
-            trackStepCount_[t] = kSteps;  // default 16
-
-            for (int s = 0; s < kMaxSteps; ++s)
-                steps_[t][s] = false;
-        }
+        activeBuf_.store(0, std::memory_order_relaxed);
+        preparedBuf_.store(-1, std::memory_order_relaxed);
+        swapBufs_[0] = StepBuf{};
+        swapBufs_[1] = StepBuf{};
     }
 
     /// Remet la phase à zéro (step 0) sans arrêter la lecture.
-    /// Appeler depuis le thread GUI juste avant d'appliquer une nouvelle scène,
-    /// pour que les patterns de la nouvelle scène partent toujours du step 0.
     void resetPhase() noexcept
     {
-        phase_ = -1e-9;  // juste avant 0 → le 1er process() franchit step 0 et le déclenche
+        phase_ = -1e-9;
         stepAtomic_.store(0, std::memory_order_relaxed);
+    }
+
+    // ── Double-buffer scene transition ───────────────────────────────────────
+
+    /// GUI thread: prépare le prochain buffer de patterns sans toucher au buffer actif.
+    /// La copie complète (512 steps × 9 tracks) est écrite dans le slot inactif,
+    /// puis signalée via preparedBuf_ (release). flipIfPrepared() finalisera le swap.
+    void prepareStepBuffer(const StepBuf& buf) noexcept
+    {
+        const int writeSlot = 1 - activeBuf_.load(std::memory_order_relaxed);
+        swapBufs_[writeSlot] = buf;
+        preparedBuf_.store(writeSlot, std::memory_order_release);
+    }
+
+    /// Audio thread: swap atomique vers le buffer préparé.
+    /// Appelé au début de process() — garantit que le nouveau buffer est actif
+    /// avant que les triggers de ce bloc soient calculés.
+    void flipIfPrepared() noexcept
+    {
+        const int p = preparedBuf_.exchange(-1, std::memory_order_acq_rel);
+        if (p >= 0)
+            activeBuf_.store(p, std::memory_order_relaxed);
     }
 
     // ── Audio thread ─────────────────────────────────────────────────────────
@@ -152,18 +184,18 @@ public:
     /// Each track loops independently on its own step count.
     void process(int numSamples, Sampler& sampler) noexcept
     {
+        flipIfPrepared();
+
         const float bpm = bpm_.load(std::memory_order_relaxed);
         if (!playing_.load(std::memory_order_relaxed) || bpm <= 0.f)
             return;
 
-        // Each 1/16th note = 0.25 beats
         static constexpr double kStepBeats = 0.25;
 
         const double phaseBefore = phase_;
         phase_ += static_cast<double>(numSamples)
                   / (sampleRate_ * 60.0 / static_cast<double>(bpm));
 
-        // Global step index (wraps on kMaxSteps to cover all possible track lengths)
         const int globalBefore = static_cast<int>(std::floor(phaseBefore / kStepBeats)) % kMaxSteps;
         const int globalAfter  = static_cast<int>(std::floor(phase_       / kStepBeats)) % kMaxSteps;
 
@@ -171,45 +203,37 @@ public:
         {
             stepAtomic_.store(globalAfter, std::memory_order_relaxed);
 
-            // pendingTransLen_ == 0 means no transition pending → skip detection.
             const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
             const bool atSceneBoundary = (transLen > 0 && globalAfter % transLen == 0);
 
             if (atSceneBoundary)
             {
                 sceneEndFlag_.store(true, std::memory_order_release);
-                // We are waiting for the GUI thread to switch scenes. 
-                // Do NOT trigger old patterns on this boundary to prevent 
-                // double-trigger leaking. Let existing sounds ring out naturally.
             }
             else
             {
+                const StepBuf& active = swapBufs_[activeBuf_.load(std::memory_order_relaxed)];
                 for (int track = 0; track < kTracks; ++track)
                 {
-                    const int trackSteps = trackStepCount_[track];
+                    const int trackSteps = active.trackStepCount[track];
                     const int trackStep  = globalAfter % trackSteps;
-
-                    if (steps_[track][trackStep])
+                    if (active.steps[track][trackStep])
                         sampler.trigger(track);
                 }
             }
         }
 
-        // Wrap phase to avoid double-precision drift
         if (phase_ >= 4096.0)
             phase_ -= 4096.0;
     }
 
     /// Fige la longueur de scène utilisée pour détecter la fin de cycle.
-    /// Appeler depuis navigateScene() AVANT de stocker pendingScene_.
-    /// steps = max des trackStepCount_ courants. 0 = désactive la détection.
     void setPendingTransitionLen(int steps) noexcept
     {
         pendingTransLen_.store(steps, std::memory_order_release);
     }
 
     /// Consumes the scene-end signal (returns true once per cycle boundary).
-    /// Resets pendingTransLen_ so the detection doesn't re-fire on the next play.
     bool consumeSceneEnd() noexcept
     {
         const bool fired = sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
@@ -218,17 +242,15 @@ public:
     }
 
     /// Returns true if a quantized scene transition is already armed.
-    /// GUI thread: use this to block a second navigateScene() call while one is pending.
     bool hasPendingTransition() const noexcept
     {
         return pendingTransLen_.load(std::memory_order_relaxed) > 0;
     }
 
 private:
-    bool   steps_[kTracks][kMaxSteps] {};
-    int    trackStepCount_[kTracks]   = { kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
-                                          kStepsPerBar, kStepsPerBar, kStepsPerBar, kStepsPerBar,
-                                          kStepsPerBar };
+    StepBuf          swapBufs_[2];
+    std::atomic<int> activeBuf_   { 0 };   // audio thread swap target; GUI reads for getStep/getCount
+    std::atomic<int> preparedBuf_ { -1 };  // -1 = nothing prepared; ≥0 = slot ready to flip
 
     double phase_      = 0.0;    // audio thread only
     double sampleRate_ = 44100.0;
@@ -237,7 +259,7 @@ private:
     std::atomic<bool>  playing_         { false };
     std::atomic<int>   stepAtomic_      { 0 };
     std::atomic<bool>  sceneEndFlag_    { false };
-    std::atomic<int>   pendingTransLen_ { 0 };   // longueur de scène figée pour la transition (0 = inactif)
+    std::atomic<int>   pendingTransLen_ { 0 };
 };
 
 } // namespace dsp

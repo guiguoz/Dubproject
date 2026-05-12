@@ -2493,10 +2493,8 @@ void MainComponent::applyScene(int idx)
         // Empty scene: clear step patterns and reset all gains to unity
         for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
-            {
-                stepSequencer_.setStep(i, s, false);
                 stepSeqPanel_.setStepState(i, s, false);
-            }
+        stepSequencer_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, 1.0f);
         return;
@@ -2511,6 +2509,9 @@ void MainComponent::applyScene(int idx)
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
 
+    // Build the step buffer for the new scene (préparé atomiquement via double-buffer).
+    ::dsp::StepSequencer::StepBuf nextStepBuf;
+
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 9; ++i)
     {
@@ -2520,7 +2521,11 @@ void MainComponent::applyScene(int idx)
         const std::string& newPath     = sc.filePaths[i];
         const std::string  currentPath = stepSeqPanel_.getSlotFilePath(i);
 
-        stepSequencer_.setTrackBarCount(i, barCount);
+        // Mettre à jour le step buffer local (sera préparé atomiquement après la boucle).
+        nextStepBuf.trackStepCount[i] = numSteps;
+        for (int s = 0; s < ::dsp::StepSequencer::kMaxSteps; ++s)
+            nextStepBuf.steps[i][s] = sc.steps[sidx][static_cast<std::size_t>(s)];
+
         stepSeqPanel_.setTrackStepCount(i, numSteps);
 
         if (!newPath.empty() && newPath != currentPath)
@@ -2551,11 +2556,7 @@ void MainComponent::applyScene(int idx)
         stepSeqPanel_.setSlotMuted (i, sc.mutes[i]);
         stepSeqPanel_.setSlotVolume(i, sc.userGains[sidx]);
         for (int s = 0; s < numSteps; ++s)
-        {
-            const bool active = sc.steps[sidx][static_cast<std::size_t>(s)];
-            stepSequencer_.setStep(i, s, active);
-            stepSeqPanel_.setStepState(i, s, active);
-        }
+            stepSeqPanel_.setStepState(i, s, sc.steps[sidx][static_cast<std::size_t>(s)]);
 
         // v7 — re-appliquer le trim si défini pour ce slot/scène.
         // Seulement si même fichier : trim déjà intégré lors du chargement ci-dessus.
@@ -2577,6 +2578,10 @@ void MainComponent::applyScene(int idx)
             }
         }
     }
+
+    // Swap atomique des patterns via double-buffer → audio lit le nouveau buffer
+    // au prochain appel de process() (flipIfPrepared au début du bloc).
+    stepSequencer_.prepareStepBuffer(nextStepBuf);
 
     // Crossfade pur : ramper les gains depuis l'ancienne scène sans stopAllSlots.
     if (stepSequencer_.isPlaying())
