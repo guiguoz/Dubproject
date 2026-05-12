@@ -1,8 +1,9 @@
 #include "AiContentClassifier.h"
 
-#include <cmath>
-#include <stdexcept>
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <stdexcept>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -168,6 +169,8 @@ std::vector<float> AiContentClassifier::extractFeatures(const std::vector<float>
 void AiContentClassifier::normalizeFeatures(std::vector<float>& features)
 {
     for (size_t i = 0; i < features.size(); ++i) {
+        if (i >= means_.size() || i >= stds_.size()) break;
+        if (stds_[i] < 1e-8f) continue;
         features[i] = (features[i] - means_[i]) / stds_[i];
     }
 }
@@ -218,9 +221,21 @@ AiContentClassifier::ContentType AiContentClassifier::classify(const std::vector
     normalizeFeatures(features);
 
     // Step 4: Run inference
-    std::vector<float> logits = model_.run(features);
+    std::vector<float> logits;
+    try { logits = model_.run(features); }
+    catch (const std::exception& e)
+    {
+        std::fprintf(stderr, "AiContentClassifier::classify failed: %s\n", e.what());
+        return ContentType::OTHER;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "AiContentClassifier::classify failed: unknown exception\n");
+        return ContentType::OTHER;
+    }
 
     // Step 5: Get the class with the highest logit
+    if (logits.empty()) return ContentType::OTHER;
     size_t bestIdx = 0;
     float bestLogit = logits[0];
     for (size_t i = 1; i < logits.size(); ++i) {

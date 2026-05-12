@@ -4,7 +4,16 @@ Ce fichier est destiné aux **assistants IA** et aux humains qui arrivent sur le
 
 ## Qu'est-ce que c'est ?
 
-Application **desktop JUCE (C++17)** : traitement audio temps réel pour saxophone live (effets modulaires, sampler 9 pistes + séquenceur jusqu'à 512 steps, MIDI, IA ONNX pour classification de samples et mix assisté). Marque produit **DubEngine** ; binaire CMake / produit **SaxFX Live**.
+Application **desktop JUCE (C++17)** de performance live **dub techno**. Marque produit **DubEngine** ; binaire CMake / produit **SaxFX Live**.
+
+### Contexte d'usage — à lire avant tout
+
+- **Instrument principal : AKAI EWI** (vent MIDI) branché en entrée audio/MIDI. Il n'y a **plus de saxophone** ni de clavier physique — `KeyboardSynth` et `PianoKeyboardPanel` ont été supprimés définitivement.
+- **Le sampler 9 slots est l'instrument central** : boucles, kicks, basses, pads — tout le groove vient de là. L'EffectChain traite le signal EWI en temps réel (effets modulaires).
+- **L'utilisateur ne touche pas aux paramètres delay en live.** Les gains, sends, BPM-sync et activation du bus delay sont gérés automatiquement par l'IA ingé son (`SmartSamplerEngine::onTypesDetected`, callback déclenché à chaque chargement de scene). Ne pas ajouter de contrôles manuels pour ces paramètres.
+- **`PingPongDelay` et `DubDelay` reçoivent un bus send séparé** (`tempSendL_/R_` dans `DspPipeline`), pas le mix sampler complet. Chaque slot a un `delaySend` atomique (`Sampler::SampleSlot::delaySend`) configuré par l'IA selon le type de contenu (KICK/BASS = 0, PAD = 0.8, etc.).
+- **`processAdd` = additif, wet-only.** `dubDelay_.processAdd(sendL, sendR, outL, outR, n)` : le signal dry est déjà dans `outL/outR`, `processAdd` y ajoute uniquement le signal traité. Ne jamais remplacer (`=`) le buffer de sortie dans cette fonction.
+- **Slot 8 (DRM)** : suit une voie heuristique (`ContentType::LOOP`) — le modèle ONNX de mix ne couvre que les slots 0-7.
 
 ## Prérequis build (Windows)
 
@@ -47,14 +56,13 @@ Ordre logique stéréo (résumé) :
 2. **RMS** lissé sur la gauche (VU, expression, ducking éventuel).
 3. `std::copy(left -> right)` puis **`EffectChain::processStereo(left, right)`** — vrai stéréo : `ReverbEffect` utilise `juce::dsp::Reverb::processStereo()` (Freeverb filtres peigne séparés L/R), `DelayEffect` fait le ping-pong L->R->L->R (second `RingBuffer` heap-allocated). Les effets sans override utilisent le défaut dual-mono (`process(L); process(R)`), ce qui préserve toute divergence stéréo amont.
 4. **ExpressionMapper** — peut pousser un paramètre d'effet selon le RMS.
-5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine).
-6. **KeyboardSynth::processStereoAdd()** — spread compact `kWidth=0.15` (était 0.35).
-7. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
-8. **MasterLimiter** sur L et R.
+5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine). Bus send par slot (`delaySend` atomique) alimente les delays séparément du mix principal.
+6. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
+7. **MasterLimiter** sur L et R.
 
-**Synth** : effet **100 % wet** sur le sax ; le sax sec disparaît quand le synth est audible — voir `SynthEffect` et README section Synth.
+**Synth** : effet **100 % wet** sur l'EWI ; le signal sec disparaît quand le synth est audible — voir `SynthEffect`.
 
-**Slot sampler 8 (DRM)** : le modèle ONNX de mix est **8 slots** ; le slot 8 suit une **voie heuristique** (`ContentType::LOOP`), pas le réseau 8-slot.
+**Slot 8 (DRM)** : modèle ONNX limité à 8 slots ; slot 8 = voie heuristique `ContentType::LOOP` uniquement.
 
 ## Threads et synchronisation
 
@@ -72,7 +80,6 @@ Ordre logique stéréo (résumé) :
 | Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin. Si l'effet a un comportement stéréo (L!=R), surcharger `processStereo()` ; sinon le défaut dual-mono suffit. |
 | Pipeline / ordre traitement | `DspPipeline.*`, éventuellement `MainComponent` (routing) |
 | Sampler / grille | `Sampler.*`, `StepSequencer.*`, `SmartSamplerEngine.*`, UI `StepSequencerPanel` |
-| Clavier / synthé solo | `KeyboardSynth.*`, `DspPipeline.*` (intégration SPSC noteOn/noteOff), `PianoKeyboardPanel.h` |
 | Sauvegarde projet | `ProjectData.h`, `ProjectLoader.cpp` (migrations **version** JSON), toute UI qui sérialise |
 | Thème / boutons | `SaxOsLookAndFeel`, `NeonButton`, `Colours`, `SaxFXLayout` / `SaxFXFonts` |
 
@@ -87,7 +94,7 @@ Ordre logique stéréo (résumé) :
 cmake --build build --config Release --target SaxFXTests --parallel
 ```
 
-Exécuter l'exe de tests généré sous `build/tests/Release/` (ou équivalent). 210 tests (Catch2) ; 207/210 passent (3 échecs pré-existants : encoding de noms de tests + check version).
+Exécuter l'exe de tests généré sous `build/tests/Release/` (ou équivalent). **204/204 tests passent** (Catch2, état courant).
 
 ## Conventions Git
 

@@ -1,22 +1,20 @@
 #pragma once
 
 #include "dsp/DspPipeline.h"
-#include "dsp/SoloAssistant.h"
-#include "dsp/SynthEffect.h"
+#include "dsp/FeatureExtractor.h"
+#include "dsp/SerumHost.h"
 #include "dsp/SmartSamplerEngine.h"
 #include "dsp/StepSequencer.h"
 #include "midi/MidiManager.h"
+#include "midi/MidiLearnMap.h"
 #include "project/ProjectLoader.h"
-#include "ui/EffectChainEditor.h"
-#include "ui/PianoKeyboardPanel.h"
 #include "ui/NeonButton.h"
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
-#include "ui/SaxStaffPanel.h"
-#include "ui/PixelCloudComponent.h"
 #include "ui/SampleEditorComponent.h"
 #include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
+#include "ui/PixelCloudComponent.h"
 
 #include <JuceHeader.h>
 #include <atomic>
@@ -25,12 +23,6 @@
 #include <vector>
 
 //==============================================================================
-/**
- * MainComponent — composant principal de SaxFX Live
- *
- * Sprint 7 : séquenceur à steps (8 tracks × 16 steps) inspiré Novation Circuit Tracks.
- *            Remplace SamplerPanel + MasterSampleSelector + SamplerMagicButton.
- */
 class MainComponent : public juce::AudioAppComponent, private juce::Timer
 {
   public:
@@ -38,14 +30,19 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     ~MainComponent() override;
 
     //==========================================================================
-    // AudioAppComponent — boucle audio temps réel
+    // AudioAppComponent
     //==========================================================================
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
     void releaseResources() override;
 
+    // ── EWI synth (VST3 host) ─────────────────────────────────────────────────
+    void loadSerumPlugin(const juce::String& vst3Path);
+    void unloadSerumPlugin();
+    void openSerumEditor();
+
     //==========================================================================
-    // Component — rendu GUI
+    // Component
     //==========================================================================
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -53,7 +50,6 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
 private:
     std::unique_ptr<ui::SaxOsLookAndFeel>  saxOsLookAndFeel_;
 
-    // Fenêtre non-modale pour l'éditeur de sample (Fix 1)
     struct SampleEditorWindow : public juce::DocumentWindow
     {
         std::function<void()> onClose;
@@ -63,27 +59,46 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleEditorWindow)
     };
     std::unique_ptr<SampleEditorWindow> sampleEditorWindow_;
-    juce::Image logoImage_;  // DubEngine logo (embarqué via BinaryData)
+    juce::Image logoImage_;
+
     //==========================================================================
-    // Timer — mise à jour du VU-mètre et affichage pitch (~30 fps)
+    // Timer
     //==========================================================================
     void timerCallback() override;
 
     //==========================================================================
     // DSP + MIDI
     //==========================================================================
-    ::dsp::DspPipeline       dspPipeline_;
-    ::dsp::SoloAssistant     soloAssistant_;
+    ::dsp::DspPipeline        dspPipeline_;
+    ::dsp::SerumHost          serumHost_;
     ::dsp::SmartSamplerEngine samplerEngine_ { dspPipeline_.getSampler() };
-    ::dsp::StepSequencer     stepSequencer_;
-    midi::MidiManager        midiManager_{dspPipeline_.getMidiEventQueue()};
+    ::dsp::StepSequencer      stepSequencer_;
+    midi::MidiManager         midiManager_{dspPipeline_.getMidiEventQueue()};
+    juce::MidiBuffer          ewiMidiBuffer_;
+
+    // ── Serum gain rider (audio thread only) ─────────────────────────────────
+    std::vector<float>       serumSnapBuf_;
+    juce::SpinLock           serumSnapLock_;
+    bool                     serumSnapReady_       { false };
+    std::atomic<float>       serumGainSmooth_      { 0.5f };  // audio thread r/w + GUI r
+    std::atomic<float>       serumUserGain_        { 1.0f };  // MIDI learn multiplier (GUI w, audio r)
+    std::atomic<::dsp::ContentCategory> serumContentType_ { ::dsp::ContentCategory::SYNTH };
+    ::dsp::MixFeatures       serumMixFeatures_ {};   // GUI thread only
+    int                      serumAnalysisCounter_ { 0 };
+
+    // ── EWI Synth UI ─────────────────────────────────────────────────────────
+    juce::TextButton                    serumLoadBtn_;
+    juce::TextButton                    serumShowUiBtn_;
+    juce::Label                         serumStatusLabel_;
+    juce::TextEditor                    ewiDeviceEditor_;
+    std::unique_ptr<juce::FileChooser>  serumFileChooser_;
+    std::unique_ptr<SampleEditorWindow> serumEditorWindow_;
 
     //==========================================================================
     // GUI — contrôles audio
     //==========================================================================
     juce::TextButton audioSettingsButton_;
     juce::Label      infoLabel_;
-    juce::Label      pitchLabel_;
     juce::Slider     mainMixSlider_;
     juce::Label      mainMixLabel_;
     bool             pipelineActive_ = false;
@@ -91,30 +106,16 @@ private:
     // ── LookAndFeel ───────────────────────────────────────────────────────────
     ui::SaxFXLookAndFeel laf_;
 
-    // ── Modular Effects ──────────────────────────────────────────────────────
-    ui::EffectChainEditor  effectChainEditor_{dspPipeline_.getEffectChain()};
-    ui::PianoKeyboardPanel pianoKeyboardPanel_;
-    ui::SaxStaffPanel          saxStaffPanel_;
+    // ── Spatial visualization ─────────────────────────────────────────────────
     ui::SpatialVisualization   spatialViz_;
-    juce::Label fxLabel_;
 
-    // ── View switching ────────────────────────────────────────────────────────
-    enum class ViewMode { Effects, Keyboard, Staff };
-    ViewMode         currentViewMode_ { ViewMode::Effects };
-    juce::TextButton viewKeyboardBtn_;  // 🎹
-    juce::TextButton viewStaffBtn_;     // 🎼
-    void             updateViewVisibility();
-
-    // ── Keyboard synth state (shadow for project save) ───────────────────────
-    int              keyboardPresetIdx_ { -1 };  // -1 = no preset selected
-
-    // ── Master key (tonalité de référence) ───────────────────────────────────
-    int              masterKeyRoot_  { 0 };     // 0=C .. 11=B
+    // ── Master key ────────────────────────────────────────────────────────────
+    int              masterKeyRoot_  { 0 };
     bool             masterKeyMajor_ { true };
     juce::ComboBox   masterKeyCombo_;
     juce::ComboBox   masterKeyModeCombo_;
-    juce::ComboBox   globalScaleCombo_;         // gamme (partagé clavier + portée)
-    void             applyMasterKey();          // propagates to panels + MusicContext
+    void             applyMasterKey();
+    void             reApplyCurrentSceneTrims();
 
     // ── Sampler / Step Sequencer ──────────────────────────────────────────────
     juce::Label samplerLabel_;
@@ -123,23 +124,33 @@ private:
     juce::TextButton filesMenuButton_;
     ui::StepSequencerPanel stepSeqPanel_ { stepSequencer_ };
 
-    // ── Sidebar upper: already covered by audioSettingsButton_, mainMixSlider_ ──
-
-    // ── Sidebar lower — transport (moved from StepSequencerPanel) ─────────────
+    // ── Sidebar transport ─────────────────────────────────────────────────────
     juce::TextButton        sidebarPlayBtn_;
     juce::TextButton        sidebarTapBtn_;
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
-    bool                    reloadPending_ { false };       // sample chargé pendant mix actif
-    std::array<bool, 9>     manualTypeOverride_ {};         // clic droit → type prioritaire sur rôle fixe
+    bool                    reloadPending_       { false };
+    bool                    trimAfterMixPending_ { false };
+    std::array<bool, 9>     manualTypeOverride_ {};
 
-    // ── Sidebar lower — scene navigation ──────────────────────────────────────
+    // ── Dub Delay global bus ───────────────────────────────────────────────────
+    juce::ToggleButton dubDelayEnableBtn_;
+    juce::Slider       dubDelaySendSlider_;
+    juce::Slider       dubDelayWetSlider_;
+    juce::Slider       dubDelayFeedbackSlider_;
+    juce::Slider       dubDelayToneSlider_;
+    juce::Slider       dubDelayDriveSlider_;
+    juce::ComboBox     dubDelayDivCombo_;
+    juce::TextButton   dubDelayFreezeBtn_;
+    juce::Label        dubDelayLabel_;
+
+    // ── Scene navigation ──────────────────────────────────────────────────────
     juce::TextButton sceneUpBtn_;
     juce::Label      sceneNumLabel_;
     juce::TextButton sceneDownBtn_;
-    juce::TextButton sceneResetBtn_;      // efface les patterns de la scène courante
-    juce::TextButton sceneTrackResetBtn_; // full reset : patterns + samples de la scène courante
+    juce::TextButton sceneResetBtn_;
+    juce::TextButton sceneTrackResetBtn_;
     juce::TextButton sceneCopyBtn_;
 
     // ── Scene data ─────────────────────────────────────────────────────────────
@@ -155,12 +166,14 @@ private:
         std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };
         std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };
         std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };
+        std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };
+        std::array<float, 9>                  userGains     { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
         bool                                  used          { false };
     };
 
     std::array<SceneData, kMaxScenes> scenes_;
     int currentScene_ { 0 };
-    std::atomic<int>  pendingScene_ { -1 };  // -1 = aucune transition en attente
+    std::atomic<int>  pendingScene_ { -1 };
 
     //==========================================================================
     // Background task management
@@ -169,13 +182,12 @@ private:
     std::array<std::atomic<bool>, 9>                processingSlot_{};
     std::vector<std::future<void>>                  backgroundTasks_;
 
-    // Réserve #3 — BPM override + raw-PCM retry storage (GUI thread only)
-    float                           overrideBpm_{ 0.f };          // consumed by next async run
+    float                           overrideBpm_{ 0.f };
     std::array<std::vector<float>, 9> rawPcmForRetry_{};
-    std::array<double,             9> rawSrForRetry_{};           // value-initialised to 0
+    std::array<double,             9> rawSrForRetry_{};
 
     //==========================================================================
-    // Clipboard (copy/paste track)
+    // Clipboard
     //==========================================================================
     struct TrackClipboard {
         std::array<bool, 512> steps {};
@@ -210,16 +222,52 @@ private:
     double             currentSampleRate_{0.0};
     int                currentBufferSize_{0};
 
+    // ── Performance: VU dB cache (U2) ────────────────────────────────────────
+    float cachedDbIn_  = -60.f;
+    float cachedDbOut_ = -60.f;
+
+    // ── Performance: dirty flags repaint (U3) ────────────────────────────────
+    bool vuDirty_        = true;
+    bool mixStateDirty_  = true;
+    bool crossfadeDirty_ = false;
+
+    // ── Performance: grain noise pre-rendered image (U1) ─────────────────────
+    juce::Image grainNoiseImage_;
+
+    //==========================================================================
+    // MIDI Learn
+    //==========================================================================
+    std::vector<midi::MidiLearnBinding>                midiLearnBindings_;
+    int                                                 learningTarget_   { -1 };
+    bool                                                midiLearnVisible_ { false };
+    bool                                                applyingMidi_     { false };
+    std::array<float, midi::kNumTargets>                targetSmoothed_   {};
+
+    // UI panel + controls
+    juce::Component                                     midiLearnPanel_;
+    juce::TextButton                                    midiLearnBtn_;
+    std::array<juce::Label,      midi::kNumTargets>     mlTargetLabels_;
+    std::array<juce::Label,      midi::kNumTargets>     mlCcLabels_;
+    std::array<juce::TextButton, midi::kNumTargets>     mlLearnBtns_;
+    std::array<juce::TextButton, midi::kNumTargets>     mlClearBtns_;
+
+    void applyMidiMappings();
+    void startLearning(int targetIdx);
+    void stopLearning();
+    void clearMapping(int targetIdx);
+    void updateMidiLearnUI();
+    void applyMappingValue(midi::MappingTarget t, float rawValue);
+
     //==========================================================================
     // Helpers
     //==========================================================================
+    void ensureGrainNoise(int w, int h);
     void loadSampleIntoSlot(int slot, const std::string& path,
                             int trimStart = 0, int trimEnd = -1);
     void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
     void showBpmConfidencePopup(int slot, float detectedBpm);
     void openSampleEditor(int slot);
     static std::vector<float> computeEnvelope(const std::vector<float>& pcm, int bins = 200);
-    ::dsp::SynthEffect* findSynthEffect() noexcept;
     void applyProjectData(const project::ProjectData& data);
     void saveProject();
     void saveProjectToFile(const juce::File& f);
@@ -228,15 +276,14 @@ private:
     void doLoadProject();
     void openAudioSettings();
     void doAutosave();
-    static juce::String frequencyToNoteName(float hz);
 
     // Scene management
     ::dsp::SmartSamplerEngine::SceneSnapshot buildSceneSnapshot(int si) const;
     void captureCurrentScene();
     void applyScene(int idx);
     void navigateScene(int delta);
-    void resetCurrentScene();       // patterns only
-    void resetCurrentSceneFull();   // patterns + samples
+    void resetCurrentScene();
+    void resetCurrentSceneFull();
     void copyCurrentSceneToNext();
     void updateSceneLabel();
     void updateSidebarBpm(float bpm);

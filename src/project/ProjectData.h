@@ -30,22 +30,6 @@ struct MidiMapping
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EffectSlotData — serialised state of one effect in the chain
-//
-// type      : string name matching dsp::effectTypeName()
-// enabled   : IEffect::enabled flag
-// params    : values in param-index order (IEffect::getParam(0..n-1))
-// aiManaged : true when SmartMixEngine last set the params (shows ◆ badge)
-// ─────────────────────────────────────────────────────────────────────────────
-struct EffectSlotData
-{
-    std::string        type;
-    bool               enabled   { true };
-    std::vector<float> params;
-    bool               aiManaged { false };  // v3
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // MusicContextData — master tempo + tonality detected from reference sample
 // ─────────────────────────────────────────────────────────────────────────────
 struct MusicContextData
@@ -81,7 +65,20 @@ struct SceneSaveData
     std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };  // v6
     std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };  // v7
     std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };  // v7 — -1 = pas de trim
+    std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };  // v8
+    std::array<float, 9>                  userGains     { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };  // v13
     bool                                  used          { false };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MidiLearnEntry — one MIDI CC → parameter binding (v12)
+// ─────────────────────────────────────────────────────────────────────────────
+struct MidiLearnEntry
+{
+    int   target { -1 };   // midi::MappingTarget cast to int
+    int   cc     { -1 };   // MIDI CC number [0..127]
+    float min    { 0.f };
+    float max    { 1.f };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,10 +86,9 @@ struct SceneSaveData
 // ─────────────────────────────────────────────────────────────────────────────
 struct ProjectData
 {
-    int                         version     { 10 };
+    int                         version     { 7 };
     std::string                 projectName { "Untitled" };
     float                       bpm         { 120.f };
-    std::vector<EffectSlotData> effectChain;
     std::array<SampleConfig, 9> samples {};
     std::vector<MidiMapping>    midiMappings;
     MusicContextData            musicContext;
@@ -102,15 +98,16 @@ struct ProjectData
     std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes
     int                              currentScene   { 0 };
-    // v9 — keyboard synth global state (preset + custom params + volume)
-    int                              keyboardPreset { -1 };    // -1 = no preset
-    std::array<float, 13>            keyboardParams { 0.25f, 0.5f, 0.5f, 0.75f, 0.2f,
-                                                      0.02f, 0.25f, 1.f, 0.7f, 0.15f,
-                                                      0.f, 0.5f, 0.f };
-    float                            keyboardGain   { 0.5f };
-    bool                             keyboardMono   { false };
-    // v10 — solo assistant preset (0=Off, 1=Prudent, 2=Dub)
-    int                              soloPreset     { 0 };
+    // v11 — dub delay global bus
+    bool                             dubDelayEnabled  { false };
+    float                            dubDelaySend     { 0.20f };
+    float                            dubDelayWet      { 0.28f };
+    float                            dubDelayFeedback { 0.48f };
+    float                            dubDelayTone     { 0.55f };
+    float                            dubDelayDrive    { 0.15f };
+    int                              dubDelayDiv      { 1 };  // GridDiv::Quarter
+    // v12 — MIDI learn bindings
+    std::vector<MidiLearnEntry>      midiLearnEntries;
 };
 
 } // namespace project

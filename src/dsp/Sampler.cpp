@@ -3,6 +3,10 @@
 #include <cassert>
 #include <cmath>
 
+// RT-safety guarantee: atomic<float> must be lock-free (single instruction load/store).
+static_assert(std::atomic<float>::is_always_lock_free,
+              "std::atomic<float> is not lock-free on this platform — audio thread will block");
+
 namespace {
 
 // Equal-power overlap crossfade at loop wrap (~23 ms @ 44.1 kHz). Dub-friendly for sub bass.
@@ -56,6 +60,7 @@ void Sampler::prepare(double sampleRate, int /*maxBlockSize*/) noexcept
     gainRampCoeff_ = std::exp(-4.6052f / (0.050f * static_cast<float>(sampleRate)));
     for (int v = 0; v < kMaxSlots; ++v)
         gainSmoothed_[v] = slots_[static_cast<std::size_t>(v)].gain.load(std::memory_order_relaxed);
+    for (auto& d : slotDynamics_) d.prepare(sampleRate);
 }
 
 void Sampler::loadSample(int slot, const float* data, int numSamples,
@@ -188,6 +193,19 @@ void Sampler::setSlotMuted(int slot, bool muted) noexcept
     slots_[static_cast<std::size_t>(slot)].muted.store(muted, std::memory_order_relaxed);
 }
 
+void Sampler::setSlotDelaySend(int slot, float send) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    const float clamped = send < 0.f ? 0.f : (send > 1.f ? 1.f : send);
+    slots_[static_cast<std::size_t>(slot)].delaySend.store(clamped, std::memory_order_relaxed);
+}
+
+float Sampler::getSlotDelaySend(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    return slots_[static_cast<std::size_t>(slot)].delaySend.load(std::memory_order_relaxed);
+}
+
 bool Sampler::isLoaded(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return false;
@@ -233,6 +251,14 @@ std::vector<float> Sampler::getSlotPcmSnapshot(int slot) const noexcept
     if (slot < 0 || slot >= kMaxSlots) return {};
     auto& s = slots_[static_cast<std::size_t>(slot)];
     return s.data[s.activeDataIdx.load(std::memory_order_relaxed)];
+}
+
+PcmView Sampler::getSlotPcmView(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    const auto& s = slots_[static_cast<std::size_t>(slot)];
+    const auto& v = s.data[s.activeDataIdx.load(std::memory_order_relaxed)];
+    return { v.data(), static_cast<int>(v.size()) };
 }
 
 float Sampler::getSlotOutputPeak(int slot) const noexcept
@@ -590,7 +616,8 @@ inline float Sampler::applyHaasDelay(int slot, float sample) noexcept
 // For pan < 0 (left-heavy):  right gets delayed (Haas on R).
 // For pan = 0 (centre):      right gets delayed (subtle stereo width).
 // ─────────────────────────────────────────────────────────────────────────────
-void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
+void Sampler::processStereo(float* left, float* right, int numSamples,
+                             float* sendBufL, float* sendBufR) noexcept
 {
     constexpr float kSCThresh  = 0.25f;
     constexpr float kSCRatio   = 4.0f;
@@ -732,6 +759,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
         const float gR = panR_[idx].load(std::memory_order_relaxed);
         const bool  haasOnLeft = (gL < gR);
 
+        slotDynamics_[idx].beginBlock();
         float blockPeak = 0.f;
         for (int i = 0; i < numSamples; ++i)
         {
@@ -817,7 +845,16 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
                 ++vState.readPos;
             }
 
-            const float s_final = sidechainGains_[idx] * s_mix;
+            float s_final = sidechainGains_[idx] * s_mix;
+            slotDynamics_[idx].processSample(s_final);
+
+            if (sendBufL != nullptr) {
+                const float sendGain = sl.delaySend.load(std::memory_order_relaxed);
+                if (sendGain > 0.f) {
+                    sendBufL[i] += s_final * sendGain;
+                    sendBufR[i] += s_final * sendGain;
+                }
+            }
 
             if (haasOnLeft)
             {
@@ -834,6 +871,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples) noexcept
             blockPeak        = std::max(blockPeak, std::abs(s_final));
         }
         outputPeaks_[idx].store(blockPeak, std::memory_order_relaxed);
+        slotDynamics_[idx].endBlock();
     }
 }
 

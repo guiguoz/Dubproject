@@ -310,6 +310,13 @@ public:
             muteBtns_[slot].setToggleState(muted, juce::dontSendNotification);
     }
 
+    void setSlotVolume(int slot, float v)
+    {
+        if (slot >= 0 && slot < 9)
+            volSliders_[static_cast<std::size_t>(slot)].setValue(
+                static_cast<double>(v), juce::dontSendNotification);
+    }
+
     const std::string& getSlotFilePath(int slot) const
     {
         static const std::string empty;

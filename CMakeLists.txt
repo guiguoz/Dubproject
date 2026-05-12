@@ -64,35 +64,15 @@ juce_add_gui_app(SaxFXLive
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
-    src/dsp/YinPitchTracker.cpp
     src/dsp/WsolaShifter.cpp
-    src/dsp/Flanger.cpp
-    src/dsp/Harmonizer.cpp
     src/dsp/Sampler.cpp
-    src/dsp/KeyboardSynth.cpp
     src/dsp/DspPipeline.cpp
-    src/dsp/FlangerEffect.cpp
-    src/dsp/HarmonizerEffect.cpp
-    src/dsp/PitchForkEffect.cpp
-    src/dsp/EnvelopeFilterEffect.cpp
-    src/dsp/DelayEffect.cpp
-    src/dsp/WhammyEffect.cpp
-    src/dsp/OctaverEffect.cpp
-    src/dsp/TunerEffect.cpp
-    src/dsp/SlicerEffect.cpp
-    src/dsp/ReverbEffect.cpp
-    src/dsp/EffectChain.cpp
     src/dsp/BpmDetector.cpp
-    src/dsp/ExpressionMapper.cpp
-    src/dsp/ScaleHarmonizer.cpp
-    src/dsp/AutoPitchCorrect.cpp
-    src/dsp/KeyDetector.cpp
-    src/dsp/EffectChainOptimizer.cpp
-    src/dsp/EffectFactory.cpp
-    src/dsp/SynthEffect.cpp
+    src/dsp/PingPongDelay.cpp
     src/dsp/AiContentClassifier.cpp
     src/dsp/AiMixEngine.cpp
     src/dsp/FeatureExtractor.cpp
+    src/dsp/SerumHost.cpp
     src/midi/MidiManager.cpp
     src/project/ProjectLoader.cpp
     src/ui/SaxFXLookAndFeel.cpp
@@ -126,6 +106,8 @@ target_compile_definitions(SaxFXLive PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_VERSION>"
     $<$<BOOL:${JUCE_ASIO}>:JUCE_ASIO=1>
     $<$<BOOL:${SAXFX_ENABLE_ONNX}>:SAXFX_HAS_ONNX=1>
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_VST=0
 )
 
 # ASIO include path

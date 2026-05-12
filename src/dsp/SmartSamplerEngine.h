@@ -1,9 +1,8 @@
 #pragma once
 
 #include "BpmDetector.h"
-#include "KeyDetector.h"
+#include "MusicContext.h"
 #include "Sampler.h"
-#include "SmartMixEngine.h"    // for MusicContext
 #include "WsolaShifter.h"
 #include "AiContentClassifier.h"
 
@@ -13,10 +12,15 @@
 #endif
 
 #include <JuceHeader.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <execution>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -85,13 +89,51 @@ public:
 
     void setArrangement(const std::array<SceneSnapshot, 8>& scenes, int currentScene) noexcept
     {
+        std::lock_guard<std::mutex> lg(arrangementMtx_);
         arrangement_             = scenes;
         currentArrangementScene_ = currentScene;
     }
 
     explicit SmartSamplerEngine(::dsp::Sampler& sampler, double sampleRate = 44100.0)
         : sampler_(sampler), sampleRate_(sampleRate)
-    {}
+    {
+#ifdef SAXFX_HAS_ONNX
+        if (useAiMix_)
+        {
+            try
+            {
+                classifier_ = std::make_unique<AiContentClassifier>(
+                    "models/content_classifier.onnx",
+                    "models/content_classifier_norm.bin");
+            }
+            catch (const std::exception& e)
+            {
+                juce::Logger::writeToLog(juce::String("AiContentClassifier load failed: ") + e.what());
+            }
+            catch (...)
+            {
+                juce::Logger::writeToLog("AiContentClassifier load failed: unknown exception");
+            }
+
+            try
+            {
+                aiMix_ = std::make_unique<AiMixEngine>(
+                    "models/mix_model.onnx",
+                    "models/mix_model_norm.bin");
+            }
+            catch (const std::exception& e)
+            {
+                juce::Logger::writeToLog(juce::String("AiMixEngine load failed: ") + e.what());
+                aiMixFailed_ = true;
+            }
+            catch (...)
+            {
+                juce::Logger::writeToLog("AiMixEngine load failed: unknown exception");
+                aiMixFailed_ = true;
+            }
+        }
+#endif
+    }
 
     ~SmartSamplerEngine()
     {
@@ -133,7 +175,10 @@ public:
     void setSlotFilePath(int slot, std::string path)
     {
         if (slot >= 0 && slot < kSamplerSlots)
+        {
+            originalPcmCache_[static_cast<std::size_t>(slot)] = {};
             filePaths_[static_cast<std::size_t>(slot)] = std::move(path);
+        }
     }
 
     // ── On-load automatic processing ──────────────────────────────────────────
@@ -144,6 +189,7 @@ public:
     {
         if (slot < 0 || slot >= kSamplerSlots) return;
         cancelOnLoadWorker(slot);
+        originalPcmCache_[static_cast<std::size_t>(slot)] = {};
         filePaths_[static_cast<std::size_t>(slot)] = path;
         onLoadWorkers_[static_cast<std::size_t>(slot)] =
             std::make_unique<OnLoadWorkerThread>(*this, slot, std::move(path), ctx);
@@ -161,25 +207,24 @@ public:
             startWorker(false);  // apply
     }
 
-    /// Direct apply (kept for compatibility).
-    void applyMagicMix() { startWorker(false); }
+    /// Direct apply — no-op if a worker is already running (avoids cancelAndWait on message thread).
+    void applyMagicMix()
+    {
+        if (!busy_.load(std::memory_order_acquire))
+            startWorker(false);
+    }
+
+    /// Inject Serum signal features before triggering applyMagicMix().
+    /// Must be called from the GUI thread, before startWorker().
+    void setSerumContext(const ::dsp::MixFeatures& f, bool active) noexcept
+    {
+        serumFeatures_ = f;
+        serumActive_   = active;
+    }
 
     bool isBusy()              const noexcept { return busy_                .load(std::memory_order_acquire); }
     bool isMagicActive()       const noexcept { return magicActive_         .load(std::memory_order_acquire); }
     bool didLastMixUseFallback() const noexcept { return lastMixUsedFallback_.load(std::memory_order_acquire); }
-
-    // ── Keyboard integration ──────────────────────────────────────────────────
-    // Called by MainComponent when the user selects a KeyboardSynth preset.
-    // applyNeutronMix() uses this to duck competing sampler slots and suggest
-    // a normalised keyboard gain via onKeyboardGainSuggested.
-    void setKeyboardPreset(int idx) noexcept
-    {
-        keyboardPresetIdx_.store(idx, std::memory_order_relaxed);
-    }
-
-    // Fired at the end of applyNeutronMix() (background thread) with the
-    // suggested gain for the KeyboardSynth.  Wire to dspPipeline_.setKeyboardGain.
-    std::function<void(float)> onKeyboardGainSuggested;
 
     // ── Content type API ──────────────────────────────────────────────────────
 
@@ -201,6 +246,19 @@ public:
     {
         if (slot < 0 || slot >= kSamplerSlots) return;
         hasOverride_[static_cast<std::size_t>(slot)] = false;
+    }
+
+    // Reset all per-slot state when a slot is unloaded (type, mix state, dynamics).
+    void clearSlot(int slot) noexcept
+    {
+        if (slot < 0 || slot >= kSamplerSlots) return;
+        const auto idx = static_cast<std::size_t>(slot);
+        detectedTypes_[idx] = ContentType::OTHER;
+        hasOverride_  [idx] = false;
+        lastMixState_      [idx] = {};
+        sampler_.getSlotDynamics(slot).reset();
+        filePaths_         [idx] = {};
+        originalPcmCache_  [idx] = {};
     }
 
     // ── Last mix state per slot (populated after magic mix, read by save) ────────
@@ -711,6 +769,23 @@ private:
         }
     }
 
+    // ── ContentType → ContentCategory conversion (for SlotDynamics presets) ──
+
+    static ContentCategory contentTypeToDynamicsCategory(ContentType t) noexcept
+    {
+        switch (t)
+        {
+            case ContentType::KICK:  return ContentCategory::KICK;
+            case ContentType::SNARE: return ContentCategory::SNARE;
+            case ContentType::HIHAT: return ContentCategory::HIHAT;
+            case ContentType::BASS:  return ContentCategory::BASS;
+            case ContentType::SYNTH: return ContentCategory::SYNTH;
+            case ContentType::PAD:   return ContentCategory::PAD;
+            case ContentType::PERC:  return ContentCategory::PERC;
+            default:                 return ContentCategory::OTHER;
+        }
+    }
+
     // ── Target gain per instrument type ───────────────────────────────────────
 
     static float targetGainForType(ContentType type) noexcept
@@ -777,26 +852,39 @@ private:
         // Phase 1: read PCM from RAM + detect content type.
         // Muted slots are excluded — the mix will be computed only for active slots,
         // so gain staging and spatialization adapt to the current mute state.
+        const auto t1Start = std::chrono::high_resolution_clock::now();
+
         for (int i = 0; i < kSamplerSlots; ++i)
         {
             if (thread && thread->threadShouldExit()) return;
             if (!sampler_.isLoaded(i) || sampler_.isSlotMuted(i)) continue;
 
-            pcms[i] = sampler_.getSlotPcmSnapshot(i);
-            if (pcms[i].empty()) continue;
+            // Zéro-copie : vérifie que le slot contient des données avant de copier,
+            // évite les ~88 KB de copie inutile pour les slots non chargés.
+            const PcmView view = sampler_.getSlotPcmView(i);
+            if (view.empty()) continue;
+            pcms[i].assign(view.begin(), view.end());
 
             // Use AI classifier if available, fallback to heuristic
             #ifdef SAXFX_HAS_ONNX
-            static AiContentClassifier classifier(
-                "models/content_classifier.onnx",
-                "models/content_classifier_norm.bin");
-            types[i] = static_cast<ContentType>(classifier.classify(pcms[i], sampleRate_));
+            if (classifier_)
+                types[i] = static_cast<ContentType>(classifier_->classify(pcms[i], sampleRate_));
+            else
+                types[i] = detectContentType(pcms[i], sampleRate_);
             #else
             types[i]  = detectContentType(pcms[i], sampleRate_);
             #endif
             centroids[i] = estimateSpectralCentroid(pcms[i], sampleRate_);
             loaded[i] = true;
             ++numLoaded;
+        }
+
+        {
+            const auto t1Ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::high_resolution_clock::now() - t1Start).count();
+            if (t1Ms > 5)
+                std::fprintf(stderr, "[SmartSampler] Phase1 classify: %lld ms (%d slots)\n",
+                             static_cast<long long>(t1Ms), numLoaded);
         }
 
         if (numLoaded == 0) return;
@@ -807,9 +895,10 @@ private:
 
         // Notify UI that types are available (message thread)
         {
-            auto& eng = *this;
-            juce::MessageManager::callAsync([&eng] {
-                if (eng.onTypesDetected) eng.onTypesDetected();
+            juce::WeakReference<SmartSamplerEngine> weakThis(this);
+            juce::MessageManager::callAsync([weakThis] {
+                if (auto* e = weakThis.get())
+                    if (e->onTypesDetected) e->onTypesDetected();
             });
         }
 
@@ -820,37 +909,75 @@ private:
         if (useAiMix_)
         {
             // ── AI mix path ───────────────────────────────────────────────────
-            static std::unique_ptr<AiMixEngine> aiMix;
-            static bool aiMixFailed = false;
-            if (!aiMix && !aiMixFailed)
-            {
-                try
-                {
-                    aiMix = std::make_unique<AiMixEngine>(
-                        "models/mix_model.onnx",
-                        "models/mix_model_norm.bin");
-                }
-                catch (...) { aiMixFailed = true; }
-            }
-
-            if (aiMix)
+            if (aiMix_)
             {
                 // ONNX model trained on exactly 8 slots — slot 8 (DRM) handled by heuristic path
                 static constexpr int kAiSlots = AiMixEngine::kSlots;  // 8
                 std::array<MixFeatures, kAiSlots> slotFeatures {};
+
+                // Collect loaded slot indices, then extract features in parallel.
+                // FeatureExtractor::extract is a pure function — no shared mutable state.
+                std::array<int, kAiSlots> validIdx {};
+                int nValid = 0;
                 for (int i = 0; i < kAiSlots; ++i)
-                    if (loaded[i])
+                    if (loaded[i]) validIdx[nValid++] = i;
+
+                std::for_each(std::execution::par_unseq,
+                    validIdx.begin(), validIdx.begin() + nValid,
+                    [&](int i) {
                         slotFeatures[static_cast<std::size_t>(i)] =
                             FeatureExtractor::extract(pcms[i], sampleRate_);
+                    });
 
-                const auto decisions = aiMix->predict(slotFeatures);
+                const auto decisions = aiMix_->predict(slotFeatures);
+
+                // ── Serum masking compensation ────────────────────────────────
+                // Post-correct AI gains for slots that share frequency space with
+                // Serum (EWI instrument). Applied offline on static PCM — no artifacts.
+                auto compensated = decisions;
+                if (serumActive_ && serumFeatures_.rms > 0.02f)
+                {
+                    const float serumCentroid = serumFeatures_.spectralCentroid;
+                    // Ramp duck depth: 0 at rms=0.02, max 25%
+                    const float duckDepth = std::clamp(
+                        (serumFeatures_.rms - 0.02f) * 3.f, 0.f, 0.25f);
+
+                    for (int i = 0; i < kAiSlots; ++i)
+                    {
+                        if (!loaded[i]) continue;
+                        auto&       d  = compensated[i];
+                        const auto& sf = slotFeatures[i];
+
+                        // Proximity via log2 — gradual: 1.0=same oct, 0.0=±1 oct, <0=beyond
+                        if (serumCentroid > 0.f && sf.spectralCentroid > 0.f)
+                        {
+                            const float ratio = sf.spectralCentroid / (serumCentroid + 1e-6f);
+                            const float prox  = std::clamp(
+                                1.f - std::abs(std::log2(ratio)), 0.f, 1.f);
+                            if (prox > 0.f)
+                                d.volume = std::max(d.volume * (1.f - prox * duckDepth), 0.1f);
+                        }
+
+                        // EQ carving: if Serum is SYNTH/PAD, reduce mids/highs on similar slots
+                        using CC = ContentCategory;
+                        const bool serumSynthy = (serumFeatures_.contentType == CC::SYNTH
+                                               || serumFeatures_.contentType == CC::PAD);
+                        const bool slotSynthy  = (sf.contentType == CC::SYNTH
+                                               || sf.contentType == CC::PAD);
+                        if (serumSynthy && slotSynthy)
+                        {
+                            d.midGain  = std::max(d.midGain  - serumFeatures_.midFrac  * 4.f, -6.f);
+                            d.highGain = std::max(d.highGain - serumFeatures_.highFrac * 4.f, -6.f);
+                        }
+                    }
+                }
 
                 for (int i = 0; i < kAiSlots; ++i)
                 {
                     if (thread && thread->threadShouldExit()) return;
                     if (!loaded[i]) continue;
 
-                    const auto& d = decisions[static_cast<std::size_t>(i)];
+                    const auto& d = compensated[i];
 
                     // 3-band EQ from AI decision — corrected frequencies & order:
                     //   DC block (20Hz HP) → sub-bass shelf (100Hz) → presence peak (2500Hz)
@@ -871,15 +998,6 @@ private:
                         (d.volume * saxClearance(types[i])) / std::max(truePeak, 0.001f));
                     sampler_.reloadSlotData(i, std::move(pcms[i]));
                     sampler_.setSlotGain(i, gain);
-
-                    const int   reportSlot = i;
-                    const float progress   = static_cast<float>(reportSlot + 1)
-                                           / static_cast<float>(numLoaded);
-                    auto& eng = *this;
-                    juce::MessageManager::callAsync([&eng, reportSlot, progress]
-                    {
-                        if (eng.onSlotProgress) eng.onSlotProgress(reportSlot, progress);
-                    });
                 }
                 usedAi = true;
 
@@ -899,7 +1017,7 @@ private:
                     sampler_.setSlotGain(i, gain);
                 }
             }
-            // If aiMix failed to load, fall through to heuristic below
+            // If aiMix_ failed to load, fall through to heuristic below
         }
 #endif
 
@@ -907,9 +1025,15 @@ private:
         {
             // ── Heuristic mix path (fallback / ONNX disabled / toggle off) ───
 
+            // Copie thread-safe de l'arrangement courant
+            SceneSnapshot curSnap;
+            {
+                std::lock_guard<std::mutex> lg(arrangementMtx_);
+                curSnap = arrangement_[static_cast<std::size_t>(
+                    juce::jlimit(0, 7, currentArrangementScene_))];
+            }
+
             // Densité de la scène courante → scale de gain adaptatif
-            const auto& curSnap     = arrangement_[static_cast<std::size_t>(
-                juce::jlimit(0, 7, currentArrangementScene_))];
             const float densityScale = curSnap.isDrop       ? 0.95f   // drop dense
                                      : curSnap.isBreakdown  ? 1.15f   // breakdown : plus d'espace
                                      : (curSnap.activeCount >= 4) ? 1.05f  // build-up
@@ -970,15 +1094,6 @@ private:
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));
                 sampler_.setSlotGain(i, gain);
-
-                const int   reportSlot = i;
-                const float progress   = static_cast<float>(reportSlot + 1)
-                                       / static_cast<float>(numLoaded);
-                auto& eng = *this;
-                juce::MessageManager::callAsync([&eng, reportSlot, progress]
-                {
-                    if (eng.onSlotProgress) eng.onSlotProgress(reportSlot, progress);
-                });
             }
         }
 
@@ -1065,53 +1180,13 @@ private:
 
         lastMixUsedFallback_.store(!usedAi, std::memory_order_release);
 
-        // ── Keyboard-aware adjustment ─────────────────────────────────────────
-        // If a KeyboardSynth preset is active, duck sampler slots to leave room:
-        //   • -0.7 dB globally (kGlobalDuck)
-        //   • additional duck on the slot that competes most with the preset
-        // Then fire onKeyboardGainSuggested so the audio thread / UI can update.
-        const int kbPreset = keyboardPresetIdx_.load(std::memory_order_relaxed);
-        if (kbPreset >= 0)
+        // Phase 5: Per-slot dynamics presets (real-time feed-forward compressor).
+        for (int i = 0; i < kSamplerSlots; ++i)
         {
-            // preset index → { competing sampler slot, extra duck factor }
-            // Slots: 0=MST 1=BSS 2=KCK 3=SNR 4=HAT 5=PAD 6=SYN 7=PRC 8=DRM
-            struct CompInfo { int slot; float duck; };
-            static constexpr CompInfo kComp[] = {
-                { 6, 0.88f },  // 0: Classic Mono Lead  → SYN
-                { 6, 0.84f },  // 1: Acid Dub           → SYN (heavy filter)
-                { 1, 0.84f },  // 2: Sub Bass           → BSS
-                { 5, 0.88f },  // 3: Warm Chord         → PAD
-                { 6, 0.88f },  // 4: Reggae Stab        → SYN
-                { 6, 0.86f },  // 5: Gritty Lead        → SYN
-            };
-            static constexpr float kGlobalDuck = 0.92f;  // ≈ -0.7 dB
-
-            for (int i = 0; i < kSamplerSlots; ++i)
-            {
-                if (!sampler_.isLoaded(i)) continue;
-                float g = sampler_.getSlotGain(i) * kGlobalDuck;
-                if (kbPreset < 6 && i == kComp[kbPreset].slot)
-                    g *= kComp[kbPreset].duck;
-                g = std::clamp(g, 0.f, 1.5f);
-                sampler_.setSlotGain(i, g);
-                lastMixState_[static_cast<std::size_t>(i)].gain = g;
-            }
-
-            if (onKeyboardGainSuggested)
-            {
-                // Lead presets sit slightly above the average slot gain;
-                // bass/chord presets blend in at the average level.
-                static constexpr float kLeadMult[] =
-                    { 1.15f, 1.10f, 1.00f, 0.90f, 0.90f, 1.15f };
-                const float mult = (kbPreset < 6) ? kLeadMult[kbPreset] : 1.0f;
-
-                float sumGain = 0.f; int cnt = 0;
-                for (int i = 0; i < kSamplerSlots; ++i)
-                    if (sampler_.isLoaded(i) && !sampler_.isSlotMuted(i))
-                        { sumGain += sampler_.getSlotGain(i); ++cnt; }
-                const float avg = (cnt > 0) ? sumGain / static_cast<float>(cnt) : 0.4f;
-                onKeyboardGainSuggested(std::clamp(avg * mult, 0.15f, 1.2f));
-            }
+            if (!loaded[i]) continue;
+            const ContentType effectiveType = hasOverride_[static_cast<std::size_t>(i)]
+                ? overrideTypes_[static_cast<std::size_t>(i)] : types[i];
+            sampler_.getSlotDynamics(i).setPreset(contentTypeToDynamicsCategory(effectiveType));
         }
     }
 
@@ -1128,6 +1203,15 @@ private:
             const auto& path = filePaths_[static_cast<std::size_t>(i)];
             if (path.empty() || !sampler_.isLoaded(i)) continue;
 
+            auto& cached = originalPcmCache_[static_cast<std::size_t>(i)];
+            if (!cached.empty())
+            {
+                // Fast path: restore from RAM cache (avoids disk I/O on repeated reverts)
+                sampler_.reloadSlotData(i, std::vector<float>(cached));
+                sampler_.setSlotGain(i, 1.0f);
+                continue;
+            }
+
             juce::File file(path);
             if (!file.existsAsFile()) continue;
 
@@ -1141,6 +1225,7 @@ private:
             juce::AudioBuffer<float> buf(1, n);
             reader->read(&buf, 0, n, 0, true, false);
             std::vector<float> pcm(buf.getReadPointer(0), buf.getReadPointer(0) + n);
+            cached = pcm;  // populate cache for subsequent reverts
             sampler_.reloadSlotData(i, std::move(pcm));
             sampler_.setSlotGain(i, 1.0f);
         }
@@ -1242,18 +1327,7 @@ private:
         // ── Trim leading silence — align first transient to beat 1 ───────────
         bool modified = (trimLeadingSilence(pcm, sr) > 0);
 
-        // ── Key detection ────────────────────────────────────────────────────
-        KeyDetector keyDet;
-        constexpr int kChunk = 4096;
-        for (int off = 0; off < nSamples; off += kChunk)
-        {
-            if (thread && thread->threadShouldExit()) return false;
-            const int n = std::min(kChunk, nSamples - off);
-            keyDet.process(pcm.data() + off, n, sr);
-        }
-        if (thread && thread->threadShouldExit()) return false;
-
-        const int sourceKey = (keyDet.getResult().key >= 0) ? keyDet.getResult().key : -1;
+        const int sourceKey = -1; // key detection removed (EWI replaces sax)
 
         // ── BPM detection ─────────────────────────────────────────────────────
         const float slotBpm = BpmDetector::detectOffline(pcm.data(), nSamples, sr);
@@ -1360,12 +1434,13 @@ private:
         juce::WavAudioFormat wavFmt;
         juce::File cacheFile(cachePath);
 
-        auto* rawOs = cacheFile.createOutputStream().release();
-        if (!rawOs) return;
+        auto os = cacheFile.createOutputStream();
+        if (!os) return;
 
         auto writer = std::unique_ptr<juce::AudioFormatWriter>(
-            wavFmt.createWriterFor(rawOs, sampleRate, 1, 16, {}, 0));
-        if (!writer) { delete rawOs; return; }
+            wavFmt.createWriterFor(os.get(), sampleRate, 1, 16, {}, 0));
+        if (!writer) return;
+        os.release();  // writer now owns the stream
 
         juce::AudioBuffer<float> buf(1, static_cast<int>(pcm.size()));
         std::copy(pcm.begin(), pcm.end(), buf.getWritePointer(0));
@@ -1459,11 +1534,12 @@ private:
         {
             owner_.magicActive_.store(!revert_, std::memory_order_release);
             owner_.busy_.store(false, std::memory_order_release);
-            auto& eng   = owner_;
-            bool  rev   = revert_;
-            juce::MessageManager::callAsync([&eng, rev]
+            juce::WeakReference<SmartSamplerEngine> weakOwner(&owner_);
+            bool rev = revert_;
+            juce::MessageManager::callAsync([weakOwner, rev]
             {
-                if (eng.onDone) eng.onDone();
+                if (auto* e = weakOwner.get())
+                    if (e->onDone) e->onDone();
             });
         }
 
@@ -1528,20 +1604,32 @@ private:
     double                                   sampleRate_ = 44100.0;
     MusicContext                             musicCtx_;
     bool                                     useAiMix_   = true;   // AI mix on by default
-    std::array<std::string, kSamplerSlots>   filePaths_ {};
+    std::array<std::string, kSamplerSlots>        filePaths_ {};
+    std::array<std::vector<float>, kSamplerSlots> originalPcmCache_ {};
     std::array<SceneSnapshot, 8>             arrangement_ {};
     int                                      currentArrangementScene_ { 0 };
+    mutable std::mutex                       arrangementMtx_;
     std::atomic<bool>                        busy_                 { false };
     std::atomic<bool>                        magicActive_          { false };
     std::atomic<bool>                        lastMixUsedFallback_  { false };
-    std::atomic<int>                         keyboardPresetIdx_    { -1 };
     ContentType detectedTypes_[kSamplerSlots] {};
     ContentType overrideTypes_[kSamplerSlots] {};
     bool        hasOverride_  [kSamplerSlots] {};
     std::array<SlotMixState, kSamplerSlots>  lastMixState_ {};
     std::unique_ptr<WorkerThread>            workerThread_;
+
+    // ── Serum context (set by GUI thread before startWorker) ──────────────────
+    ::dsp::MixFeatures                       serumFeatures_ {};
+    bool                                     serumActive_   { false };
     std::array<std::unique_ptr<OnLoadWorkerThread>, kSamplerSlots> onLoadWorkers_;
 
+#ifdef SAXFX_HAS_ONNX
+    std::unique_ptr<AiContentClassifier>     classifier_;
+    std::unique_ptr<AiMixEngine>             aiMix_;
+    bool                                     aiMixFailed_ { false };
+#endif
+
+    JUCE_DECLARE_WEAK_REFERENCEABLE(SmartSamplerEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SmartSamplerEngine)
 };
 

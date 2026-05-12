@@ -15,21 +15,12 @@ FetchContent_MakeAvailable(Catch2)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cible de tests
-# DSP sources compilées directement (pas de JUCE dependency dans src/dsp/)
 # ─────────────────────────────────────────────────────────────────────────────
 add_executable(SaxFXTests
     test_placeholder.cpp
     test_ring_buffer.cpp
-    test_yin.cpp
-    test_flanger.cpp
-    test_harmonizer.cpp
-    test_pipeline.cpp
     test_sampler.cpp
     test_midi_mapper.cpp
-    test_effect_chain.cpp
-    test_new_effects.cpp
-    test_step6.cpp
-    test_optimizer.cpp
     test_project.cpp
     test_onnx_inference.cpp
     test_inference_thread.cpp
@@ -37,39 +28,16 @@ add_executable(SaxFXTests
     test_ai_classifier.cpp
     test_feature_extractor.cpp
     test_ai_mix_engine.cpp
-    test_keyboard_synth.cpp
+    test_pingpongdelay.cpp
+    test_ewi_filter.cpp
+    test_slot_dynamics_ab.cpp
     # DSP sources (pure C++, no JUCE)
-    ../src/dsp/YinPitchTracker.cpp
     ../src/dsp/WsolaShifter.cpp
-    ../src/dsp/Flanger.cpp
-    ../src/dsp/Harmonizer.cpp
     ../src/dsp/Sampler.cpp
-    ../src/dsp/KeyboardSynth.cpp
+    ../src/dsp/PingPongDelay.cpp
     ../src/dsp/DspPipeline.cpp
-    # Sprint 4 DSP layer (pure C++, no JUCE — ReverbEffect excluded)
-    ../src/dsp/FlangerEffect.cpp
-    ../src/dsp/HarmonizerEffect.cpp
-    ../src/dsp/PitchForkEffect.cpp
-    ../src/dsp/EnvelopeFilterEffect.cpp
-    ../src/dsp/EffectChain.cpp
-    # Sprint 5 effects
-    ../src/dsp/DelayEffect.cpp
-    ../src/dsp/WhammyEffect.cpp
-    ../src/dsp/OctaverEffect.cpp
-    ../src/dsp/TunerEffect.cpp
-    ../src/dsp/SlicerEffect.cpp
-    # Sprint 6 AI modules
     ../src/dsp/BpmDetector.cpp
-    ../src/dsp/ExpressionMapper.cpp
-    ../src/dsp/ScaleHarmonizer.cpp
-    ../src/dsp/AutoPitchCorrect.cpp
-    ../src/dsp/KeyDetector.cpp
-    ../src/dsp/EffectChainOptimizer.cpp
-    ../src/dsp/EffectFactory.cpp
-    ../src/dsp/SynthEffect.cpp
-    # Sprint 8 AI classifier
     ../src/dsp/AiContentClassifier.cpp
-    # Sprint 9 mix feature extractor + AI mix engine
     ../src/dsp/FeatureExtractor.cpp
     ../src/dsp/AiMixEngine.cpp
 )
