@@ -78,6 +78,7 @@ private:
 
     // ── Serum gain rider (audio thread only) ─────────────────────────────────
     std::vector<float>       serumSnapBuf_;
+    std::vector<float>       serumSnapCopy_;        // GUI thread only — buffer réutilisé pour éviter alloc par tick
     juce::SpinLock           serumSnapLock_;
     bool                     serumSnapReady_       { false };
     std::atomic<float>       serumGainSmooth_      { 0.5f };  // audio thread r/w + GUI r

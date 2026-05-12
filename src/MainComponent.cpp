@@ -2203,16 +2203,23 @@ void MainComponent::timerCallback()
     }
 
 
-    // Serum content classification (FeatureExtractor = FFT, must NOT run on audio thread)
+    // Serum content classification — lock tenu uniquement pour la copie, pas pour extract()
     if (serumHost_.isLoaded())
     {
-        juce::SpinLock::ScopedLockType sl(serumSnapLock_);
-        if (serumSnapReady_ && !serumSnapBuf_.empty())
         {
-            serumSnapReady_ = false;
-            const auto feat = ::dsp::FeatureExtractor::extract(serumSnapBuf_, currentSampleRate_);
+            juce::SpinLock::ScopedTryLockType sl(serumSnapLock_);
+            if (sl.isLocked() && serumSnapReady_ && !serumSnapBuf_.empty())
+            {
+                serumSnapReady_ = false;
+                serumSnapCopy_ = serumSnapBuf_;
+            }
+        }
+        if (!serumSnapCopy_.empty())
+        {
+            const auto feat = ::dsp::FeatureExtractor::extract(serumSnapCopy_, currentSampleRate_);
             serumContentType_.store(feat.contentType, std::memory_order_relaxed);
             serumMixFeatures_ = feat;
+            serumSnapCopy_.clear();
         }
     }
 
