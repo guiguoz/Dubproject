@@ -75,7 +75,7 @@ MainComponent::MainComponent()
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::WarningIcon,
             "Reset Scene",
-            "Effacer les patterns de la scene " + juce::String(currentScene_ + 1) + " ?\n"
+            "Effacer les patterns de la scene " + juce::String(sceneManager_.currentIdx() + 1) + " ?\n"
             "(les samples restent charges)",
             "Reset", "Annuler", nullptr,
             juce::ModalCallbackFunction::create([this](int result)
@@ -89,7 +89,7 @@ MainComponent::MainComponent()
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::WarningIcon,
             "Full Reset",
-            "Effacer patterns ET samples de la scene " + juce::String(currentScene_ + 1) + " ?\n"
+            "Effacer patterns ET samples de la scene " + juce::String(sceneManager_.currentIdx() + 1) + " ?\n"
             "Cette action est irreversible.",
             "Reset complet", "Annuler", nullptr,
             juce::ModalCallbackFunction::create([this](int result)
@@ -327,12 +327,12 @@ MainComponent::MainComponent()
         {
             dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Normal);
             // Appliquer toute transition en attente immédiatement au stop
-            const int pending = pendingScene_.exchange(-1, std::memory_order_relaxed);
+            const int pending = sceneManager_.consumePendingScene();
             if (pending >= 0)
             {
                 captureCurrentScene();
-                currentScene_ = pending;
-                applyScene(currentScene_);
+                sceneManager_.setCurrentIdx(pending);
+                applyScene(sceneManager_.currentIdx());
                 updateSceneLabel();
                 stepSequencer_.setPendingTransitionLen(0);
             }
@@ -342,7 +342,7 @@ MainComponent::MainComponent()
     // Volume per slot — user fader, multiplied on top of AI normalization gain
     stepSeqPanel_.onVolumeChanged = [this](int slot, float userGain)
     {
-        auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+        auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
         sc.userGains[static_cast<std::size_t>(slot)] = userGain;
         const auto ms = samplerEngine_.getSlotMixState(slot);
         const float aiGain = ms.active ? ms.gain : 1.0f;
@@ -358,7 +358,7 @@ MainComponent::MainComponent()
             std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};  // 8 scenes, not slots
             for (int si = 0; si < kMaxScenes; ++si)
                 arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-            samplerEngine_.setArrangement(arr, currentScene_);
+            samplerEngine_.setArrangement(arr, sceneManager_.currentIdx());
             samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
             samplerEngine_.applyMagicMix();
         }
@@ -475,7 +475,7 @@ MainComponent::MainComponent()
                 reApplyCurrentSceneTrims();
             }
             // Appliquer les user gains sur les gains IA, mettre à jour sliders et scenes_.gains.
-            auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+            auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
             for (int i = 0; i < 9; ++i)
             {
                 const auto ms = samplerEngine_.getSlotMixState(i);
@@ -558,7 +558,7 @@ MainComponent::MainComponent()
         }
 
         // Mettre à jour la scène courante en mémoire
-        auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+        auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
         for (int s = 0; s < numSteps; ++s)
             sc.steps[static_cast<std::size_t>(slot)][static_cast<std::size_t>(s)] =
                 cb.steps[static_cast<std::size_t>(s)];
@@ -1111,10 +1111,10 @@ void MainComponent::openSampleEditor(int slot)
         const std::string filePath = stepSeqPanel_.getSlotFilePath(slot);
         for (int si = 0; si < kMaxScenes; ++si)
             for (int t = 0; t < 9; ++t)
-                if (scenes_[static_cast<std::size_t>(si)].filePaths[t] == filePath)
+                if (sceneManager_.scene(si).filePaths[t] == filePath)
                 {
-                    scenes_[static_cast<std::size_t>(si)].trimStart[t] = s;
-                    scenes_[static_cast<std::size_t>(si)].trimEnd  [t] = e;
+                    sceneManager_.scene(si).trimStart[t] = s;
+                    sceneManager_.scene(si).trimEnd  [t] = e;
                 }
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
@@ -1203,10 +1203,10 @@ void MainComponent::saveProjectToFile(const juce::File& f)
 
     // ── Scenes ────────────────────────────────────────────────────────────
     captureCurrentScene();
-    data.currentScene = currentScene_;
+    data.currentScene = sceneManager_.currentIdx();
     for (int si = 0; si < kMaxScenes; ++si)
     {
-        const auto& src = scenes_[static_cast<std::size_t>(si)];
+        const auto& src = sceneManager_.scene(si);
         auto& dst       = data.scenes[static_cast<std::size_t>(si)];
         dst.used           = src.used;
         dst.bpm            = src.bpm;
@@ -1439,11 +1439,11 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     // ── v5 — scenes ───────────────────────────────────────────────────────────
     if (data.version >= 5)
     {
-        currentScene_ = std::clamp(data.currentScene, 0, kMaxScenes - 1);
+        sceneManager_.setCurrentIdx(std::clamp(data.currentScene, 0, kMaxScenes - 1));
         for (int si = 0; si < kMaxScenes; ++si)
         {
             const auto& src = data.scenes[static_cast<std::size_t>(si)];
-            auto& dst       = scenes_    [static_cast<std::size_t>(si)];
+            auto& dst       = sceneManager_.scene(si);
             dst.used           = src.used;
             dst.bpm            = src.bpm;
             dst.filePaths      = src.filePaths;
@@ -1465,7 +1465,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             }
         }
         // Restore bar counts, step patterns and sample paths for the current scene
-        applyScene(currentScene_);
+        applyScene(sceneManager_.currentIdx());
         updateSceneLabel();
     }
 
@@ -1543,7 +1543,7 @@ void MainComponent::triggerAI()
     std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
     for (int si = 0; si < kMaxScenes; ++si)
         arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-    samplerEngine_.setArrangement(arr, currentScene_);
+    samplerEngine_.setArrangement(arr, sceneManager_.currentIdx());
     samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
     samplerEngine_.applyMagicMix();
 }
@@ -2189,15 +2189,15 @@ void MainComponent::timerCallback()
         --autosaveFadeTimer_;
 
     // Transition de scène quantisée : appliquée à la fin du cycle du séquenceur
-    if (pendingScene_.load(std::memory_order_relaxed) >= 0
+    if (sceneManager_.pendingIdx() >= 0
         && stepSequencer_.consumeSceneEnd())
     {
-        const int target = pendingScene_.exchange(-1, std::memory_order_relaxed);
+        const int target = sceneManager_.consumePendingScene();
         if (target >= 0)
         {
             captureCurrentScene();
-            currentScene_ = target;
-            applyScene(currentScene_);
+            sceneManager_.setCurrentIdx(target);
+            applyScene(sceneManager_.currentIdx());
             updateSceneLabel();
         }
     }
@@ -2223,27 +2223,8 @@ void MainComponent::timerCallback()
         }
     }
 
-    // Crossfade entre scènes : interpolation de gains sur ~300ms
-    if (crossfade_.active)
-    {
-        constexpr int kTickMs = 33; // ~30Hz
-        crossfade_.elapsedMs += kTickMs;
-        const float t = juce::jlimit(0.f, 1.f,
-            static_cast<float>(crossfade_.elapsedMs)
-            / static_cast<float>(crossfade_.durationMs));
-        for (int i = 0; i < 9; ++i)
-        {
-            const float gain = crossfade_.startGains[i]
-                + (crossfade_.targetGains[i] - crossfade_.startGains[i]) * t;
-            dspPipeline_.getSampler().setSlotGain(i, gain);
-        }
-        if (crossfade_.elapsedMs >= crossfade_.durationMs)
-        {
-            crossfade_.active = false;
-            for (int i = 0; i < 9; ++i)
-                dspPipeline_.getSampler().setSlotGain(i, crossfade_.targetGains[i]);
-        }
-    }
+    // Crossfade entre scènes : interpolation de gains sur ~150ms
+    sceneManager_.updateCrossfade(33, dspPipeline_.getSampler());
 
     // Mise à jour état nuage IA
     if (samplerEngine_.isBusy())
@@ -2271,7 +2252,7 @@ void MainComponent::timerCallback()
     }
 
     // U3 — Crossfade dirty flag
-    if (crossfade_.active)
+    if (sceneManager_.isCrossfadeActive())
         crossfadeDirty_ = true;
 
     // U3 — Repaint conditionnel
@@ -2398,7 +2379,7 @@ void MainComponent::updateSidebarBpm(float bpm)
 
 void MainComponent::reApplyCurrentSceneTrims()
 {
-    const auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+    const auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
     for (int i = 0; i < 9; ++i)
     {
         const std::size_t sidx = static_cast<std::size_t>(i);
@@ -2417,7 +2398,7 @@ void MainComponent::reApplyCurrentSceneTrims()
 
 void MainComponent::updateSceneLabel()
 {
-    sceneNumLabel_.setText("Scene " + juce::String(currentScene_ + 1) +
+    sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
                            " / " + juce::String(kMaxScenes),
                            juce::dontSendNotification);
 }
@@ -2431,7 +2412,7 @@ void MainComponent::updateSceneLabel()
     };
 
     ::dsp::SmartSamplerEngine::SceneSnapshot snap;
-    const auto& sc = scenes_[static_cast<std::size_t>(si)];
+    const auto& sc = sceneManager_.scene(si);
     for (int t = 0; t < 9; ++t)
     {
         const std::size_t tidx = static_cast<std::size_t>(t);
@@ -2456,7 +2437,7 @@ void MainComponent::updateSceneLabel()
 
 void MainComponent::captureCurrentScene()
 {
-    auto& sc = scenes_[static_cast<std::size_t>(currentScene_)];
+    auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
     sc.bpm  = stepSequencer_.getBpm();
     sc.used = true;
     auto& sampler = dspPipeline_.getSampler();
@@ -2486,7 +2467,7 @@ void MainComponent::applyScene(int idx)
     for (int i = 0; i < 9; ++i)
         gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
 
-    const auto& sc = scenes_[static_cast<std::size_t>(idx)];
+    const auto& sc = sceneManager_.scene(idx);
 
     if (!sc.used)
     {
@@ -2586,28 +2567,27 @@ void MainComponent::applyScene(int idx)
     // Crossfade pur : ramper les gains depuis l'ancienne scène sans stopAllSlots.
     if (stepSequencer_.isPlaying())
     {
+        std::array<float, 9> targetGains_local {};
         for (int i = 0; i < 9; ++i)
-            crossfade_.targetGains[i] = dspPipeline_.getSampler().getSlotGain(i);
+            targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
         // Réinitialiser les gains au départ pour que le crossfade parte de la bonne valeur
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
-        crossfade_.startGains = gainsBeforeScene;
-        crossfade_.elapsedMs  = 0;
-        crossfade_.active     = true;
+        sceneManager_.armCrossfade(gainsBeforeScene, targetGains_local);
     }
 }
 
 void MainComponent::navigateScene(int delta)
 {
-    const int target = juce::jlimit(0, kMaxScenes - 1, currentScene_ + delta);
-    if (target == currentScene_) return;
+    const int target = juce::jlimit(0, kMaxScenes - 1, sceneManager_.currentIdx() + delta);
+    if (target == sceneManager_.currentIdx()) return;
 
     if (!stepSequencer_.isPlaying())
     {
         // Séquenceur arrêté : changement immédiat, sans risque de coupure
         captureCurrentScene();
-        currentScene_ = target;
-        applyScene(currentScene_);
+        sceneManager_.setCurrentIdx(target);
+        applyScene(sceneManager_.currentIdx());
         updateSceneLabel();
         return;
     }
@@ -2627,8 +2607,8 @@ void MainComponent::navigateScene(int delta)
         sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
     stepSequencer_.setPendingTransitionLen(sceneLen);
 
-    pendingScene_.store(target, std::memory_order_relaxed);
-    sceneNumLabel_.setText("Scene " + juce::String(currentScene_ + 1) +
+    sceneManager_.setPendingScene(target);
+    sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
 }
@@ -2645,7 +2625,7 @@ void MainComponent::resetCurrentScene()
             stepSeqPanel_.setStepState(i, s, false);
         }
     }
-    scenes_[static_cast<std::size_t>(currentScene_)].used = false;
+    sceneManager_.scene(sceneManager_.currentIdx()).used = false;
 }
 
 void MainComponent::resetCurrentSceneFull()
@@ -2669,7 +2649,7 @@ void MainComponent::resetCurrentSceneFull()
         stepSeqPanel_.setSlotFilePath(i, "");
         stepSeqPanel_.setSlotLoaded(i, false);
     }
-    scenes_[static_cast<std::size_t>(currentScene_)].used = false;
+    sceneManager_.scene(sceneManager_.currentIdx()).used = false;
 }
 
 void MainComponent::copyCurrentSceneToNext()
@@ -2679,7 +2659,7 @@ void MainComponent::copyCurrentSceneToNext()
     int itemId = 1;
     for (int i = 0; i < kMaxScenes; ++i)
     {
-        if (i == currentScene_ || !scenes_[static_cast<std::size_t>(i)].used)
+        if (i == sceneManager_.currentIdx() || !sceneManager_.scene(i).used)
             { ++itemId; continue; }
         menu.addItem(itemId, "Scene " + juce::String(i + 1));
         ++itemId;
@@ -2694,11 +2674,11 @@ void MainComponent::copyCurrentSceneToNext()
         {
             if (result <= 0) return;
             const int srcIdx = result - 1;  // itemId == sceneIndex + 1
-            scenes_[static_cast<std::size_t>(currentScene_)] =
-                scenes_[static_cast<std::size_t>(srcIdx)];
-            scenes_[static_cast<std::size_t>(currentScene_)].used = true;
-            applyScene(currentScene_);
+            sceneManager_.scene(sceneManager_.currentIdx()) =
+                sceneManager_.scene(srcIdx);
+            sceneManager_.scene(sceneManager_.currentIdx()).used = true;
+            applyScene(sceneManager_.currentIdx());
             juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
-                                     " copied into scene " + juce::String(currentScene_ + 1));
+                                     " copied into scene " + juce::String(sceneManager_.currentIdx() + 1));
         });
 }

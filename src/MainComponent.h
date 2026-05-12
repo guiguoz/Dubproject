@@ -2,6 +2,7 @@
 
 #include "dsp/DspPipeline.h"
 #include "dsp/FeatureExtractor.h"
+#include "dsp/SceneManager.h"
 #include "dsp/SerumHost.h"
 #include "dsp/SmartSamplerEngine.h"
 #include "dsp/StepSequencer.h"
@@ -155,26 +156,10 @@ private:
     juce::TextButton sceneCopyBtn_;
 
     // ── Scene data ─────────────────────────────────────────────────────────────
-    static constexpr int kMaxScenes = 8;
+    static constexpr int kMaxScenes = ::dsp::SceneManager::kMaxScenes;
+    using SceneData = ::dsp::SceneData;
 
-    struct SceneData
-    {
-        float                                 bpm           { 120.f };
-        std::array<std::string, 9>            filePaths     {};
-        std::array<std::array<bool, 512>, 9>  steps         {};
-        std::array<float, 9>                  gains         { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-        std::array<bool, 9>                   mutes         {};
-        std::array<int, 9>                    trackBarCounts{ 1,1,1,1,1,1,1,1,1 };
-        std::array<int, 9>                    trimStart     { 0,0,0,0,0,0,0,0,0 };
-        std::array<int, 9>                    trimEnd       { -1,-1,-1,-1,-1,-1,-1,-1,-1 };
-        std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };
-        std::array<float, 9>                  userGains     { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
-        bool                                  used          { false };
-    };
-
-    std::array<SceneData, kMaxScenes> scenes_;
-    int currentScene_ { 0 };
-    std::atomic<int>  pendingScene_ { -1 };
+    ::dsp::SceneManager sceneManager_;
 
     //==========================================================================
     // Background task management
@@ -200,19 +185,6 @@ private:
     };
     TrackClipboard trackClipboard_;
 
-    //==========================================================================
-    // Crossfade entre scènes
-    //==========================================================================
-    static constexpr int kCrossfadeDurationMs = 150; // crossfade musical 50-200ms
-
-    struct CrossfadeState {
-        bool  active      { false };
-        int   elapsedMs   { 0 };
-        int   durationMs  { kCrossfadeDurationMs };
-        std::array<float, 9> startGains  {};
-        std::array<float, 9> targetGains {};
-    };
-    CrossfadeState crossfade_;
 
     //==========================================================================
     // State
