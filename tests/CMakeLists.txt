@@ -30,6 +30,7 @@ add_executable(SaxFXTests
     test_ai_mix_engine.cpp
     test_pingpongdelay.cpp
     test_ewi_filter.cpp
+    test_slot_dynamics_ab.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/WsolaShifter.cpp
     ../src/dsp/Sampler.cpp
