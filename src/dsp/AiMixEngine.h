@@ -14,18 +14,18 @@ namespace dsp {
 // MixDecision — per-slot output of AiMixEngine.
 //
 // volume   : linear gain [0, 1] — passed directly to Sampler::setGain()
-// lowGain  : low-band  EQ trim (dB), applied as low shelf  at ~500 Hz
-// midGain  : mid-band  EQ trim (dB), applied as peak      at ~1 kHz
-// highGain : high-band EQ trim (dB), applied as high shelf at ~4 kHz
+// lowGain  : low-band  EQ trim (dB), applied as low shelf  at ~100 Hz
+// midGain  : mid-band  EQ trim (dB), applied as peak      at ~2500 Hz
+// highGain : high-band EQ trim (dB), applied as high shelf at ~8000 Hz
+//
+// Note: spatialization (pan, width, depth) is computed separately by
+// computeSpatialization() in SmartSamplerEngine — not part of model output.
 // ─────────────────────────────────────────────────────────────────────────────
 struct MixDecision {
     float volume   = 0.5f;
     float lowGain  = 0.f;
     float midGain  = 0.f;
     float highGain = 0.f;
-    float pan      = 0.f;   // −1.0 (L) … +1.0 (R)
-    float width    = 0.f;   // 0 = mono, 1 = full Haas (25 ms)
-    float depth    = 0.f;   // 0 = front, 1 = back (high-shelf attenuation)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -222,6 +222,18 @@ private:
     double             currentSampleRate_{0.0};
     int                currentBufferSize_{0};
 
+    // ── Performance: VU dB cache (U2) ────────────────────────────────────────
+    float cachedDbIn_  = -60.f;
+    float cachedDbOut_ = -60.f;
+
+    // ── Performance: dirty flags repaint (U3) ────────────────────────────────
+    bool vuDirty_        = true;
+    bool mixStateDirty_  = true;
+    bool crossfadeDirty_ = false;
+
+    // ── Performance: grain noise pre-rendered image (U1) ─────────────────────
+    juce::Image grainNoiseImage_;
+
     //==========================================================================
     // MIDI Learn
     //==========================================================================
@@ -249,6 +261,7 @@ private:
     //==========================================================================
     // Helpers
     //==========================================================================
+    void ensureGrainNoise(int w, int h);
     void loadSampleIntoSlot(int slot, const std::string& path,
                             int trimStart = 0, int trimEnd = -1);
     void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);

@@ -253,6 +253,14 @@ std::vector<float> Sampler::getSlotPcmSnapshot(int slot) const noexcept
     return s.data[s.activeDataIdx.load(std::memory_order_relaxed)];
 }
 
+PcmView Sampler::getSlotPcmView(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    const auto& s = slots_[static_cast<std::size_t>(slot)];
+    const auto& v = s.data[s.activeDataIdx.load(std::memory_order_relaxed)];
+    return { v.data(), static_cast<int>(v.size()) };
+}
+
 float Sampler::getSlotOutputPeak(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;

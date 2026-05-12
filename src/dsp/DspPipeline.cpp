@@ -13,11 +13,11 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     dubDelay_.setDiv(0);
     pingPongDelay_.prepare(sampleRate, maxBlockSize);
 
-    tempBuffer_.resize(std::max(maxBlockSize, 256), 0.0f);
-    tempBufL_.resize(std::max(maxBlockSize, 256), 0.0f);
-    tempBufR_.resize(std::max(maxBlockSize, 256), 0.0f);
-    tempSendL_.resize(std::max(maxBlockSize, 256), 0.0f);
-    tempSendR_.resize(std::max(maxBlockSize, 256), 0.0f);
+    tempBuffer_.assign(std::max(maxBlockSize, 256), 0.0f);
+    tempBufL_.assign(std::max(maxBlockSize, 256), 0.0f);
+    tempBufR_.assign(std::max(maxBlockSize, 256), 0.0f);
+    tempSendL_.assign(std::max(maxBlockSize, 256), 0.0f);
+    tempSendR_.assign(std::max(maxBlockSize, 256), 0.0f);
     monoSubFilter_.prepare(sampleRate);
     dubDelay_.setBpm(bpm_.load(std::memory_order_relaxed));
 }
@@ -66,10 +66,7 @@ void DspPipeline::process(float* buffer, int numSamples) noexcept
                 targetDuck = 1.0f - ratio * 0.5f;
             }
 
-            if (numSamples > static_cast<int>(tempBuffer_.size()))
-                tempBuffer_.resize(numSamples, 0.0f);
-            else
-                std::fill(tempBuffer_.begin(), tempBuffer_.begin() + numSamples, 0.0f);
+            std::fill(tempBuffer_.begin(), tempBuffer_.begin() + numSamples, 0.0f);
 
             sampler_.process(tempBuffer_.data(), numSamples);
 
@@ -120,11 +117,6 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
             else            sampler_.stop(evt.slotIndex);
         }
 
-        if (static_cast<int>(tempBufL_.size()) < numSamples)
-        {
-            tempBufL_.resize(numSamples, 0.f);
-            tempBufR_.resize(numSamples, 0.f);
-        }
         std::fill(tempBufL_.begin(), tempBufL_.begin() + numSamples, 0.f);
         std::fill(tempBufR_.begin(), tempBufR_.begin() + numSamples, 0.f);
         std::fill(tempSendL_.begin(), tempSendL_.begin() + numSamples, 0.f);

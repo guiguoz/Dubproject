@@ -440,6 +440,8 @@ MainComponent::MainComponent()
         {
             dubDelayEnableBtn_.setToggleState(true, juce::dontSendNotification);
         });
+
+        mixStateDirty_ = true;
     };
 
     // onDone : si revert → effacer les tags, re-appliquer trim, relancer IA si reload en attente
@@ -484,6 +486,8 @@ MainComponent::MainComponent()
                 stepSeqPanel_.setSlotVolume(i, sc.userGains[idx]);
             }
         }
+
+        mixStateDirty_ = true;
     };
 
     // Override manuel du type par slot (right-click sur l'indicateur)
@@ -1044,6 +1048,7 @@ void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
 void MainComponent::applyMasterKey()
 {
     ::dsp::MusicContext ctx;
+    ctx.bpm     = stepSequencer_.getBpm();
     ctx.keyRoot  = masterKeyRoot_;
     ctx.isMajor  = masterKeyMajor_;
     samplerEngine_.setMusicContext(ctx);
@@ -1517,7 +1522,8 @@ void MainComponent::triggerAI()
 {
     if (samplerEngine_.isBusy()) return;
 
-    // Rôles fixes par piste — appliqués seulement si pas d'override manuel (clic droit)
+    // Rôles fixes par piste (design intentionnel : KICK=slot2, BASS=slot1… → muscle memory live + sidechain prévisible)
+    // Remplacés par l'override manuel (clic droit) si l'utilisateur a forcé un type différent.
     using CT = ::dsp::SmartSamplerEngine::ContentType;
     static constexpr CT kSlotRoles[9] = {
         CT::SYNTH,   // 0: MASTER  — loop mélodique, référence tonale
@@ -1802,6 +1808,25 @@ void MainComponent::openSerumEditor()
 // GUI
 //==============================================================================
 
+void MainComponent::ensureGrainNoise(int w, int h)
+{
+    if (grainNoiseImage_.isValid()
+        && grainNoiseImage_.getWidth()  == w
+        && grainNoiseImage_.getHeight() == h)
+        return;
+
+    grainNoiseImage_ = juce::Image(juce::Image::ARGB, w, h, true);
+    juce::Graphics gi(grainNoiseImage_);
+    juce::Random rng(42);
+    gi.setColour(juce::Colours::white.withAlpha(0.012f));
+    for (int i = 0; i < 800; ++i)
+    {
+        const float gx = rng.nextFloat() * static_cast<float>(w);
+        const float gy = rng.nextFloat() * static_cast<float>(h);
+        gi.fillRect(gx, gy, 1.5f, 1.5f);
+    }
+}
+
 void MainComponent::paint(juce::Graphics& g)
 {
     const int W = getWidth();
@@ -1860,12 +1885,8 @@ void MainComponent::paint(juce::Graphics& g)
 
     // ── Sidebar: VU meters (L / R segmented bars) ────────────────────────────
     {
-        const float rmsIn  = currentRmsLevel_.load(std::memory_order_relaxed);
-        const float rmsOut = currentOutputRmsLevel_.load(std::memory_order_relaxed);
-        const float dbIn   = juce::Decibels::gainToDecibels(rmsIn, -60.0f);
-        const float dbOut  = juce::Decibels::gainToDecibels(rmsOut, -60.0f);
-        const float normIn  = juce::jlimit(0.f, 1.f, juce::jmap(dbIn,  -60.f, 0.f, 0.f, 1.f));
-        const float normOut = juce::jlimit(0.f, 1.f, juce::jmap(dbOut, -60.f, 0.f, 0.f, 1.f));
+        const float normIn  = juce::jlimit(0.f, 1.f, juce::jmap(cachedDbIn_,  -60.f, 0.f, 0.f, 1.f));
+        const float normOut = juce::jlimit(0.f, 1.f, juce::jmap(cachedDbOut_, -60.f, 0.f, 0.f, 1.f));
 
         // Centered pair of meters
         static constexpr int vuW = 16;
@@ -1996,16 +2017,8 @@ void MainComponent::paint(juce::Graphics& g)
     }
 
     // ── Grain noise overlay ───────────────────────────────────────────────────
-    {
-        juce::Random rng(42);
-        g.setColour(juce::Colours::white.withAlpha(0.012f));
-        for (int i = 0; i < 800; ++i)
-        {
-            const float gx = rng.nextFloat() * static_cast<float>(W);
-            const float gy = rng.nextFloat() * static_cast<float>(H);
-            g.fillRect(gx, gy, 1.5f, 1.5f);
-        }
-    }
+    ensureGrainNoise(W, H);
+    g.drawImageAt(grainNoiseImage_, 0, 0);
 
     // ── MIDI Learn panel background (drawn under children) ───────────────────
     if (midiLearnVisible_)
@@ -2241,7 +2254,25 @@ void MainComponent::timerCallback()
             ? juce::CharPointer_UTF8("\xe2\x96\xa0")   // ■
             : juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
 
-    repaint();
+    // U2 — Précalcul des niveaux VU en dB (évite gainToDecibels dans paint())
+    {
+        const float rmsIn  = currentRmsLevel_.load(std::memory_order_relaxed);
+        const float rmsOut = currentOutputRmsLevel_.load(std::memory_order_relaxed);
+        cachedDbIn_  = juce::Decibels::gainToDecibels(rmsIn,  -60.f);
+        cachedDbOut_ = juce::Decibels::gainToDecibels(rmsOut, -60.f);
+        vuDirty_ = true;
+    }
+
+    // U3 — Crossfade dirty flag
+    if (crossfade_.active)
+        crossfadeDirty_ = true;
+
+    // U3 — Repaint conditionnel
+    if (vuDirty_ || mixStateDirty_ || crossfadeDirty_)
+    {
+        vuDirty_ = mixStateDirty_ = crossfadeDirty_ = false;
+        repaint();
+    }
 
     auto* device = deviceManager.getCurrentAudioDevice();
     pipelineActive_ = (device != nullptr);

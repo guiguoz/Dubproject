@@ -3,6 +3,7 @@
 #ifdef SAXFX_HAS_ONNX
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <stdexcept>
 
@@ -20,7 +21,8 @@ AiMixEngine::AiMixEngine(const std::string& modelPath, const std::string& normPa
         float v = 0.f;
         f.read(reinterpret_cast<char*>(&v), sizeof(float));
         if (!f) throw std::runtime_error("AiMixEngine: norm file truncated (means)");
-        means_[i] = v;
+        if (!std::isfinite(v)) throw std::runtime_error("AiMixEngine: NaN/Inf in means");
+        means_[i] = std::clamp(v, -1000.f, 1000.f);
     }
     for (int i = 0; i < kInputSize; ++i)
     {
@@ -55,7 +57,14 @@ AiMixEngine::predict(const std::array<MixFeatures, kSlots>& slots) const noexcep
     // ONNX inference (best-effort: return defaults on exception)
     std::vector<float> out;
     try { out = model_.run(input); }
-    catch (...) {}
+    catch (const std::exception& e)
+    {
+        std::fprintf(stderr, "AiMixEngine::predict failed: %s\n", e.what());
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "AiMixEngine::predict failed: unknown exception\n");
+    }
 
     if (out.size() < static_cast<std::size_t>(kOutputSize))
         out.assign(static_cast<std::size_t>(kOutputSize), 0.f);

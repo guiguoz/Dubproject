@@ -10,6 +10,22 @@
 namespace dsp {
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PcmView — vue zéro-copie sur les données PCM internes d'un slot.
+// Valide uniquement pendant la durée d'un traitement offline (worker thread) ;
+// le double-buffer activeDataIdx garantit que data[] n'est pas modifié pendant
+// que le worker tourne.
+// ─────────────────────────────────────────────────────────────────────────────
+struct PcmView
+{
+    const float* data = nullptr;
+    int          size = 0;
+    bool         empty()              const noexcept { return size == 0 || data == nullptr; }
+    const float* begin()              const noexcept { return data; }
+    const float* end()                const noexcept { return data + size; }
+    const float& operator[](int i)    const noexcept { return data[i]; }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SampleSlot
 // One loaded sample. Data is pre-allocated on the GUI thread; the audio
 // thread only reads it.
@@ -110,6 +126,12 @@ public:
 
     // Returns a copy of the slot's PCM data for display / offline editing (GUI thread only).
     std::vector<float> getSlotPcmSnapshot(int slot) const noexcept;
+
+    // Returns a zero-copy view of the slot's internal PCM buffer.
+    // Safe to use from a worker thread during applyNeutronMix(): the double-buffer
+    // (activeDataIdx) ensures the active buffer is not modified while the worker runs.
+    // The returned pointer is valid only for the duration of the current worker pass.
+    PcmView getSlotPcmView(int slot) const noexcept;
 
     // Returns the peak absolute amplitude of the slot's PCM data (0 if not loaded).
     // Safe to call from the GUI thread (data is not modified by the audio thread).

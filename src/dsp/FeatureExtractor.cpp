@@ -96,6 +96,9 @@ MixFeatures FeatureExtractor::extract(const std::vector<float>& pcm,
     const float fs = static_cast<float>(sampleRate);
     const int N = static_cast<int>(pcm.size());
 
+    if (N == 0 || sampleRate <= 0.0)
+        return feat;
+
     // ── RMS + peak ────────────────────────────────────────────────────────────
     float sumSq = 0.f, peak = 0.f;
     for (float x : pcm)

@@ -45,8 +45,8 @@ private:
   std::atomic<float> tone_ { 0.50f };
   std::atomic<float> drive_ { 0.15f };
   std::atomic<int> div_   { 0 };
-  std::atomic<bool> freeze_ { false };
-  bool enabled_ { true };
+  std::atomic<bool> freeze_   { false };
+  std::atomic<bool> enabled_  { true };
 
   // State for simple 1-pole filters (HP/LP) on the output path
   float lpStateL_ { 0.0f }, lpStateR_ { 0.0f };
