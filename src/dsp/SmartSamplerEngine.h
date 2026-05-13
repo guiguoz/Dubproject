@@ -589,6 +589,19 @@ private:
                  -2.f * cosw0 / a0,    (1.f - alpha/A) / a0 };
     }
 
+    // ── Saturation harmonique (bass) ────────────────────────────────────────────
+    // Enrichit la bass en harmoniques 100–300 Hz via soft-clip tanh pour une
+    // meilleure audibilité sur petits systèmes sans augmenter le headroom.
+    // HPF 28 Hz avant saturation : protège le sub pur contre la distorsion.
+    static void applyBassHarmonics(std::vector<float>& pcm, double sr) noexcept
+    {
+        applyBiquad(pcm, makeHP(28.f, sr));
+        constexpr float kDrive  = 1.6f;
+        const float     invNorm = 1.f / std::tanh(kDrive);
+        for (float& s : pcm)
+            s = std::tanh(kDrive * s) * invNorm;  // gain ≈ 0 dB en régime linéaire
+    }
+
     // ── Sub ownership 30-60 Hz ────────────────────────────────────────────────
     // Decides which slot (KICK or BASS) owns the sub range.
     // The loser gets a gentle cut so both can coexist without mud.
@@ -630,11 +643,18 @@ private:
         }
         if (kickSlot < 0 || bassSlot < 0) return;
 
-        // Hysteresis: apply only when one dominates by >= ~1.5 dB (energy ratio ≥ 1.41).
-        // Prevents flip-flopping when kick and bass have similar sub content.
         const float maxE = std::max(kickSub, bassSub);
         const float minE = std::max(std::min(kickSub, bassSub), 1e-12f);
-        if (maxE / minE < 1.41f) return;
+        const float ratio = maxE / minE;
+
+        if (ratio < 1.25f)
+        {
+            // Zone neutre : sub-énergie similaire → half-cut léger sur les deux
+            // pour briser le mud sans sacrifier l'un au détriment de l'autre.
+            applyBiquad(pcms[kickSlot], makeLowShelf(60.f, -1.5f, sr));
+            applyBiquad(pcms[bassSlot], makeLowShelf(55.f, -1.5f, sr));
+            return;
+        }
 
         if (kickSub >= bassSub)
             applyBiquad(pcms[bassSlot], makeLowShelf(55.f, -4.f, sr));
@@ -993,6 +1013,8 @@ private:
                     applyBiquad(pcms[i], makePeaking  (2500.f, safeMiG, 1.0f, sampleRate_)); // présence
                     applyBiquad(pcms[i], makeHighShelf(8000.f, safeHiG, sampleRate_)); // air
                     applyBiquad(pcms[i], makeLP       (18000.f,         sampleRate_)); // anti-alias
+                    if (types[i] == ContentType::BASS)
+                        applyBassHarmonics(pcms[i], sampleRate_);
 
                     // Gain: target volume / true-peak (4× oversample), -3dBFS headroom for sax
                     const float truePeak = calculateTruePeak(pcms[i]);
@@ -1065,6 +1087,8 @@ private:
 
                 // Apply role EQ preset (from clean original PCM)
                 applyRoleEQ(pcms[i], effectiveType, sampleRate_);
+                if (effectiveType == ContentType::BASS)
+                    applyBassHarmonics(pcms[i], sampleRate_);
 
                 // Compensation bass absente → boost mid-lows des pads/synths
                 if (!bassPresent &&
