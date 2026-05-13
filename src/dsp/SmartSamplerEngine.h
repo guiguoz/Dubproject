@@ -70,7 +70,10 @@ public:
     // Retourne le facteur headroom sax : 1.0 pour BASS/KICK, 0.707 pour les autres
     static float saxClearance(ContentType type) noexcept
     {
-        return (type == ContentType::BASS || type == ContentType::KICK) ? 1.0f : 0.707f;
+        if (type == ContentType::BASS || type == ContentType::KICK) return 1.00f;
+        if (type == ContentType::LOOP)                             return 0.85f;
+        if (type == ContentType::SNARE || type == ContentType::PERC) return 0.75f;
+        return 0.707f;  // HIHAT, SYNTH, PAD, OTHER
     }
 
     // ── Callbacks (message thread) ────────────────────────────────────────────
@@ -794,8 +797,8 @@ private:
             case ContentType::HIHAT: return 0.13f;       // −17.7 dBFS
             case ContentType::BASS:  return kBassTargetGain;  // −3.1 dBFS
             case ContentType::SYNTH: return 0.22f;       // −13.1 dBFS
-            case ContentType::PAD:   return 0.26f;       // −11.7 dBFS
-            case ContentType::PERC:  return 0.26f;       // −11.7 dBFS
+            case ContentType::PAD:   return 0.30f;       // −10.5 dBFS (présence accrue)
+            case ContentType::PERC:  return 0.22f;       // −13.1 dBFS (discret)
             case ContentType::LOOP:  return 0.38f;       // −8.4 dBFS
             default:                 return 0.30f;
         }
