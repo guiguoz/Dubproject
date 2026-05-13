@@ -193,10 +193,10 @@ private:
     {
         constexpr float kT = 0.20f;
         const bool fHigh = (from >= kT), tHigh = (to >= kT);
-        if ( fHigh && !tHigh) return { 600, CrossfadeCurve::EaseIn    };
+        if ( fHigh && !tHigh) return { 400, CrossfadeCurve::EaseIn    };
         if (!fHigh &&  tHigh) return { 120, CrossfadeCurve::EaseOut   };
         if ( fHigh &&  tHigh) return { 200, CrossfadeCurve::Linear    };
-        return                       { 400, CrossfadeCurve::Smoothstep };
+        return                       { 250, CrossfadeCurve::Smoothstep };
     }
 
     struct CrossfadeState

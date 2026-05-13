@@ -275,7 +275,7 @@ private:
     // Scene management
     ::dsp::SmartSamplerEngine::SceneSnapshot buildSceneSnapshot(int si) const;
     void captureCurrentScene();
-    void applyScene(int idx);
+    void applyScene(int idx, int fromIdx = -1);
     void navigateScene(int delta);
     void resetCurrentScene();
     void resetCurrentSceneFull();

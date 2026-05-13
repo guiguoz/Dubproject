@@ -330,19 +330,13 @@ MainComponent::MainComponent()
         dspPipeline_.getSampler().setSlotGain(slot, aiGain * userGain);
     };
 
-    // Mute per slot — re-run magic mix if active so gain/pan adapt to new mute state
+    // Mute per slot — relancer le magic mix ici causait une perte de gain sur les autres
+    // slots (l'IA recalcule l'équilibre avec un slot de plus/moins et peut produire gain≈0
+    // sur la basse ou un autre slot). Le mute est appliqué directement ; le prochain
+    // triggerAI() (bouton ⚡) reprendra l'état de mute courant pour recalibrer.
     stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
     {
         dspPipeline_.getSampler().setSlotMuted(slot, muted);
-        if (samplerEngine_.isMagicActive())
-        {
-            std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};  // 8 scenes, not slots
-            for (int si = 0; si < kMaxScenes; ++si)
-                arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-            samplerEngine_.setArrangement(arr, sceneManager_.currentIdx());
-            samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
-            samplerEngine_.applyMagicMix();
-        }
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -2287,9 +2281,10 @@ void MainComponent::timerCallback()
         const int target = sceneManager_.consumePendingScene();
         if (target >= 0)
         {
+            const int oldIdx = sceneManager_.currentIdx();
             captureCurrentScene();
             sceneManager_.setCurrentIdx(target);
-            applyScene(sceneManager_.currentIdx());
+            applyScene(target, oldIdx);
             updateSceneLabel();
         }
     }
@@ -2554,7 +2549,7 @@ void MainComponent::captureCurrentScene()
     sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
 }
 
-void MainComponent::applyScene(int idx)
+void MainComponent::applyScene(int idx, int fromIdx)
 {
     // Capturer les gains cibles courants avant changement — point de départ du crossfade.
     // Lit slot.gain (target), pas gainSmoothed_ (audio-only) : précision suffisante.
@@ -2685,10 +2680,16 @@ void MainComponent::applyScene(int idx)
         // Réinitialiser les gains au départ pour que le crossfade parte de la bonne valeur
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
-        sceneManager_.armAdaptiveCrossfade(
-            gainsBeforeScene, targetGains_local,
-            sceneManager_.getSceneEnergy(sceneManager_.currentIdx()),
-            sceneManager_.getSceneEnergy(idx));
+        {
+            const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
+            const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
+            const float toEnergy   = sceneManager_.getSceneEnergy(idx);
+            sceneManager_.armAdaptiveCrossfade(gainsBeforeScene, targetGains_local,
+                                               fromEnergy, toEnergy);
+            DBG("crossfade: " + juce::String(resolvedFrom) + "->" + juce::String(idx)
+                + " fromE=" + juce::String(fromEnergy, 2)
+                + " toE="   + juce::String(toEnergy,   2));
+        }
     }
 }
 
@@ -2700,9 +2701,10 @@ void MainComponent::navigateScene(int delta)
     if (!stepSequencer_.isPlaying())
     {
         // Séquenceur arrêté : changement immédiat, sans risque de coupure
+        const int oldIdx = sceneManager_.currentIdx();
         captureCurrentScene();
         sceneManager_.setCurrentIdx(target);
-        applyScene(sceneManager_.currentIdx());
+        applyScene(target, oldIdx);
         updateSceneLabel();
         return;
     }
