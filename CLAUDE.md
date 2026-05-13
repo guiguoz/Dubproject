@@ -65,17 +65,25 @@ Worker threads → ONNX inference, BPM detection, pitch shifting
 
 ### 3. Crossfade adaptatif (SceneManager)
 
-`SceneManager::armAdaptiveCrossfade()` choisit durée + courbe selon l'énergie scène :
+`SceneManager::armAdaptiveCrossfade()` choisit durée + courbe via `chooseProfile()` (public) :
 
 | from → to | Durée | Courbe | Ressenti |
 |-----------|-------|--------|---------|
-| Musical → Calme | 600 ms | EaseIn (cubique) | fondu dramatique |
+| Musical → Calme | 400 ms | EaseIn (cubique) | fondu dramatique |
 | Calme → Musical | 120 ms | EaseOut (cubique) | attaque percutante |
 | Musical → Musical | 200 ms | Linéaire | blend propre |
-| Calme → Calme | 400 ms | Smoothstep | glissement organique |
+| Calme → Calme | 250 ms | Smoothstep | glissement organique |
 
 Énergie = `SceneManager::computeSceneEnergy(SceneData&)` — 0.0 (silence) à 1.0 (tous slots pleins).
 Seuil musical/calme : `kT = 0.20f`.
+
+**Gain floor** : pour les profils lents (Musical→Calme, Calme→Calme), les slots dont le
+gain de départ est 0 sont floored à –60 dB (0.001f) pour éviter une attaque molle.
+Appliqué dans `applyScene()` avant `armAdaptiveCrossfade`.
+
+**Sidechain automatique** : après `triggerAI()`, kick → bass/pad/synth/loop (max 4 paires)
+configuré dans `onTypesDetected`. Guard anti-rebuild si la config n'a pas changé.
+API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI thread uniquement.
 
 ### 4. SerumHost — limitations connues
 

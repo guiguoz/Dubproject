@@ -85,12 +85,23 @@ Durée et courbe du crossfade selon le delta d'énergie :
 
 | Transition | Durée | Courbe |
 |-----------|-------|--------|
-| Musical → Calme | 600 ms | EaseIn cubique |
+| Musical → Calme | 400 ms | EaseIn cubique |
 | Calme → Musical | 120 ms | EaseOut cubique |
 | Musical → Musical | 200 ms | Linéaire |
-| Calme → Calme | 400 ms | Smoothstep |
+| Calme → Calme | 250 ms | Smoothstep |
 
 `armCrossfade()` (150 ms linéaire fixe) est conservé comme fallback.
+
+Gain floor –60 dB sur les slots naissants pour profils lents (Musical→Calme, Calme→Calme) :
+appliqué dans `applyScene()` avant `armAdaptiveCrossfade`.
+
+`SceneManager::chooseProfile(fromE, toE)` est **public** → testable directement sans instancier
+un crossfade. `CrossfadeProfile { int durationMs; CrossfadeCurve curve; }` est aussi public.
+
+Sidechain automatique kick→cibles configuré dans `onTypesDetected` :
+priorité BASS > PAD > SYNTH > LOOP, max 4 paires (`Sampler::kMaxSidechainPairs`).
+Guard dans `MainComponent` (`lastSidechainKick_` / `lastSidechainTargets_`) évite de rebuilder
+si la config n'a pas changé entre deux appels.
 
 ## Zone info musicale (au-dessus du step sequencer)
 
