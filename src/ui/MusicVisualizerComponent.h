@@ -1,45 +1,95 @@
 #pragma once
-#include "Colours.h"
 #include <JuceHeader.h>
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <functional>
 
 namespace ui {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MusicVisualizerComponent
 //
-// Animated plasma background for StepSequencerPanel.
-// Rendered into a 96×48 pixel buffer and upscaled with high-quality resampling
-// to give a smooth liquid/abstract look.
+// 3D terrain spectrum analyzer — frequency on X, time history on Z (oblique
+// projection), amplitude on Y. Renders 48 log-spaced bands × 52 history frames
+// via painter's algorithm at 30 Hz. Color: cyan (front) → violet (back).
 //
-// Always animated — audio just modulates speed and palette drift.
+// Data flow: DspPipeline writes audio to a ring buffer; GUI copies 1024 samples
+// per frame, computes a 1024-point FFT (Hann windowed), maps to kBands.
+//
 // Transparent to mouse, z-ordered behind all sampler controls.
 // ─────────────────────────────────────────────────────────────────────────────
 class MusicVisualizerComponent : public juce::Component
 {
 public:
+    static constexpr int   kFFTOrder  = 10;           // 1024-point FFT
+    static constexpr int   kFFTSize   = 1 << kFFTOrder;
+    static constexpr int   kBands     = 48;            // frequency bars
+    static constexpr int   kHistory   = 52;            // ~1.7 s at 30 Hz
+    static constexpr float kObliqueX  = 4.5f;          // px/frame horizontal depth
+    static constexpr float kObliqueY  = 2.8f;          // px/frame vertical depth
+
     MusicVisualizerComponent()
-        : pixelBuf_(juce::Image::ARGB, kPixW, kPixH, false)
     {
         setInterceptsMouseClicks(false, false);
         setOpaque(false);
+        for (int i = 0; i < kFFTSize; ++i)
+            hannWin_[i] = 0.5f * (1.f - std::cos(
+                juce::MathConstants<float>::twoPi * i / (kFFTSize - 1)));
     }
 
-    // GUI thread, 30 Hz
-    void update(const float levels[9], float inputRms, float /*bpm*/) noexcept
+    void setAudioProvider(std::function<void(float*, int)> fn)
     {
-        const float maxLevel = *std::max_element(levels, levels + 9);
-        // Base speed always advances — audio only accelerates it
-        t_          += 0.012f + maxLevel * 0.05f + inputRms * 0.02f;
-        paletteOff_  = std::fmod(paletteOff_ + 0.004f + maxLevel * 0.008f, 1.f);
+        audioProvider_ = std::move(fn);
+    }
+
+    // Called from StepSequencerPanel::timerCallback at 30 Hz (GUI thread)
+    void update(const float levels[9], float /*inputRms*/, float /*bpm*/) noexcept
+    {
+        // 1. Pull audio samples from DspPipeline ring buffer
+        float raw[kFFTSize] {};
+        if (audioProvider_)
+            audioProvider_(raw, kFFTSize);
+
+        // 2. Hann window → FFT buffer (interleaved complex, imag = 0)
+        std::fill(fftBuf_.begin(), fftBuf_.end(), 0.f);
+        for (int i = 0; i < kFFTSize; ++i)
+            fftBuf_[i] = raw[i] * hannWin_[i];
+
+        // 3. In-place FFT → magnitudes in fftBuf_[0..kFFTSize/2-1]
+        fft_.performFrequencyOnlyForwardTransform(fftBuf_.data());
+
+        // 4. Log-spaced band mapping 20 Hz – 18 kHz
+        constexpr float sr    = 44100.f;
+        constexpr float fLow  = 20.f;
+        constexpr float fHigh = 18000.f;
+        float newBands[kBands] {};
+        for (int b = 0; b < kBands; ++b)
+        {
+            const float t  = static_cast<float>(b) / (kBands - 1);
+            const float fc = fLow * std::pow(fHigh / fLow, t);
+            const int bin  = std::clamp(
+                static_cast<int>(fc / sr * kFFTSize), 1, kFFTSize / 2 - 2);
+            const float e  = (fftBuf_[bin - 1] + fftBuf_[bin] + fftBuf_[bin + 1]) / 3.f;
+            // dB normalized: –80 dB floor → 0.0, 0 dBFS → ~1.0
+            newBands[b] = std::clamp(
+                (20.f * std::log10(e / kFFTSize + 1e-4f) + 80.f) / 80.f, 0.f, 1.f);
+        }
+
+        // 5. Asymmetric LERP: fast attack, slow decay
+        for (int b = 0; b < kBands; ++b)
+            smoothBands_[b] = (newBands[b] > smoothBands_[b])
+                ? 0.50f * smoothBands_[b] + 0.50f * newBands[b]   // attack
+                : 0.92f * smoothBands_[b] + 0.08f * newBands[b];  // decay
+
+        // 6. Push frame into ring history
+        historyHead_ = (historyHead_ + 1) % kHistory;
+        for (int b = 0; b < kBands; ++b)
+            terrain_[historyHead_][b] = smoothBands_[b];
 
         for (int i = 0; i < 9; ++i)
-            smoothLevels_[i] += (levels[i] - smoothLevels_[i]) * 0.25f;
-        inputRms_ = inputRms;
+            smoothLevels_[i] = 0.8f * smoothLevels_[i] + 0.2f * levels[i];
 
-        renderPixels();
         repaint();
     }
 
@@ -48,85 +98,66 @@ public:
         const float W = static_cast<float>(getWidth());
         const float H = static_cast<float>(getHeight());
 
-        // Plasma upscaled with bilinear interpolation — smooth liquid look
-        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
-        g.drawImage(pixelBuf_,
-                    0, 0, getWidth(), getHeight(),
-                    0, 0, kPixW, kPixH, false);
+        // Deep dark background
+        g.setGradientFill(juce::ColourGradient(
+            juce::Colour(0xFF0A0012), W * 0.5f, 0.f,
+            juce::Colour(0xFF000008), W * 0.5f, H, false));
+        g.fillAll();
 
-        // Per-track radial glow reacting to levels — metaball feel
-        for (int t = 0; t < 9; ++t)
+        const float baseY   = H * 0.88f;
+        const float maxBarH = H * 0.70f;
+        // Each bin column covers (W + full oblique offset) / kBands
+        const float binW    = (W + kObliqueX * kHistory) / kBands;
+
+        // Painter's algorithm: draw from back to front
+        for (int z = kHistory - 1; z >= 0; --z)
         {
-            if (smoothLevels_[t] < 0.02f) continue;
+            const int   fi    = (historyHead_ - z + kHistory * 2) % kHistory;
+            const float depth = static_cast<float>(z);
+            const float alpha = 0.18f + 0.82f * (1.f - depth / kHistory);
 
-            const float cx = (static_cast<float>(t) + 0.5f) / 9.f * W;
-            const float cy = H * (0.5f + 0.28f * std::sin(t_ * 0.4f + static_cast<float>(t) * 0.73f));
-            const float r  = 15.f + smoothLevels_[t] * 90.f;
+            const float y0 = baseY  - depth * kObliqueY;
+            const float x0 = -depth * kObliqueX;
 
-            const juce::Colour col = trackColour(t);
-            juce::ColourGradient grad(
-                col.withAlpha(0.30f * smoothLevels_[t]), cx, cy,
-                col.withAlpha(0.f), cx + r, cy, true);
-            g.setGradientFill(grad);
-            g.fillEllipse(cx - r, cy - r, r * 2.f, r * 2.f);
+            juce::Path slice;
+            slice.startNewSubPath(x0, y0);
+            for (int band = 0; band < kBands; ++band)
+            {
+                const float amp = terrain_[fi][band];
+                slice.lineTo(x0 + band * binW,
+                             y0 - amp * maxBarH * (0.35f + 0.65f * alpha));
+            }
+            slice.lineTo(x0 + kBands * binW, y0);
+            slice.closeSubPath();
+
+            // Hue: front = cyan (0.55), back = violet (0.73)
+            const float hue = 0.55f + 0.18f * (depth / kHistory);
+            const juce::Colour col = juce::Colour::fromHSV(hue, 0.85f, 1.0f, alpha * 0.88f);
+
+            // Vertical gradient: bright at crest, near-transparent at base
+            const float cx = x0 + kBands * binW * 0.5f;
+            g.setGradientFill(juce::ColourGradient(
+                col,                          cx, y0 - maxBarH,
+                col.withAlpha(0.04f * alpha), cx, y0, false));
+            g.fillPath(slice);
+
+            // Thin crest line
+            g.setColour(col.withAlpha(alpha * 0.55f));
+            g.strokePath(slice, juce::PathStrokeType(0.8f));
         }
     }
 
 private:
-    void renderPixels()
-    {
-        juce::Image::BitmapData data(pixelBuf_, juce::Image::BitmapData::readWrite);
+    juce::dsp::FFT                  fft_       { kFFTOrder };
+    std::array<float, kFFTSize * 2> fftBuf_    {};
+    std::array<float, kFFTSize>     hannWin_   {};
 
-        for (int y = 0; y < kPixH; ++y)
-        {
-            const float py = static_cast<float>(y) / static_cast<float>(kPixH - 1);
-            for (int x = 0; x < kPixW; ++x)
-            {
-                const float px = static_cast<float>(x) / static_cast<float>(kPixW - 1);
+    float terrain_[kHistory][kBands] {};
+    float smoothBands_[kBands]        {};
+    int   historyHead_                { 0 };
 
-                // 4 interference waves at different angles / speeds → liquid plasma
-                float v  = std::sin(px * 7.0f + t_);
-                v       += std::sin(py * 5.0f - t_ * 0.71f);
-                v       += std::sin((px + py) * 4.5f + t_ * 1.13f);
-                const float dx = px * 2.f - 1.f;
-                const float dy = py * 2.f - 1.f;
-                v       += std::sin(std::sqrt(dx * dx + dy * dy) * 6.f - t_ * 0.83f);
-                // v ∈ [-4, 4] → normalise + palette offset → [0, 1]
-                const float norm = std::fmod((v + 4.f) / 8.f + paletteOff_, 1.f);
-                data.setPixelColour(x, y, palette(norm));
-            }
-        }
-    }
-
-    // Dark dub neon palette: mostly black, with cyan → blue → violet accents
-    static juce::Colour palette(float t) noexcept
-    {
-        const float hue = t;                                        // full colour wheel
-        const float ss  = t * t * (3.f - 2.f * t);             // smoothstep
-        const float val = 0.04f + 0.52f * ss;                   // mostly dark, vivid peaks
-        return juce::Colour::fromHSV(hue, 0.90f, val, 1.f);
-    }
-
-    static juce::Colour trackColour(int t) noexcept
-    {
-        static const juce::Colour kColours[9] = {
-            juce::Colour { 0xFF4CDFA8 }, juce::Colour { 0xFF06B6D4 },
-            juce::Colour { 0xFFC8C7C7 }, juce::Colour { 0xFF8B5CF6 },
-            juce::Colour { 0xFFF97316 }, juce::Colour { 0xFFF43F5E },
-            juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
-            juce::Colour { 0xFFFF6B35 },
-        };
-        return kColours[t % 9];
-    }
-
-    static constexpr int kPixW = 96;
-    static constexpr int kPixH = 48;
-
-    juce::Image          pixelBuf_;
-    float                t_          { 0.f };
-    float                paletteOff_ { 0.f };
-    std::array<float, 9> smoothLevels_ {};
-    float                inputRms_   { 0.f };
+    std::function<void(float*, int)> audioProvider_;
+    float smoothLevels_[9] {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MusicVisualizerComponent)
 };

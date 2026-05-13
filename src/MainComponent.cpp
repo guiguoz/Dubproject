@@ -616,6 +616,10 @@ MainComponent::MainComponent()
         return dspPipeline_.getLastRms();
     };
 
+    stepSeqPanel_.setVisProvider([this](float* dst, int n) {
+        dspPipeline_.copyVisSamples(dst, n);
+    });
+
     addAndMakeVisible(stepSeqPanel_);
 
     // ── Master key selector (sidebar) ─────────────────────────────────────────

@@ -107,6 +107,15 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
         rmsRunning_ = kRmsAlpha * rmsRunning_ + (1.0f - kRmsAlpha) * std::abs(left[i]);
     rmsLevel_.store(rmsRunning_, std::memory_order_relaxed);
 
+    // Visualizer ring buffer — left channel, relaxed (GUI reads asynchronously)
+    {
+        const int visIdx = visBufWriteIdx_.load(std::memory_order_relaxed);
+        for (int i = 0; i < numSamples; ++i)
+            visBuf_[(visIdx + i) % kVisBufSize] = left[i];
+        visBufWriteIdx_.store((visIdx + numSamples) % kVisBufSize,
+                               std::memory_order_relaxed);
+    }
+
     // Sampler (MIDI drain + stereo mix with optional ducking)
     if (samplerEnabled_.load(std::memory_order_acquire))
     {

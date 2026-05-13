@@ -270,6 +270,12 @@ public:
 
     ~StepSequencerPanel() override { stopTimer(); }
 
+    /// Wires the visualizer audio provider (called once from MainComponent after init).
+    void setVisProvider(std::function<void(float*, int)> fn)
+    {
+        visualizer_.setAudioProvider(std::move(fn));
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// Called by MainComponent sidebar play/stop button.

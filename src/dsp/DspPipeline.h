@@ -83,6 +83,17 @@ class DspPipeline
     bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }
     MasterLimiter& getMasterLimiter() noexcept { return masterLimiter_; }
 
+    // ── Visualizer audio feed (GUI thread read) ──────────────────────────────
+    // Copies the most recent n samples (≤ kVisBufSize) into dst.
+    // Lock-free: audio thread writes relaxed; torn frame at wrap is imperceptible.
+    static constexpr int kVisBufSize = 2048;
+    void copyVisSamples(float* dst, int n) const noexcept
+    {
+        const int head = visBufWriteIdx_.load(std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i)
+            dst[i] = visBuf_[(head - n + i + kVisBufSize * 2) % kVisBufSize];
+    }
+
   private:
     Sampler       sampler_;
     BpmDetector   bpmDetector_;
@@ -109,6 +120,10 @@ class DspPipeline
     float              rmsRunning_ { 0.0f };
     std::atomic<float> rmsLevel_   { 0.0f };
     static constexpr float kRmsAlpha = 0.9995f;
+
+    // Visualizer ring buffer: written on audio thread (relaxed), read by GUI
+    std::array<float, kVisBufSize> visBuf_         {};
+    std::atomic<int>               visBufWriteIdx_ { 0 };
 
     // ── Mono-sub < 120 Hz (PA mono compatibility) ───────────────────────────
     struct MonoSubFilter {
