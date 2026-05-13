@@ -2511,9 +2511,26 @@ void MainComponent::applyScene(int idx)
 
         if (!newPath.empty() && newPath != currentPath)
         {
-            // Sample différent : trim intégré dans le chargement → un seul write,
-            // pas de double-write race avec la voix en fadeOut.
-            loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
+            auto& cache = preloadCache_[static_cast<std::size_t>(i)];
+            if (cache.ready.load(std::memory_order_acquire) && cache.path == newPath)
+            {
+                // Cache hit : PCM déjà décodé hors message thread → seul loadSample() ici
+                auto& sampler = dspPipeline_.getSampler();
+                sampler.loadSample(i, cache.pcm.data(),
+                                   static_cast<int>(cache.pcm.size()), cache.sampleRate);
+                sampler.setSlotOneShot(i, true);
+                stepSeqPanel_.setSlotLoaded(i, true);
+                {
+                    auto pcm = sampler.getSlotPcmSnapshot(i);
+                    stepSeqPanel_.setSlotWaveform(i, computeEnvelope(pcm));
+                }
+                cache.ready.store(false, std::memory_order_relaxed);
+            }
+            else
+            {
+                // Cache miss (preload non terminé ou non lancé) : chargement synchrone
+                loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
+            }
             loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_.setSlotFilePath(i, newPath);
             samplerEngine_.setSlotFilePath(i, newPath);
@@ -2607,10 +2624,75 @@ void MainComponent::navigateScene(int delta)
         sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
     stepSequencer_.setPendingTransitionLen(sceneLen);
 
+    preloadSceneAsync(target);
     sceneManager_.setPendingScene(target);
     sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
+}
+
+void MainComponent::preloadSceneAsync(int targetScene)
+{
+    // Purger les futures déjà terminées avant d'en ajouter de nouvelles
+    backgroundTasks_.erase(
+        std::remove_if(backgroundTasks_.begin(), backgroundTasks_.end(),
+            [](const std::future<void>& f) {
+                return f.valid() &&
+                       f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            }),
+        backgroundTasks_.end());
+
+    preloadTargetScene_.store(targetScene, std::memory_order_relaxed);
+    for (auto& c : preloadCache_)
+        c.ready.store(false, std::memory_order_relaxed);
+
+    const auto& sc = sceneManager_.scene(targetScene);
+
+    for (int slot = 0; slot < 9; ++slot)
+    {
+        const std::string& newPath = sc.filePaths[static_cast<std::size_t>(slot)];
+        const std::string  curPath = stepSeqPanel_.getSlotFilePath(slot);
+
+        if (newPath.empty() || newPath == curPath)
+            continue;
+
+        const int trimStart      = sc.trimStart[static_cast<std::size_t>(slot)];
+        const int trimEnd        = sc.trimEnd  [static_cast<std::size_t>(slot)];
+        const int capturedSlot   = slot;
+        const int capturedTarget = targetScene;
+
+        backgroundTasks_.push_back(std::async(std::launch::async,
+            [this, capturedSlot, capturedTarget, newPath, trimStart, trimEnd]()
+            {
+                if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
+                    return;
+
+                juce::AudioFormatManager fmt;
+                fmt.registerBasicFormats();
+                std::unique_ptr<juce::AudioFormatReader> reader(
+                    fmt.createReaderFor(juce::File { juce::String(newPath) }));
+                if (!reader) return;
+
+                if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
+                    return;
+
+                const int numSamples = static_cast<int>(reader->lengthInSamples);
+                if (numSamples <= 0) return;
+                juce::AudioBuffer<float> buf(1, numSamples);
+                reader->read(&buf, 0, numSamples, 0, true, false);
+
+                const int start = juce::jlimit(0, numSamples - 1, trimStart);
+                const int end   = (trimEnd >= 0) ? juce::jlimit(start + 1, numSamples, trimEnd)
+                                                 : numSamples;
+
+                auto& cache      = preloadCache_[static_cast<std::size_t>(capturedSlot)];
+                cache.path       = newPath;
+                cache.sampleRate = reader->sampleRate;
+                cache.pcm.assign(buf.getReadPointer(0) + start,
+                                 buf.getReadPointer(0) + end);
+                cache.ready.store(true, std::memory_order_release);
+            }));
+    }
 }
 
 void MainComponent::resetCurrentScene()

@@ -168,6 +168,17 @@ private:
     std::array<std::atomic<bool>, 9>                processingSlot_{};
     std::vector<std::future<void>>                  backgroundTasks_;
 
+    // ── Loader thread persistant (étape 5 SceneManager) ──────────────────────
+    struct PreloadCache {
+        std::string        path;
+        std::vector<float> pcm;
+        double             sampleRate { 44100.0 };
+        std::atomic<bool>  ready      { false };
+    };
+    std::array<PreloadCache, 9> preloadCache_;
+    std::atomic<int>            preloadTargetScene_ { -1 };
+    void preloadSceneAsync(int targetScene);
+
     float                           overrideBpm_{ 0.f };
     std::array<std::vector<float>, 9> rawPcmForRetry_{};
     std::array<double,             9> rawSrForRetry_{};
