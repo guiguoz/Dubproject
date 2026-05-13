@@ -68,6 +68,20 @@ public:
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
         }
 
+        // Escape quitte le plein écran — remonte ici si aucun enfant ne consomme la touche.
+        bool keyPressed(const juce::KeyPress& key) override
+        {
+            if (key == juce::KeyPress::escapeKey)
+            {
+                if (auto* peer = getPeer(); peer != nullptr && peer->isFullScreen())
+                {
+                    peer->setFullScreen(false);
+                    return true;
+                }
+            }
+            return DocumentWindow::keyPressed(key);
+        }
+
     private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
     };

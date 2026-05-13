@@ -13,6 +13,7 @@
 #include "ui/SaxOsLookAndFeel.h"
 #include "ui/SaxFXLookAndFeel.h"
 #include "ui/SampleEditorComponent.h"
+#include "ui/ScaleStaffComponent.h"
 #include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
 #include "ui/PixelCloudComponent.h"
@@ -47,6 +48,7 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     //==========================================================================
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:
     std::unique_ptr<ui::SaxOsLookAndFeel>  saxOsLookAndFeel_;
@@ -160,6 +162,13 @@ private:
     using SceneData = ::dsp::SceneData;
 
     ::dsp::SceneManager sceneManager_;
+
+    // ── Info musicale (preset Serum + portée gammes) ──────────────────────────
+    ui::ScaleStaffComponent scaleStaff_;
+    juce::ComboBox          scaleTypeCombo_;
+    juce::String            currentPresetName_;
+    juce::Rectangle<int>    serumZone_;   // bounds du panel Serum, pour repaint ciblé
+    int                     presetNameTick_ { 0 };
 
     //==========================================================================
     // Background task management

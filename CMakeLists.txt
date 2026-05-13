@@ -10,6 +10,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Un seul dossier de sortie quelle que soit la config (Debug/Release/RelWithDebInfo)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_SOURCE_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/bin")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JUCE — via submodule dans third_party/JUCE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +66,14 @@ juce_add_gui_app(SaxFXLive
     ICON_SMALL       "${CMAKE_CURRENT_SOURCE_DIR}/src/app_icon.png"
 )
 
+# Forcer un seul dossier de sortie au niveau du target (JUCE override sinon)
+set_target_properties(SaxFXLive PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY                "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/bin"
+)
+
 # Code source
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
@@ -78,6 +92,7 @@ target_sources(SaxFXLive PRIVATE
     src/ui/SaxFXLookAndFeel.cpp
     src/ui/SaxOsLookAndFeel.cpp
     src/ui/RotaryKnob.cpp
+    src/ui/ScaleStaffComponent.cpp
 )
 
 target_include_directories(SaxFXLive PRIVATE src)

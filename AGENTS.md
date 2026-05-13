@@ -73,6 +73,38 @@ Ordre logique stéréo (résumé) :
 - **`Sampler::stop(slot, StopMode)`** : le mode de fade-out est encodé dans `stopPending` (`atomic<int>`, 0 = rien en attente). Modes disponibles : `Normal` (350 ms), `SceneSwap` (20 ms), `Retrigger` (6 ms), `Instant` (0 ms). Consommé par `exchange(0, acq_rel)` dans `process()`/`processStereo()` pour éviter la race load/store. Callsites : `applyScene()` -> `SceneSwap`, `onPlayChanged` -> `Normal`, `onStepChanged` -> `Retrigger`.
 - **`StepSequencer::hasPendingTransition()`** : retourne `true` si `pendingTransLen_ > 0` — utilisé dans `navigateScene()` pour bloquer le spam de transitions quantisées.
 
+## Transitions adaptatives entre scènes
+
+`SceneManager::armAdaptiveCrossfade()` remplace `armCrossfade()` dans `applyScene()`.
+L'énergie de chaque scène est calculée par `SceneManager::computeSceneEnergy(SceneData&)` :
+- Score 0.0–1.0 basé sur densité de pas + mutes (pas d'analyse audio)
+- Pré-calculé au chargement du projet ; invalidé à chaque `captureCurrentScene()`
+- Seuil musical/calme : `kT = 0.20f`
+
+Durée et courbe du crossfade selon le delta d'énergie :
+
+| Transition | Durée | Courbe |
+|-----------|-------|--------|
+| Musical → Calme | 600 ms | EaseIn cubique |
+| Calme → Musical | 120 ms | EaseOut cubique |
+| Musical → Musical | 200 ms | Linéaire |
+| Calme → Calme | 400 ms | Smoothstep |
+
+`armCrossfade()` (150 ms linéaire fixe) est conservé comme fallback.
+
+## Zone info musicale (au-dessus du step sequencer)
+
+Deux panneaux ajoutés (`kInfoZoneH = 180 px`) :
+- **Gauche — SERUM** : affiche le nom du preset Serum courant (limité par API VST3 — voir CLAUDE.md backlog)
+- **Droite — portée** : `ui::ScaleStaffComponent` dessine les notes jouables (clé de sol, ellipses néon) pour la tonalité + gamme sélectionnées. Clé de sol via "Segoe UI Symbol" U+1D11E.
+
+`ScaleStaffComponent::setKey(int root, ScaleType)` → `rebuildNoteInfos()` précalcule les positions de chaque note. `paint()` ne recalcule rien. Types de gamme : `Major, Minor, PentatonicMaj, PentatonicMin, Blues, Dorian`.
+
+## Plein écran
+
+- **Double-clic** sur zone vide de `MainComponent` → `getPeer()->setFullScreen(!isFullScreen())`
+- **Escape** → `getPeer()->setFullScreen(false)` — intercepté dans `Main.cpp::MainWindow::keyPressed()` (remonte si aucun enfant ne consomme la touche)
+
 ## Fichiers souvent touchés par type de changement
 
 | Besoin | Fichiers / zones |

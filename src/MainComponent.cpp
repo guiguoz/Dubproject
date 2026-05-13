@@ -150,36 +150,17 @@ MainComponent::MainComponent()
     addAndMakeVisible(aiCloud_);
 
     // ── EWI Synth section ─────────────────────────────────────────────────────
-    styleSideBtn(serumLoadBtn_, "LOAD VST3");
+    styleSideBtn(serumLoadBtn_, "LOAD SERUM");
     styleSideBtn(serumShowUiBtn_, "SHOW UI");
     serumShowUiBtn_.onClick = [this] { openSerumEditor(); };
     addAndMakeVisible(serumShowUiBtn_);
 
     serumLoadBtn_.onClick = [this]
     {
-        serumFileChooser_ = std::make_unique<juce::FileChooser>(
-            "Select Serum VST3", juce::File{}, "*.vst3");
-        serumFileChooser_->launchAsync(
-            juce::FileBrowserComponent::openMode |
-            juce::FileBrowserComponent::canSelectFiles |
-            juce::FileBrowserComponent::canSelectDirectories,
-            [this](const juce::FileChooser& fc)
-            {
-                // Walk up from the selected path to find the .vst3 bundle root.
-                // The native dialog navigates inside the bundle, so the user may
-                // end up selecting an internal file (PlugIn.ico, desktop.ini, etc.)
-                auto f = fc.getResult();
-                while (f.exists())
-                {
-                    if (f.getFileExtension().equalsIgnoreCase(".vst3"))
-                        break;
-                    const auto parent = f.getParentDirectory();
-                    if (parent == f) { f = juce::File{}; break; }
-                    f = parent;
-                }
-                if (f.exists())
-                    loadSerumPlugin(f.getFullPathName());
-            });
+        static const juce::String kSerumPath {
+            "C:\\Program Files\\Common Files\\VST3\\Serum2.vst3\\Contents\\x86_64-win\\Serum2.vst3"
+        };
+        loadSerumPlugin(kSerumPath);
     };
     addAndMakeVisible(serumLoadBtn_);
 
@@ -687,6 +668,22 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(masterKeyModeCombo_);
 
+    // ── Portée musicale + gamme ───────────────────────────────────────────────
+    scaleTypeCombo_.addItem("Major",          1);
+    scaleTypeCombo_.addItem("Minor",          2);
+    scaleTypeCombo_.addItem("Pentatonic Maj", 3);
+    scaleTypeCombo_.addItem("Pentatonic Min", 4);
+    scaleTypeCombo_.addItem("Blues",          5);
+    scaleTypeCombo_.addItem("Dorian",         6);
+    scaleTypeCombo_.setSelectedId(1, juce::dontSendNotification);
+    scaleTypeCombo_.onChange = [this] {
+        const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
+        scaleStaff_.setKey(masterKeyRoot_, t);
+    };
+    addAndMakeVisible(scaleTypeCombo_);
+    addAndMakeVisible(scaleStaff_);
+    scaleStaff_.setKey(masterKeyRoot_, ui::ScaleType::Major);
+
     // ── Spatial visualization ─────────────────────────────────────────────────
     addAndMakeVisible(spatialViz_);
 
@@ -1052,6 +1049,9 @@ void MainComponent::applyMasterKey()
     ctx.keyRoot  = masterKeyRoot_;
     ctx.isMajor  = masterKeyMajor_;
     samplerEngine_.setMusicContext(ctx);
+
+    const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
+    scaleStaff_.setKey(masterKeyRoot_, t);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1464,6 +1464,11 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                                  [static_cast<std::size_t>(s)];
             }
         }
+        // Pré-calcul de l'énergie pour toutes les scènes (depuis les patterns chargés).
+        for (int si = 0; si < kMaxScenes; ++si)
+            sceneManager_.setSceneEnergy(si,
+                ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(si)));
+
         // Restore bar counts, step patterns and sample paths for the current scene
         applyScene(sceneManager_.currentIdx());
         updateSceneLabel();
@@ -1827,6 +1832,12 @@ void MainComponent::ensureGrainNoise(int w, int h)
     }
 }
 
+void MainComponent::mouseDoubleClick(const juce::MouseEvent& /*e*/)
+{
+    if (auto* peer = getPeer())
+        peer->setFullScreen(!peer->isFullScreen());
+}
+
 void MainComponent::paint(juce::Graphics& g)
 {
     const int W = getWidth();
@@ -1975,12 +1986,67 @@ void MainComponent::paint(juce::Graphics& g)
                    juce::Justification::centredLeft);
     }
 
-    // ── Main area section separators ─────────────────────────────────────────
+    // ── Panel preset Serum (moitié gauche de la zone info musicale) ──────────
+    if (!serumZone_.isEmpty())
     {
-        g.setColour(ui::SaxFXColours::cardBorder);
-        const int mainContentW = sidebarX - 20;
-        const int seqLabelY    = kHeaderH + 440;
-        g.fillRect(16, seqLabelY, mainContentW, 1);
+        using namespace ui::SaxFXColours;
+        const auto zone = serumZone_.toFloat();
+
+        // Card dark
+        g.setColour(juce::Colour(0xFF141416));
+        g.fillRoundedRectangle(zone, 6.f);
+        g.setColour(cardBorder);
+        g.drawRoundedRectangle(zone.reduced(0.5f), 6.f, 1.f);
+
+        // Label "SERUM"
+        g.setFont(juce::Font(juce::FontOptions{}.withHeight(8.f)));
+        g.setColour(textSecondary.withAlpha(0.50f));
+        g.drawText("SERUM",
+                   serumZone_.getX() + 10, serumZone_.getY() + 6,
+                   serumZone_.getWidth() - 20, 10,
+                   juce::Justification::centredLeft);
+
+        const bool pluginLoaded = serumHost_.isLoaded();
+
+        // Nom du preset centré verticalement dans la zone
+        const int presetAreaY  = serumZone_.getY() + 22;
+        const int presetAreaH  = serumZone_.getHeight() - 28;
+        const int presetAreaX  = serumZone_.getX() + 16;
+        const int presetAreaW  = serumZone_.getWidth() - 32;
+
+        if (!pluginLoaded)
+        {
+            g.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f).withStyle("Italic")));
+            g.setColour(textSecondary.withAlpha(0.35f));
+            g.drawText("— charger Serum —",
+                       presetAreaX, presetAreaY, presetAreaW, presetAreaH,
+                       juce::Justification::centred);
+        }
+        else
+        {
+            const bool isFallback = currentPresetName_ == serumHost_.getPluginName()
+                                    || currentPresetName_.isEmpty();
+            if (isFallback)
+            {
+                g.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f).withStyle("Italic")));
+                g.setColour(textSecondary.withAlpha(0.45f));
+                g.drawText("ouvrir l'UI Serum pour\nselectionner un preset",
+                           presetAreaX, presetAreaY, presetAreaW, presetAreaH,
+                           juce::Justification::centred);
+            }
+            else
+            {
+                g.setFont(juce::Font(juce::FontOptions{}.withHeight(22.f).withStyle("Bold")));
+                g.setColour(aiBadge);
+                g.drawFittedText(currentPresetName_,
+                                 presetAreaX, presetAreaY, presetAreaW, presetAreaH,
+                                 juce::Justification::centred, 3, 0.8f);
+            }
+        }
+
+        // Séparateur entre les deux panels
+        g.setColour(cardBorder);
+        g.fillRect(serumZone_.getRight() + 4, serumZone_.getY() + 8, 1, serumZone_.getHeight() - 16);
     }
 
     // ── Bottom status bar ─────────────────────────────────────────────────────
@@ -2132,8 +2198,21 @@ void MainComponent::resized()
     // MAIN CONTENT AREA
     // ════════════════════════════════════════════════════════════════════════
 
-    // Step sequencer section — occupe toute la hauteur disponible
-    const int seqTop = kHeaderH + 54;
+    // ── Zone info musicale (preset Serum + portée gammes) ────────────────────
+    static constexpr int kInfoZoneH = 180;
+    static constexpr int kInfoZoneTop = kHeaderH + 8;
+    const int halfW = (mainW - 8) / 2;
+
+    // Panel gauche — preset Serum (dessiné dans paint(), bounds cachés ici)
+    serumZone_ = { 16, kInfoZoneTop, halfW, kInfoZoneH };
+
+    // Panel droit — portée musicale
+    const int staffLeft = 16 + halfW + 8;
+    scaleTypeCombo_.setBounds(staffLeft, kInfoZoneTop, halfW, 22);
+    scaleStaff_.setBounds(staffLeft, kInfoZoneTop + 26, halfW, kInfoZoneH - 26);
+
+    // Step sequencer poussé sous la zone info
+    const int seqTop = kInfoZoneTop + kInfoZoneH + 8;
     samplerLabel_.setBounds(16, seqTop - 20, 200, 16);
     stepSeqPanel_.setBounds(16, seqTop, mainW, H - seqTop - kStatusH - kPad);
 
@@ -2178,6 +2257,19 @@ void MainComponent::timerCallback()
 
     // ── Appliquer les mappings MIDI actifs ────────────────────────────────────
     applyMidiMappings();
+
+    // ── Preset Serum : mise à jour 1×/s (~30 ticks) ──────────────────────────
+    if (++presetNameTick_ >= 30)
+    {
+        presetNameTick_ = 0;
+        const auto name = serumHost_.getCurrentPresetName();
+        if (name != currentPresetName_)
+        {
+            currentPresetName_ = name;
+            if (!serumZone_.isEmpty())
+                repaint(serumZone_);
+        }
+    }
 
     // Autosave toutes les 5 min (30 fps × 300 s = 9000 ticks)
     if (++autosaveTick_ >= 9000)
@@ -2457,6 +2549,9 @@ void MainComponent::captureCurrentScene()
         for (int s = 0; s < numSteps; ++s)
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
     }
+    // Rafraîchir le score d'énergie de la scène capturée.
+    const int ci = sceneManager_.currentIdx();
+    sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
 }
 
 void MainComponent::applyScene(int idx)
@@ -2590,7 +2685,10 @@ void MainComponent::applyScene(int idx)
         // Réinitialiser les gains au départ pour que le crossfade parte de la bonne valeur
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
-        sceneManager_.armCrossfade(gainsBeforeScene, targetGains_local);
+        sceneManager_.armAdaptiveCrossfade(
+            gainsBeforeScene, targetGains_local,
+            sceneManager_.getSceneEnergy(sceneManager_.currentIdx()),
+            sceneManager_.getSceneEnergy(idx));
     }
 }
 

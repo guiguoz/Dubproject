@@ -20,7 +20,7 @@ namespace dsp {
 //   3. load(newPath, ...)            (message thread)
 //   4. setProcessingEnabled(true)
 // ─────────────────────────────────────────────────────────────────────────────
-class SerumHost
+class SerumHost : private juce::AudioProcessorListener
 {
 public:
     SerumHost();
@@ -72,6 +72,15 @@ public:
     // Plugin name for display (empty if not loaded).
     juce::String getPluginName() const;
 
+    // Current preset name. Uses AudioProcessorListener + state parsing to detect
+    // preset changes even when the plugin doesn't expose names via the standard API.
+    // Returns empty string if unavailable (caller should show a fallback).
+    juce::String getCurrentPresetName() const;
+
+    // Signal that the cached preset name should be refreshed on next call.
+    // Called automatically via AudioProcessorListener; exposed for testing.
+    void markPresetNameDirty() { presetNameDirty_ = true; }
+
 private:
     juce::AudioPluginFormatManager             formatManager_;
     std::unique_ptr<juce::AudioPluginInstance> plugin_;
@@ -83,6 +92,19 @@ private:
     std::atomic<bool>  loaded_            { false };
     std::atomic<bool>  processingEnabled_ { false };
     std::atomic<float> outputGain_        { 0.5f };
+
+    // AudioProcessorListener — message thread only
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override
+    {
+        presetNameDirty_ = true;
+    }
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override
+    {
+        presetNameDirty_ = true;
+    }
+
+    mutable juce::String cachedPresetName_;
+    mutable bool         presetNameDirty_ { true };
 };
 
 } // namespace dsp
