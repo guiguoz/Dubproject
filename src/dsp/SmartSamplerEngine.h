@@ -589,6 +589,33 @@ private:
                  -2.f * cosw0 / a0,    (1.f - alpha/A) / a0 };
     }
 
+    // ── Transient shaper (kick) ──────────────────────────────────────────────────
+    // Boost l'attaque du kick (≤ +3 dB sur ~15 ms) sans toucher au sustain.
+    // Dual envelope follower : fast capte la transitoire, slow le corps.
+    // Appliqué après applyRoleEQ() — agit dans la bande existante (LP 1800 Hz),
+    // donc booste le thump 60–200 Hz, pas un click haute fréquence.
+    static void applyKickTransient(std::vector<float>& pcm, double sr) noexcept
+    {
+        if (pcm.empty()) return;
+        const float fs = static_cast<float>(sr);
+        const float cFastA = std::exp(-1.f / (fs * 0.0008f));  // 0.8 ms — front d'attaque
+        const float cFastR = std::exp(-1.f / (fs * 0.040f));   // 40 ms
+        const float cSlowA = std::exp(-1.f / (fs * 0.020f));   // 20 ms — corps
+        const float cSlowR = std::exp(-1.f / (fs * 0.200f));   // 200 ms
+
+        float envFast = 0.f, envSlow = 0.f;
+        for (float& s : pcm)
+        {
+            const float ab = std::abs(s);
+            envFast = (ab > envFast) ? cFastA * envFast + (1.f - cFastA) * ab
+                                     : cFastR * envFast;
+            envSlow = (ab > envSlow) ? cSlowA * envSlow + (1.f - cSlowA) * ab
+                                     : cSlowR * envSlow;
+            const float t = (envFast - envSlow) / std::max(envFast, 1e-9f);
+            s *= 1.f + 0.4f * std::max(t, 0.f);  // ≤ +3 dB au pic de transitoire
+        }
+    }
+
     // ── Saturation harmonique (bass) ────────────────────────────────────────────
     // Enrichit la bass en harmoniques 100–300 Hz via soft-clip tanh pour une
     // meilleure audibilité sur petits systèmes sans augmenter le headroom.
@@ -1013,6 +1040,8 @@ private:
                     applyBiquad(pcms[i], makePeaking  (2500.f, safeMiG, 1.0f, sampleRate_)); // présence
                     applyBiquad(pcms[i], makeHighShelf(8000.f, safeHiG, sampleRate_)); // air
                     applyBiquad(pcms[i], makeLP       (18000.f,         sampleRate_)); // anti-alias
+                    if (types[i] == ContentType::KICK)
+                        applyKickTransient(pcms[i], sampleRate_);
                     if (types[i] == ContentType::BASS)
                         applyBassHarmonics(pcms[i], sampleRate_);
 
@@ -1087,6 +1116,8 @@ private:
 
                 // Apply role EQ preset (from clean original PCM)
                 applyRoleEQ(pcms[i], effectiveType, sampleRate_);
+                if (effectiveType == ContentType::KICK)
+                    applyKickTransient(pcms[i], sampleRate_);
                 if (effectiveType == ContentType::BASS)
                     applyBassHarmonics(pcms[i], sampleRate_);
 
