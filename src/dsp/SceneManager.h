@@ -95,13 +95,29 @@ public:
 
     bool isCrossfadeActive() const noexcept { return crossfade_.active; }
 
+    // ── Profil de crossfade ──────────────────────────────────────────────────
+
+    struct CrossfadeProfile { int durationMs; CrossfadeCurve curve; };
+
+    /// Retourne le profil (durée + courbe) pour une transition from→to.
+    /// Public pour les tests unitaires ; aucun état modifié.
+    static CrossfadeProfile chooseProfile(float from, float to) noexcept
+    {
+        constexpr float kT = 0.20f;
+        const bool fHigh = (from >= kT), tHigh = (to >= kT);
+        if ( fHigh && !tHigh) return { 400, CrossfadeCurve::EaseIn    };
+        if (!fHigh &&  tHigh) return { 120, CrossfadeCurve::EaseOut   };
+        if ( fHigh &&  tHigh) return { 200, CrossfadeCurve::Linear    };
+        return                       { 250, CrossfadeCurve::Smoothstep };
+    }
+
     /// Crossfade adaptatif : durée et courbe choisies selon l'énergie from/to.
     void armAdaptiveCrossfade(const std::array<float, 9>& startGains,
                               const std::array<float, 9>& targetGains,
                               float fromEnergy,
                               float toEnergy) noexcept
     {
-        const auto [dur, curve] = selectProfile(fromEnergy, toEnergy);
+        const auto [dur, curve] = chooseProfile(fromEnergy, toEnergy);
         crossfade_ = { true, 0, dur, curve, startGains, targetGains };
     }
 
@@ -186,18 +202,6 @@ private:
     std::array<SceneData, kMaxScenes> scenes_;
     int                  currentIdx_   { 0 };
     std::atomic<int>     pendingScene_ { -1 };
-
-    struct CrossfadeProfile { int durationMs; CrossfadeCurve curve; };
-
-    static CrossfadeProfile selectProfile(float from, float to) noexcept
-    {
-        constexpr float kT = 0.20f;
-        const bool fHigh = (from >= kT), tHigh = (to >= kT);
-        if ( fHigh && !tHigh) return { 400, CrossfadeCurve::EaseIn    };
-        if (!fHigh &&  tHigh) return { 120, CrossfadeCurve::EaseOut   };
-        if ( fHigh &&  tHigh) return { 200, CrossfadeCurve::Linear    };
-        return                       { 250, CrossfadeCurve::Smoothstep };
-    }
 
     struct CrossfadeState
     {

@@ -211,6 +211,11 @@ private:
     //==========================================================================
     int  autosaveTick_     { 0 };
     int  autosaveFadeTimer_{ 0 };
+
+    // ── Sidechain config cache (évite rebuilds répétés dans onTypesDetected) ───
+    int                lastSidechainKick_    { -1 };
+    std::array<int, 4> lastSidechainTargets_ {};
+    int                lastSidechainCount_   { 0 };
     std::atomic<float> currentRmsLevel_{0.0f};
     std::atomic<float> currentOutputRmsLevel_{0.0f};
     std::atomic<float> outputGain_     {1.0f};

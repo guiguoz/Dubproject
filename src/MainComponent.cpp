@@ -400,6 +400,40 @@ MainComponent::MainComponent()
             sampler.setSlotDelaySend(i, send);
         }
 
+        // Sidechain automatique : kick → bass, pad, synth, loop (max 4 paires, priorité dub).
+        // Guard : ne rebuild que si le kick slot ou les cibles ont changé.
+        {
+            auto& sc2 = dspPipeline_.getSampler();
+            static constexpr CT kPriority[] = { CT::BASS, CT::PAD, CT::SYNTH, CT::LOOP };
+
+            int kickSlot = -1;
+            for (int i = 0; i < 9; ++i)
+                if (samplerEngine_.getDetectedType(i) == CT::KICK && sc2.isLoaded(i))
+                    { kickSlot = i; break; }
+
+            std::array<int, 4> newTargets {};
+            int nTargets = 0;
+            if (kickSlot >= 0)
+                for (CT prio : kPriority)
+                    for (int i = 0; i < 9 && nTargets < 4; ++i)
+                        if (i != kickSlot
+                            && samplerEngine_.getDetectedType(i) == prio
+                            && sc2.isLoaded(i))
+                            newTargets[nTargets++] = i;
+
+            if (kickSlot != lastSidechainKick_
+                || nTargets != lastSidechainCount_
+                || newTargets != lastSidechainTargets_)
+            {
+                sc2.clearSidechain();
+                for (int i = 0; i < nTargets; ++i)
+                    sc2.setSidechainPair(kickSlot, newTargets[i]);
+                lastSidechainKick_    = kickSlot;
+                lastSidechainTargets_ = newTargets;
+                lastSidechainCount_   = nTargets;
+            }
+        }
+
         // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
         auto& dd = dspPipeline_.getDubDelay();
         dd.setEnabled(true);
@@ -2684,7 +2718,18 @@ void MainComponent::applyScene(int idx, int fromIdx)
             const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
             const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
             const float toEnergy   = sceneManager_.getSceneEnergy(idx);
-            sceneManager_.armAdaptiveCrossfade(gainsBeforeScene, targetGains_local,
+
+            // Floor –60 dB sur les slots qui naissent, uniquement pour les profils
+            // lents (Musical→Calme ou Calme→Calme) où une rampe depuis 0 serait molle.
+            auto startGains = gainsBeforeScene;
+            const bool slowProfile = (fromEnergy >= 0.20f && toEnergy < 0.20f)
+                                  || (fromEnergy <  0.20f && toEnergy < 0.20f);
+            if (slowProfile)
+                for (int i = 0; i < 9; ++i)
+                    if (startGains[i] < 0.001f && targetGains_local[i] > 0.f)
+                        startGains[i] = 0.001f;
+
+            sceneManager_.armAdaptiveCrossfade(startGains, targetGains_local,
                                                fromEnergy, toEnergy);
             DBG("crossfade: " + juce::String(resolvedFrom) + "->" + juce::String(idx)
                 + " fromE=" + juce::String(fromEnergy, 2)
