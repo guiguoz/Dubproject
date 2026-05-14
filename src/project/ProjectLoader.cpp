@@ -217,6 +217,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     // ── v14 — Serum preset state (absent = empty, Serum not used) ────────────
     data.serumState = getString(root, "serumState");
 
+    // swing (absent in older projects → 0.0 = straight, backwards-compat)
+    data.swing = getFloat(root, "swing", 0.f);
+
     return data;
 }
 
@@ -393,6 +396,10 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     // ── v14 — Serum preset state (omitted when empty = no Serum in project) ──
     if (!data.serumState.empty())
         root->setProperty("serumState", juce::String(data.serumState));
+
+    // swing (always saved; readers default to 0 when absent for backwards-compat)
+    if (data.swing > 0.f)
+        root->setProperty("swing", static_cast<double>(data.swing));
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);

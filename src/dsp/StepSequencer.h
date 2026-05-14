@@ -49,8 +49,12 @@ public:
 
     void prepare(double sampleRate) noexcept
     {
-        sampleRate_ = sampleRate;
-        phase_      = 0.0;
+        sampleRate_      = sampleRate;
+        phase_           = 0.0;
+        nextFirePhase_   = 0.0;
+        nextFireStepIdx_ = 0;
+        lastSwingOff_    = 0.0;
+        swingCurrent_    = 0.f;
         stepAtomic_.store(0, std::memory_order_relaxed);
     }
 
@@ -70,7 +74,10 @@ public:
     {
         if (play)
         {
-            phase_ = -1e-9;
+            phase_           = -1e-9;
+            nextFirePhase_   = 0.0;
+            nextFireStepIdx_ = 0;
+            lastSwingOff_    = 0.0;
             stepAtomic_.store(0, std::memory_order_relaxed);
         }
         else
@@ -140,7 +147,11 @@ public:
 
     void reset() noexcept
     {
-        phase_ = 0.0;
+        phase_           = 0.0;
+        nextFirePhase_   = 0.0;
+        nextFireStepIdx_ = 0;
+        lastSwingOff_    = 0.0;
+        swingCurrent_    = 0.f;
         stepAtomic_.store(0, std::memory_order_relaxed);
         playing_.store(false, std::memory_order_relaxed);
         activeBuf_.store(0, std::memory_order_relaxed);
@@ -152,9 +163,25 @@ public:
     /// Remet la phase à zéro (step 0) sans arrêter la lecture.
     void resetPhase() noexcept
     {
-        phase_ = -1e-9;
+        phase_           = -1e-9;
+        nextFirePhase_   = 0.0;
+        nextFireStepIdx_ = 0;
+        lastSwingOff_    = 0.0;
         stepAtomic_.store(0, std::memory_order_relaxed);
     }
+
+    /// Swing global [0..1] : 0=straight, 0.5=swing, 1.0=shuffle.
+    /// Thread-safe (atomic write, audio thread reads).
+    void setSwing(float amount) noexcept
+    {
+        swingTarget_.store(juce::jlimit(0.f, 1.f, amount), std::memory_order_relaxed);
+    }
+
+    float getSwing() const noexcept { return swingTarget_.load(std::memory_order_relaxed); }
+
+    /// Beat phase at start of last audio block — read from audio thread only.
+    /// Used by LooperEngine to detect bar downbeats.
+    double getCurrentPhase() const noexcept { return phase_; }
 
     // ── Double-buffer scene transition ───────────────────────────────────────
 
@@ -192,19 +219,22 @@ public:
 
         static constexpr double kStepBeats = 0.25;
 
-        const double phaseBefore = phase_;
+        // Smooth swing toward target (audio thread — no lock needed)
+        swingCurrent_ += 0.05f * (swingTarget_.load(std::memory_order_relaxed) - swingCurrent_);
+
         phase_ += static_cast<double>(numSamples)
                   / (sampleRate_ * 60.0 / static_cast<double>(bpm));
 
-        const int globalBefore = static_cast<int>(std::floor(phaseBefore / kStepBeats)) % kMaxSteps;
-        const int globalAfter  = static_cast<int>(std::floor(phase_       / kStepBeats)) % kMaxSteps;
-
-        if (globalBefore != globalAfter)
+        // Absolute-position firing loop — handles multiple steps per block correctly.
+        // nextFirePhase_: absolute beat phase at which the next step fires.
+        // nextFireStepIdx_: monotonically increasing step counter (% kMaxSteps for pattern index).
+        while (phase_ > nextFirePhase_)
         {
-            stepAtomic_.store(globalAfter, std::memory_order_relaxed);
+            const int globalStep = nextFireStepIdx_ % kMaxSteps;
+            stepAtomic_.store(globalStep, std::memory_order_relaxed);
 
             const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
-            const bool atSceneBoundary = (transLen > 0 && globalAfter % transLen == 0);
+            const bool atSceneBoundary = (transLen > 0 && globalStep % transLen == 0);
 
             if (atSceneBoundary)
             {
@@ -216,15 +246,34 @@ public:
                 for (int track = 0; track < kTracks; ++track)
                 {
                     const int trackSteps = active.trackStepCount[track];
-                    const int trackStep  = globalAfter % trackSteps;
+                    const int trackStep  = globalStep % trackSteps;
                     if (active.steps[track][trackStep])
                         sampler.trigger(track);
                 }
             }
+
+            // Advance to next fire phase.
+            // Odd steps are delayed by swingOff; even steps compensate with -lastSwingOff_
+            // so total pair duration stays exactly 2 × kStepBeats (no tempo drift).
+            ++nextFireStepIdx_;
+            if (nextFireStepIdx_ % 2 == 1)  // next step is odd → apply swing
+            {
+                const double swingOff = static_cast<double>(swingCurrent_) * kStepBeats / 3.0;
+                nextFirePhase_ += kStepBeats + swingOff;
+                lastSwingOff_   = swingOff;
+            }
+            else  // next step is even → compensate previous swing delay
+            {
+                nextFirePhase_ += kStepBeats - lastSwingOff_;
+                lastSwingOff_   = 0.0;
+            }
         }
 
         if (phase_ >= 4096.0)
-            phase_ -= 4096.0;
+        {
+            phase_         -= 4096.0;
+            nextFirePhase_ -= 4096.0;
+        }
     }
 
     /// Fige la longueur de scène utilisée pour détecter la fin de cycle.
@@ -252,10 +301,16 @@ private:
     std::atomic<int> activeBuf_   { 0 };   // audio thread swap target; GUI reads for getStep/getCount
     std::atomic<int> preparedBuf_ { -1 };  // -1 = nothing prepared; ≥0 = slot ready to flip
 
-    double phase_      = 0.0;    // audio thread only
+    double phase_           = 0.0;   // audio thread only — beat phase accumulator
+    double nextFirePhase_   = 0.0;   // audio thread only — beat phase of next step fire
+    int    nextFireStepIdx_ = 0;     // audio thread only — monotonic step counter (for even/odd swing)
+    double lastSwingOff_    = 0.0;   // audio thread only — swing offset applied to last odd step
+    float  swingCurrent_    = 0.f;   // audio thread only — smoothed swing value
+
     double sampleRate_ = 44100.0;
 
     std::atomic<float> bpm_             { 0.f };
+    std::atomic<float> swingTarget_     { 0.f };   // GUI writes, audio reads
     std::atomic<bool>  playing_         { false };
     std::atomic<int>   stepAtomic_      { 0 };
     std::atomic<bool>  sceneEndFlag_    { false };

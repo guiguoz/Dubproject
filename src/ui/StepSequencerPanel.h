@@ -59,6 +59,17 @@ public:
     /// (track, bars) — MainComponent uses this to update StepSequencer.
     std::function<void(int track, int bars)>              onTrackBarCountChanged;
 
+    // ── Looper callbacks ──────────────────────────────────────────────────────
+    std::function<void()>     onLooperPress;
+    std::function<void()>     onLooperClear;
+    std::function<void(bool)> onLooperModeChanged;  // true = Tape, false = Replace
+    std::function<int()>      getLooperState;        // returns LooperEngine::State as int
+    std::function<float()>    getLooperBars;         // current loop length / recorded bars
+    std::function<bool()>     getLooperIsTape;       // true = Tape mode
+
+    // ── Swing callback ────────────────────────────────────────────────────────
+    std::function<void(float)> onSwingChanged;
+
     // ── Constructor ───────────────────────────────────────────────────────────
     explicit StepSequencerPanel(::dsp::StepSequencer& seq)
         : seq_(seq)
@@ -265,6 +276,68 @@ public:
 
         addAndMakeVisible(visualizer_);
         visualizer_.toBack();
+
+        // ── Looper band ───────────────────────────────────────────────────────
+        looperRecBtn_.setButtonText("REC");
+        looperRecBtn_.setColour(juce::TextButton::buttonColourId,  SaxFXColours::cardBody);
+        looperRecBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFFF5555));
+        looperRecBtn_.onClick = [this] { if (onLooperPress) onLooperPress(); };
+        addAndMakeVisible(looperRecBtn_);
+
+        looperClearBtn_.setButtonText("CLR");
+        looperClearBtn_.setColour(juce::TextButton::buttonColourId,  SaxFXColours::cardBody);
+        looperClearBtn_.setColour(juce::TextButton::textColourOffId, SaxFXColours::textSecondary);
+        looperClearBtn_.onClick = [this] { if (onLooperClear) onLooperClear(); };
+        addAndMakeVisible(looperClearBtn_);
+
+        looperModeBtn_.setButtonText("TAPE");
+        looperModeBtn_.setClickingTogglesState(true);
+        looperModeBtn_.setColour(juce::TextButton::buttonColourId,   SaxFXColours::cardBody);
+        looperModeBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF336644));
+        looperModeBtn_.setColour(juce::TextButton::textColourOffId,  SaxFXColours::textSecondary);
+        looperModeBtn_.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFF4CDFA8));
+        looperModeBtn_.setToggleState(true, juce::dontSendNotification);  // Tape by default
+        looperModeBtn_.onClick = [this]
+        {
+            const bool tape = looperModeBtn_.getToggleState();
+            looperModeBtn_.setButtonText(tape ? "TAPE" : "REP");
+            if (onLooperModeChanged) onLooperModeChanged(tape);
+        };
+        addAndMakeVisible(looperModeBtn_);
+
+        looperStatusLabel_.setText("", juce::dontSendNotification);
+        looperStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(10.f)));
+        looperStatusLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
+        looperStatusLabel_.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(looperStatusLabel_);
+
+        // ── Swing slider ──────────────────────────────────────────────────────
+        swingLabel_.setText("SWING", juce::dontSendNotification);
+        swingLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
+        swingLabel_.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
+        swingLabel_.setJustificationType(juce::Justification::centredRight);
+        addAndMakeVisible(swingLabel_);
+
+        swingSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+        swingSlider_.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        swingSlider_.setRange(0.0, 1.0, 0.01);
+        swingSlider_.setValue(0.0, juce::dontSendNotification);
+        swingSlider_.setColour(juce::Slider::trackColourId,  juce::Colour(0xFF4CDFA8).withAlpha(0.5f));
+        swingSlider_.setColour(juce::Slider::thumbColourId,  juce::Colour(0xFF4CDFA8));
+        swingSlider_.setPopupDisplayEnabled(true, false, this);
+        swingSlider_.textFromValueFunction = [](double v) -> juce::String
+        {
+            if (v < 0.05) return "Straight";
+            if (v < 0.75) return juce::String(juce::roundToInt(v * 100)) + "% Swing";
+            return "Shuffle";
+        };
+        swingSlider_.onValueChange = [this]
+        {
+            if (onSwingChanged)
+                onSwingChanged(static_cast<float>(swingSlider_.getValue()));
+        };
+        addAndMakeVisible(swingSlider_);
+
         startTimerHz(30);
     }
 
@@ -321,6 +394,12 @@ public:
         if (slot >= 0 && slot < 9)
             volSliders_[static_cast<std::size_t>(slot)].setValue(
                 static_cast<double>(v), juce::dontSendNotification);
+    }
+
+    void setSwing(float v)
+    {
+        swingSlider_.setValue(static_cast<double>(juce::jlimit(0.f, 1.f, v)),
+                              juce::dontSendNotification);
     }
 
     const std::string& getSlotFilePath(int slot) const
@@ -469,25 +548,35 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        static constexpr int kTopH       = 18;  // page nav bar
-        static constexpr int kScrollH    = 12;  // scrollbar height
-        static constexpr int kLeftW      = 222;
-        static constexpr int kRightW     = 36;
-        static constexpr int kPad        = 3;
-        static constexpr int kViewSteps  = 32;  // always 32 steps visible
+        static constexpr int kTopH      = 18;   // page nav bar
+        static constexpr int kScrollH   = 12;   // scrollbar height
+        static constexpr int kLooperH   = 40;   // looper band height
+        static constexpr int kLeftW     = 222;
+        static constexpr int kRightW    = 36;
+        static constexpr int kPad       = 3;
+        static constexpr int kViewSteps = 32;
 
-        // Page navigation row
-        prevPageBtn_.setBounds(kLeftW + kPad,            1, 20, kTopH - 2);
-        pageLabel_  .setBounds(kLeftW + kPad + 22,       1, 80, kTopH - 2);
-        nextPageBtn_.setBounds(kLeftW + kPad + 104,      1, 20, kTopH - 2);
+        // Page navigation row + swing slider
+        prevPageBtn_.setBounds(kLeftW + kPad,           1, 20, kTopH - 2);
+        pageLabel_  .setBounds(kLeftW + kPad + 22,      1, 80, kTopH - 2);
+        nextPageBtn_.setBounds(kLeftW + kPad + 104,     1, 20, kTopH - 2);
+        swingLabel_ .setBounds(kLeftW + kPad + 128,     1, 42, kTopH - 2);
+        swingSlider_.setBounds(kLeftW + kPad + 172,     1, 110, kTopH - 2);
 
-        // Scrollbar — sous la grille, alignée sur la zone des steps
-        hScrollBar_.setBounds(kLeftW + kPad, H - kScrollH - 1,
+        // Looper band — very bottom
+        const int looperY = H - kLooperH;
+        looperRecBtn_     .setBounds(kPad,            looperY + 4, 42, kLooperH - 8);
+        looperClearBtn_   .setBounds(kPad + 46,       looperY + 4, 30, kLooperH - 8);
+        looperModeBtn_    .setBounds(kPad + 80,       looperY + 4, 36, kLooperH - 8);
+        looperStatusLabel_.setBounds(kPad + 120,      looperY + 4, W - kPad - 124, kLooperH - 8);
+
+        // Scrollbar — above looper band
+        hScrollBar_.setBounds(kLeftW + kPad, looperY - kScrollH - kPad,
                               W - kLeftW - kRightW - 2 * kPad, kScrollH);
         updateScrollBar();
 
         const int rowAreaY = kTopH + kPad;
-        const int rowAreaH = H - rowAreaY - kScrollH - kPad * 2;
+        const int rowAreaH = looperY - kScrollH - kPad * 2 - rowAreaY;
         const int rowH     = rowAreaH / 9;
         const int gridW    = W - kLeftW - kRightW - 2 * kPad;
         const int stepW    = gridW / kViewSteps;
@@ -501,9 +590,9 @@ public:
             loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
             loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
             sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
-            editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);  // nouveau
-            muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);  // décalé
-            soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);  // décalé
+            editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);
+            muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);
+            soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);
 
             for (int s = 0; s < kViewSteps; ++s)
             {
@@ -534,18 +623,24 @@ public:
 
     void paintOverChildren(juce::Graphics& g) override
     {
-        static constexpr int kLeftW  = 222;  // matches resized()
-        static constexpr int kRightW = 36;
-        static constexpr int kPad    = 3;
-        static constexpr int kTopH   = 18;
-        static constexpr int kScrollH = 12;
+        static constexpr int kLeftW     = 222;  // matches resized()
+        static constexpr int kRightW    = 36;
+        static constexpr int kPad       = 3;
+        static constexpr int kTopH      = 18;
+        static constexpr int kScrollH   = 12;
+        static constexpr int kLooperH   = 40;
         static constexpr int kViewSteps = 32;
 
-        const int W     = getWidth();
-        const int H     = getHeight();
-        const int gridW = W - kLeftW - kRightW - 2 * kPad;
-        const int rowH  = (H - kTopH - kPad - kScrollH - kPad * 2) / 9;
-        const int gridY = kTopH + kPad;
+        const int W      = getWidth();
+        const int H      = getHeight();
+        const int gridW  = W - kLeftW - kRightW - 2 * kPad;
+        const int looperY = H - kLooperH;
+        const int rowH   = (looperY - kScrollH - kPad * 2 - kTopH - kPad) / 9;
+        const int gridY  = kTopH + kPad;
+
+        // Looper band separator
+        g.setColour(SaxFXColours::cardBorder);
+        g.drawHorizontalLine(looperY - 1, 0.f, static_cast<float>(W));
 
         // ── Waveform preview + playhead (behind LCD label, in slot left zone) ──
         for (int t = 0; t < 9; ++t)
@@ -836,12 +931,14 @@ public:
         {
             static constexpr int kTopH    = 18;
             static constexpr int kScrollH = 12;
+            static constexpr int kLooperH = 40;
             static constexpr int kPad     = 3;
             static constexpr int kWfX     = kPad + 76;
             static constexpr int kWfW     = 60;
-            const int H    = getHeight();
-            const int rowH = (H - kTopH - kPad - kScrollH - kPad * 2) / 9;
-            const int gridY = kTopH + kPad;
+            const int H       = getHeight();
+            const int looperY = H - kLooperH;
+            const int rowH    = (looperY - kScrollH - kPad * 2 - kTopH - kPad) / 9;
+            const int gridY   = kTopH + kPad;
             for (int t = 0; t < 9; ++t)
             {
                 if (slotEnvelopes_[static_cast<std::size_t>(t)].empty()) continue;
@@ -910,6 +1007,70 @@ private:
         visualizer_.update(vuLevels_,
                            getInputRms ? getInputRms() : 0.f,
                            currentBpm_);
+
+        // ── Looper UI refresh ─────────────────────────────────────────────────
+        if (getLooperState)
+        {
+            const int st    = getLooperState();
+            const float bars = getLooperBars ? getLooperBars() : 0.f;
+
+            // 0=Idle, 1=Armed, 2=Recording, 3=Playing, 4=Overdubbing
+            switch (st)
+            {
+                case 0:  // Idle
+                    looperRecBtn_.setButtonText("REC");
+                    looperRecBtn_.setColour(juce::TextButton::textColourOffId,
+                                           juce::Colour(0xFFFF5555));
+                    looperStatusLabel_.setText("", juce::dontSendNotification);
+                    break;
+                case 1:  // Armed
+                    looperRecBtn_.setButtonText("ARMED");
+                    looperRecBtn_.setColour(juce::TextButton::textColourOffId,
+                                           juce::Colour(0xFFFFCC44));
+                    looperStatusLabel_.setText("en attente mesure...",
+                                              juce::dontSendNotification);
+                    break;
+                case 2:  // Recording
+                {
+                    looperRecBtn_.setButtonText("REC \xe2\x97\x8f");  // REC ●
+                    looperRecBtn_.setColour(juce::TextButton::textColourOffId,
+                                           juce::Colour(0xFFFF3333));
+                    const int recBars = static_cast<int>(std::ceil(bars));
+                    looperStatusLabel_.setText(
+                        juce::String::formatted("REC %.1f \xe2\x86\x92 %d bars", bars, recBars),
+                        juce::dontSendNotification);
+                    break;
+                }
+                case 3:  // Playing
+                    looperRecBtn_.setButtonText("\xe2\x96\xb6 LOOP");  // ▶ LOOP
+                    looperRecBtn_.setColour(juce::TextButton::textColourOffId,
+                                           juce::Colour(0xFF4CDFA8));
+                    looperStatusLabel_.setText(
+                        juce::String::formatted("%.0f bar%s", bars, bars > 1.5f ? "s" : ""),
+                        juce::dontSendNotification);
+                    break;
+                case 4:  // Overdubbing
+                    looperRecBtn_.setButtonText("\xe2\x8a\x95 OVR");  // ⊕ OVR
+                    looperRecBtn_.setColour(juce::TextButton::textColourOffId,
+                                           juce::Colour(0xFFFFAA00));
+                    looperStatusLabel_.setText(
+                        juce::String::formatted("OVR %.0f bars", bars),
+                        juce::dontSendNotification);
+                    break;
+                default: break;
+            }
+
+            // Sync mode button if looper externally knows the mode
+            if (getLooperIsTape)
+            {
+                const bool tape = getLooperIsTape();
+                if (looperModeBtn_.getToggleState() != tape)
+                {
+                    looperModeBtn_.setToggleState(tape, juce::dontSendNotification);
+                    looperModeBtn_.setButtonText(tape ? "TAPE" : "REP");
+                }
+            }
+        }
 
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
         if (seq_.isPlaying())
@@ -1000,6 +1161,21 @@ private:
         menu.addSeparator();
         menu.addItem(3, "Copy track");
         menu.addItem(4, "Paste track", hasPasteData);
+        menu.addSeparator();
+
+        // Type sub-menu (same entries as showTypeMenu, offset 100)
+        static const std::array<const char*, 9> kTypeNames {
+            "KICK", "SNR (Snare)", "HAT (Hi-hat)", "BASS",
+            "SYN (Synth)", "PAD", "PRC (Perc)", "LOOP (Drum loop)", "??? (Other)"
+        };
+        juce::PopupMenu typeSub;
+        typeSub.addSectionHeader("Forcer le type (S" + juce::String(slot + 1) + ")");
+        for (int i = 0; i < static_cast<int>(kTypeNames.size()); ++i)
+            typeSub.addItem(100 + i, kTypeNames[static_cast<std::size_t>(i)]);
+        typeSub.addSeparator();
+        typeSub.addItem(110, "Auto (annuler l'override)");
+        menu.addSubMenu("Forcer le type...", typeSub);
+
         menu.showMenuAsync(juce::PopupMenu::Options{},
             [this, slot](int result)
             {
@@ -1007,6 +1183,10 @@ private:
                 else if (result == 2) clearSlot(slot);
                 else if (result == 3 && onTrackCopyRequest)  onTrackCopyRequest(slot);
                 else if (result == 4 && onTrackPasteRequest) onTrackPasteRequest(slot);
+                else if (result >= 100 && result < 110 && onTypeOverrideChanged)
+                    onTypeOverrideChanged(slot, result - 100);
+                else if (result == 110 && onTypeOverrideChanged)
+                    onTypeOverrideChanged(slot, -1);
             });
     }
 
@@ -1133,14 +1313,16 @@ private:
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// Convert a Y coordinate to a track index (0-7), or -1 if outside rows.
+    /// Convert a Y coordinate to a track index (0-8), or -1 if outside rows.
     int trackIndexAtY(int y) const noexcept
     {
         static constexpr int kTopH    = 18;
         static constexpr int kPad     = 3;
         static constexpr int kScrollH = 12;
-        const int rowAreaY = kTopH + kPad;
-        const int rowAreaH = getHeight() - rowAreaY - kScrollH - kPad * 2;
+        static constexpr int kLooperH = 40;
+        const int rowAreaY  = kTopH + kPad;
+        const int looperY   = getHeight() - kLooperH;
+        const int rowAreaH  = looperY - kScrollH - kPad * 2 - rowAreaY;
         if (rowAreaH <= 0) return -1;
         const int rowH = rowAreaH / 9;
         if (rowH <= 0) return -1;
@@ -1222,6 +1404,16 @@ private:
 
     // Waveform preview data — 200-bin peak envelopes, set via setSlotWaveform()
     std::array<std::vector<float>, 9> slotEnvelopes_;
+
+    // Looper band
+    juce::TextButton looperRecBtn_;
+    juce::TextButton looperClearBtn_;
+    juce::TextButton looperModeBtn_;
+    juce::Label      looperStatusLabel_;
+
+    // Swing
+    juce::Slider swingSlider_;
+    juce::Label  swingLabel_;
 
     MusicVisualizerComponent visualizer_;
 

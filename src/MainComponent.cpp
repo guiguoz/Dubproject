@@ -136,6 +136,7 @@ MainComponent::MainComponent()
             stepSequencer_.setBpm(bpm);
             dspPipeline_.setBpm(bpm);
             serumHost_.setBpm(bpm);
+            looperEngine_.setBpm(bpm);
             stepSeqPanel_.setBpm(bpm);
             updateSidebarBpm(bpm);
         }
@@ -300,6 +301,7 @@ MainComponent::MainComponent()
         stepSequencer_.setBpm(bpm);
         dspPipeline_.setBpm(bpm);
         serumHost_.setBpm(bpm);
+        looperEngine_.setBpm(bpm);
         updateSidebarBpm(bpm);
     };
 
@@ -349,6 +351,24 @@ MainComponent::MainComponent()
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
     stepSeqPanel_.onMagicButtonPressed = nullptr;
+
+    // ── Looper ────────────────────────────────────────────────────────────────
+    stepSeqPanel_.onLooperPress        = [this] { looperEngine_.pressButton(); };
+    stepSeqPanel_.onLooperClear        = [this] { looperEngine_.clear(); };
+    stepSeqPanel_.onLooperModeChanged  = [this](bool tape)
+    {
+        looperEngine_.setOverdubMode(tape ? ::dsp::LooperEngine::OverdubMode::Tape
+                                          : ::dsp::LooperEngine::OverdubMode::Replace);
+    };
+    stepSeqPanel_.getLooperState  = [this] { return static_cast<int>(looperEngine_.getState()); };
+    stepSeqPanel_.getLooperBars   = [this] { return looperEngine_.getLoopBars(); };
+    stepSeqPanel_.getLooperIsTape = [this]
+    {
+        return looperEngine_.getOverdubMode() == ::dsp::LooperEngine::OverdubMode::Tape;
+    };
+
+    // ── Swing ─────────────────────────────────────────────────────────────────
+    stepSeqPanel_.onSwingChanged = [this](float v) { stepSequencer_.setSwing(v); };
 
     // Mise à jour des tags de type dans l'UI quand la détection est terminée
     samplerEngine_.onTypesDetected = [this]
@@ -731,6 +751,7 @@ MainComponent::MainComponent()
     stepSequencer_.setBpm(120.f);
     dspPipeline_.setBpm(120.f);
     serumHost_.setBpm(120.f);
+    looperEngine_.setBpm(120.f);
 
     // Auto-lancement IA au démarrage (après init audio)
     juce::MessageManager::callAsync([this] { triggerAI(); });
@@ -1290,6 +1311,9 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         data.midiLearnEntries.push_back(e);
     }
 
+    // ── Swing global ──────────────────────────────────────────────────────────
+    data.swing = stepSequencer_.getSwing();
+
     // ── v14 — Serum preset state ──────────────────────────────────────────────
     if (serumHost_.isLoaded())
     {
@@ -1419,6 +1443,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     stepSequencer_.setBpm(bpm);
     dspPipeline_.setBpm(bpm);
     serumHost_.setBpm(bpm);
+    looperEngine_.setBpm(bpm);
     stepSeqPanel_.setBpm(bpm);
     updateSidebarBpm(bpm);
 
@@ -1588,6 +1613,10 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         }
     }
 
+    // ── Swing (absent dans anciens projets → 0 = straight) ───────────────────
+    stepSequencer_.setSwing(data.swing);
+    stepSeqPanel_.setSwing(data.swing);
+
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 
     // Re-lancer l'IA après chargement de projet
@@ -1635,6 +1664,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     currentBufferSize_ = samplesPerBlockExpected;
 
     stepSequencer_.prepare(sampleRate);
+    looperEngine_.prepare(sampleRate);
     samplerEngine_.setSampleRate(sampleRate);
     dspPipeline_.prepare(sampleRate, samplesPerBlockExpected);
     serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
@@ -1674,7 +1704,20 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     // Drain EWI MIDI for this block and forward to Serum synth
     ewiMidiBuffer_.clear();
     midiManager_.consumeEwiMidi(ewiMidiBuffer_, numSamples);
+
+    // Capture beat phase BEFORE step sequencer advances it (used by looper for bar detection)
+    const double looperBeatPhase = stepSequencer_.getCurrentPhase();
+
     serumHost_.processBlock(ewiMidiBuffer_);
+
+    // Looper: process Serum output in-place (mixes loop playback, records input)
+    if (serumHost_.isLoaded())
+    {
+        auto& sb = serumHost_.getOutputBuffer();
+        float* sLw = sb.getWritePointer(0);
+        float* sRw = sb.getWritePointer(1);
+        looperEngine_.process(sLw, sRw, sLw, sRw, numSamples, looperBeatPhase);
+    }
 
     // Step sequencer — triggers sampler slots at step boundaries (before DSP mix)
     stepSequencer_.process(numSamples, dspPipeline_.getSampler());

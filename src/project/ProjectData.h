@@ -110,6 +110,8 @@ struct ProjectData
     std::vector<MidiLearnEntry>      midiLearnEntries;
     // v14 — Serum VST3 preset state (base64-encoded binary blob; empty = no Serum)
     std::string                      serumState;
+    // swing global [0..1] : 0=straight, 0.5=swing, 1.0=shuffle (absent → 0)
+    float                            swing { 0.f };
 };
 
 } // namespace project

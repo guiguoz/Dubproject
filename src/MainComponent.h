@@ -2,6 +2,7 @@
 
 #include "dsp/DspPipeline.h"
 #include "dsp/FeatureExtractor.h"
+#include "dsp/LooperEngine.h"
 #include "dsp/SceneManager.h"
 #include "dsp/SerumHost.h"
 #include "dsp/SmartSamplerEngine.h"
@@ -76,6 +77,7 @@ private:
     ::dsp::SerumHost          serumHost_;
     ::dsp::SmartSamplerEngine samplerEngine_ { dspPipeline_.getSampler() };
     ::dsp::StepSequencer      stepSequencer_;
+    ::dsp::LooperEngine       looperEngine_;
     midi::MidiManager         midiManager_{dspPipeline_.getMidiEventQueue()};
     juce::MidiBuffer          ewiMidiBuffer_;
 
@@ -84,7 +86,7 @@ private:
     std::vector<float>       serumSnapCopy_;        // GUI thread only — buffer réutilisé pour éviter alloc par tick
     juce::SpinLock           serumSnapLock_;
     bool                     serumSnapReady_       { false };
-    std::atomic<float>       serumGainSmooth_      { 0.5f };  // audio thread r/w + GUI r
+    std::atomic<float>       serumGainSmooth_      { 1.0f };  // audio thread r/w + GUI r
     std::atomic<float>       serumUserGain_        { 1.0f };  // MIDI learn multiplier (GUI w, audio r)
     std::atomic<::dsp::ContentCategory> serumContentType_ { ::dsp::ContentCategory::SYNTH };
     ::dsp::MixFeatures       serumMixFeatures_ {};   // GUI thread only

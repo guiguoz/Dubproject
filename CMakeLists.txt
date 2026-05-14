@@ -81,6 +81,7 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/WsolaShifter.cpp
     src/dsp/Sampler.cpp
     src/dsp/DspPipeline.cpp
+    src/dsp/LooperEngine.cpp
     src/dsp/BpmDetector.cpp
     src/dsp/PingPongDelay.cpp
     src/dsp/AiContentClassifier.cpp
