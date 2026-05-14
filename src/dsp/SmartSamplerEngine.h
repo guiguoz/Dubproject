@@ -938,9 +938,16 @@ private:
 
         if (numLoaded == 0) return;
 
-        // Store detected types (use override when set)
+        // Apply manual overrides before any processing — ensures Phase 2 EQ, gain,
+        // and sidechain all use the semantically correct type even when the classifier
+        // mis-identifies a slot (e.g. kick classified as bass on some scenes).
         for (int i = 0; i < kSamplerSlots; ++i)
-            if (loaded[i]) detectedTypes_[static_cast<std::size_t>(i)] = types[i];
+        {
+            if (!loaded[i]) continue;
+            if (hasOverride_[static_cast<std::size_t>(i)])
+                types[i] = overrideTypes_[static_cast<std::size_t>(i)];
+            detectedTypes_[static_cast<std::size_t>(i)] = types[i];
+        }
 
         // Notify UI that types are available (message thread)
         {
@@ -1147,28 +1154,30 @@ private:
 
                 // Gain calibration: true-peak (4× oversample) + densityScale + sax headroom
                 const float truePeak = calculateTruePeak(pcms[i]);
-                const float gain = juce::jlimit(0.f, 1.5f,
+                float gain = juce::jlimit(0.f, 1.5f,
                     (targetGainForType(effectiveType) * densityScale * saxClearance(effectiveType))
                     / std::max(truePeak, 0.001f));
+
+                // Serum masking compensation (heuristic path — mirrors AI path behaviour).
+                // Duck PAD/SYNTH/LOOP slots that share spectral space with Serum.
+                // KICK/BASS/SNARE/HIHAT intentionally excluded to preserve groove.
+                if (serumActive_ && serumFeatures_.rms > 0.02f)
+                {
+                    const bool isBed = (effectiveType == ContentType::PAD
+                                     || effectiveType == ContentType::SYNTH
+                                     || effectiveType == ContentType::LOOP);
+                    if (isBed && serumFeatures_.spectralCentroid > 0.f && centroids[i] > 0.f)
+                    {
+                        const float ratio = centroids[i] / (serumFeatures_.spectralCentroid + 1e-6f);
+                        const float prox  = std::clamp(1.f - std::abs(std::log2(ratio)), 0.f, 1.f);
+                        const float depth = std::clamp((serumFeatures_.rms - 0.02f) * 3.f, 0.f, 0.20f);
+                        gain = std::max(gain * (1.f - prox * depth), 0.05f);
+                    }
+                }
 
                 sampler_.reloadSlotData(i, std::move(pcms[i]));
                 sampler_.setSlotGain(i, gain);
                 computedGains[i] = gain;
-            }
-        }
-
-        // Phase 3: Setup real-time sidechain (KICK → BASS/SYNTH)
-        sampler_.clearSidechain();
-        for (int kick = 0; kick < kSamplerSlots; ++kick)
-        {
-            if (!loaded[kick] || types[kick] != ContentType::KICK) continue;
-            for (int tgt = 0; tgt < kSamplerSlots; ++tgt)
-            {
-                if (!loaded[tgt] || tgt == kick) continue;
-                if (types[tgt] == ContentType::BASS
-                 || types[tgt] == ContentType::SYNTH
-                 || types[tgt] == ContentType::PAD)
-                    sampler_.setSidechainPair(kick, tgt);
             }
         }
 

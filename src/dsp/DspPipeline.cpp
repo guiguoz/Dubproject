@@ -20,6 +20,11 @@ void DspPipeline::prepare(double sampleRate, int maxBlockSize) noexcept
     tempSendR_.assign(std::max(maxBlockSize, 256), 0.0f);
     monoSubFilter_.prepare(sampleRate);
     dubDelay_.setBpm(bpm_.load(std::memory_order_relaxed));
+
+    const float sr    = static_cast<float>(sampleRate);
+    fxDuckAttCoeff_   = std::exp(-4.6052f / (0.002f * sr));   // T99 ≈ 2 ms
+    fxDuckRelCoeff_   = std::exp(-4.6052f / (0.150f * sr));   // T99 ≈ 150 ms
+    fxDuckGain_       = 1.0f;
 }
 
 void DspPipeline::reset() noexcept
@@ -29,6 +34,7 @@ void DspPipeline::reset() noexcept
     dubDelay_.reset();
     rmsRunning_ = 0.0f;
     smoothDuck_ = 1.0f;
+    fxDuckGain_ = 1.0f;
     monoSubFilter_.reset();
 }
 
@@ -164,12 +170,42 @@ void DspPipeline::processStereo(float* left, float* right, int numSamples) noexc
             currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
         }
 
+        // FX sidechain: kick (slot 2) peak ducks delay/reverb sends
+        // — attack 2 ms, release 150 ms; depth up to –9 dB at full kick peak
+        {
+            constexpr float kThresh = 0.15f;
+            constexpr float kDepth  = 0.65f;
+            const float kickPeak = sampler_.getSlotOutputPeak(2);
+            const float target   = (kickPeak > kThresh)
+                ? 1.f - std::min(1.f, (kickPeak - kThresh) / (1.f - kThresh)) * kDepth
+                : 1.f;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float coeff = (target < fxDuckGain_) ? fxDuckAttCoeff_ : fxDuckRelCoeff_;
+                fxDuckGain_    = target + coeff * (fxDuckGain_ - target);
+                tempSendL_[i] *= fxDuckGain_;
+                tempSendR_[i] *= fxDuckGain_;
+            }
+        }
+
         dubDelay_.processAdd(tempSendL_.data(), tempSendR_.data(), left, right, numSamples);
         pingPongDelay_.processAdd(tempSendL_.data(), tempSendR_.data(), left, right, numSamples);
     }
     else
     {
         currentDuckingGain_.store(1.0f, std::memory_order_relaxed);
+    }
+
+    // Serum direct signal — added after delays so it's dry in the main bus
+    // but its reverb tail (via sends above) is spatialized and kick-ducked.
+    if (serumL_ != nullptr && serumN_ >= numSamples)
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            left [i] += serumL_[i] * serumGain_;
+            right[i] += serumR_[i] * serumGain_;
+        }
+        serumL_ = serumR_ = nullptr;
     }
 
     // Mono-sub < 120 Hz (PA mono compatibility)

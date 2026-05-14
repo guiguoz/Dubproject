@@ -94,6 +94,16 @@ class DspPipeline
             dst[i] = visBuf_[(head - n + i + kVisBufSize * 2) % kVisBufSize];
     }
 
+    // Called from MainComponent (audio thread) before processStereo().
+    // Serum buffers are injected into the FX chain (delay sends + direct).
+    void setSerumInput(const float* L, const float* R, int n, float gain) noexcept
+    {
+        serumL_    = L;
+        serumR_    = R;
+        serumN_    = n;
+        serumGain_ = gain;
+    }
+
   private:
     Sampler       sampler_;
     BpmDetector   bpmDetector_;
@@ -120,6 +130,17 @@ class DspPipeline
     float              rmsRunning_ { 0.0f };
     std::atomic<float> rmsLevel_   { 0.0f };
     static constexpr float kRmsAlpha = 0.9995f;
+
+    // FX sidechain: kick peak ducks delay/reverb sends (coeffs computed in prepare())
+    float fxDuckGain_     { 1.0f };
+    float fxDuckAttCoeff_ { 0.0f };   // ~2 ms attack
+    float fxDuckRelCoeff_ { 0.0f };   // ~150 ms release
+
+    // Serum input — set by MainComponent before processStereo(), consumed inside
+    const float* serumL_    { nullptr };
+    const float* serumR_    { nullptr };
+    int          serumN_    { 0 };
+    float        serumGain_ { 1.0f };
 
     // Visualizer ring buffer: written on audio thread (relaxed), read by GUI
     std::array<float, kVisBufSize> visBuf_         {};

@@ -2696,6 +2696,9 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // Build the step buffer for the new scene (préparé atomiquement via double-buffer).
     ::dsp::StepSequencer::StepBuf nextStepBuf;
 
+    // Reset scroll so setStepState() calls below are not filtered out by a stale offset
+    stepSeqPanel_.resetViewToStart();
+
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 9; ++i)
     {
@@ -2778,6 +2781,19 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 }
             }
         }
+    }
+
+    // Second pass: re-apply step states directly from scene data.
+    // The setTrackStepCount() calls inside the loop above invoke refreshStepButtons(),
+    // which reads seq_.getStep() — still returning old-scene data because the double-
+    // buffer has not been flipped yet. This overwrites the setStepState() results for
+    // all but the last track. Reading sc.steps[] directly avoids the stale seq_ data.
+    for (int i = 0; i < 9; ++i)
+    {
+        const std::size_t sidx2   = static_cast<std::size_t>(i);
+        const int         nSteps2 = sc.trackBarCounts[sidx2] * 16;
+        for (int s = 0; s < nSteps2; ++s)
+            stepSeqPanel_.setStepState(i, s, sc.steps[sidx2][static_cast<std::size_t>(s)]);
     }
 
     // Swap atomique des patterns via double-buffer → audio lit le nouveau buffer

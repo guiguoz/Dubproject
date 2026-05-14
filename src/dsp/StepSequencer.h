@@ -237,15 +237,16 @@ public:
             const bool atSceneBoundary = (transLen > 0 && globalStep % transLen == 0);
 
             if (atSceneBoundary)
-            {
                 sceneEndFlag_.store(true, std::memory_order_release);
-            }
-            else
+
+            // Always trigger regardless of scene boundary: the bass/kick on step 0
+            // must play even when the transition flag fires at that same step.
             {
                 const StepBuf& active = swapBufs_[activeBuf_.load(std::memory_order_relaxed)];
                 for (int track = 0; track < kTracks; ++track)
                 {
                     const int trackSteps = active.trackStepCount[track];
+                    if (trackSteps <= 0) continue;
                     const int trackStep  = globalStep % trackSteps;
                     if (active.steps[track][trackStep])
                         sampler.trigger(track);

@@ -376,6 +376,14 @@ public:
         resized();
     }
 
+    void resetViewToStart()
+    {
+        viewOffsetSteps_ = 0;
+        updateScrollBar();
+        updatePageLabel();
+        refreshStepButtons();
+    }
+
     void setBpm(float bpm)
     {
         currentBpm_ = juce::jlimit(kMinBpm, kMaxBpm, bpm);
