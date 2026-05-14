@@ -108,6 +108,8 @@ struct ProjectData
     int                              dubDelayDiv      { 1 };  // GridDiv::Quarter
     // v12 — MIDI learn bindings
     std::vector<MidiLearnEntry>      midiLearnEntries;
+    // v14 — Serum VST3 preset state (base64-encoded binary blob; empty = no Serum)
+    std::string                      serumState;
 };
 
 } // namespace project

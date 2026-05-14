@@ -214,6 +214,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         }
     }
 
+    // ── v14 — Serum preset state (absent = empty, Serum not used) ────────────
+    data.serumState = getString(root, "serumState");
+
     return data;
 }
 
@@ -386,6 +389,10 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         }
         root->setProperty("midiLearn", learnArr);
     }
+
+    // ── v14 — Serum preset state (omitted when empty = no Serum in project) ──
+    if (!data.serumState.empty())
+        root->setProperty("serumState", juce::String(data.serumState));
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);
