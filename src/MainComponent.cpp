@@ -135,6 +135,7 @@ MainComponent::MainComponent()
         {
             stepSequencer_.setBpm(bpm);
             dspPipeline_.setBpm(bpm);
+            serumHost_.setBpm(bpm);
             stepSeqPanel_.setBpm(bpm);
             updateSidebarBpm(bpm);
         }
@@ -298,12 +299,19 @@ MainComponent::MainComponent()
     {
         stepSequencer_.setBpm(bpm);
         dspPipeline_.setBpm(bpm);
+        serumHost_.setBpm(bpm);
         updateSidebarBpm(bpm);
     };
 
     // Play/stop — StepSequencerPanel already calls seq_.setPlaying(); stop samples immediately
     stepSeqPanel_.onPlayChanged = [this](bool playing)
     {
+        serumHost_.setIsPlaying(playing);
+        if (playing)
+            serumHost_.resetPlaybackPosition();
+        else
+            serumHost_.sendAllNotesOff();
+
         if (!playing)
         {
             dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Normal);
@@ -722,6 +730,7 @@ MainComponent::MainComponent()
     // Initial BPM
     stepSequencer_.setBpm(120.f);
     dspPipeline_.setBpm(120.f);
+    serumHost_.setBpm(120.f);
 
     // Auto-lancement IA au démarrage (après init audio)
     juce::MessageManager::callAsync([this] { triggerAI(); });
@@ -1281,6 +1290,15 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         data.midiLearnEntries.push_back(e);
     }
 
+    // ── v14 — Serum preset state ──────────────────────────────────────────────
+    if (serumHost_.isLoaded())
+    {
+        juce::MemoryBlock block;
+        serumHost_.getState(block);
+        if (!block.isEmpty())
+            data.serumState = block.toBase64Encoding().toStdString();
+    }
+
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
     else
@@ -1400,6 +1418,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
     stepSequencer_.setBpm(bpm);
     dspPipeline_.setBpm(bpm);
+    serumHost_.setBpm(bpm);
     stepSeqPanel_.setBpm(bpm);
     updateSidebarBpm(bpm);
 
@@ -1548,6 +1567,27 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateMidiLearnUI();
     }
 
+    // ── v14 — Serum preset state ──────────────────────────────────────────────
+    if (!data.serumState.empty())
+    {
+        if (serumHost_.isLoaded())
+        {
+            juce::MemoryBlock block;
+            if (block.fromBase64Encoding (juce::String (data.serumState)))
+            {
+                serumHost_.setState (block.getData(), static_cast<int>(block.getSize()));
+            }
+            else
+            {
+                juce::Logger::writeToLog("SerumState: base64 decode failed — preset not restored");
+            }
+        }
+        else
+        {
+            juce::Logger::writeToLog("SerumState: Serum not loaded — preset not restored (load Serum manually)");
+        }
+    }
+
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 
     // Re-lancer l'IA après chargement de projet
@@ -1644,9 +1684,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         // ── Stereo path ───────────────────────────────────────────────────────
         float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
 
-        dspPipeline_.processStereo(left, right, numSamples);
-
-        // ── Serum mix + AI gain rider ─────────────────────────────────────────
+        // ── Serum gain rider (avant processStereo — Serum injecté dans la chaîne FX)
         if (serumHost_.isLoaded())
         {
             const auto& sb = serumHost_.getOutputBuffer();
@@ -1669,13 +1707,13 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                 }
             }
 
-            // Target RMS per content type (empirical targets for live mix)
+            // Target RMS — volontairement en dessous du sampler pour ne pas masquer
             float targetRms;
             switch (serumContentType_.load(std::memory_order_relaxed))
             {
-                case ::dsp::ContentCategory::BASS:  targetRms = 0.09f; break; // ~-21 dBFS
-                case ::dsp::ContentCategory::PAD:   targetRms = 0.10f; break; // ~-20 dBFS
-                default:                            targetRms = 0.12f; break; // ~-18 dBFS (SYNTH/lead)
+                case ::dsp::ContentCategory::BASS:  targetRms = 0.055f; break; // ~-25 dBFS
+                case ::dsp::ContentCategory::PAD:   targetRms = 0.063f; break; // ~-24 dBFS
+                default:                            targetRms = 0.075f; break; // ~-22 dBFS (SYNTH/lead)
             }
 
             // Measure Serum RMS this block
@@ -1689,31 +1727,21 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             const float mixRms = dspPipeline_.getLastRms();
             if (mixRms > 0.08f)
                 targetGain *= std::max(0.5f, 1.f - (mixRms - 0.08f) * 2.5f);
-            targetGain = std::clamp(targetGain, 0.15f, 2.5f);
+            // Clamp serré : pas de boost gratuit au-dessus de l'unité
+            targetGain = std::clamp(targetGain, 0.25f, 1.0f);
 
-            // EMA smooth (~150 ms at 48kHz/512) — prevents gain pumping
+            // EMA smooth (~150 ms) — prevents gain pumping
             static constexpr float kAlpha = 0.997f;
             const float prevG = serumGainSmooth_.load(std::memory_order_relaxed);
             const float newG  = kAlpha * prevG + (1.f - kAlpha) * targetGain;
             serumGainSmooth_.store(newG, std::memory_order_relaxed);
-            const float userG = serumUserGain_.load(std::memory_order_relaxed);
-            serumHost_.setOutputGain(newG * userG);
+            const float g = newG * serumUserGain_.load(std::memory_order_relaxed);
 
-            // Mix into main stereo bus
-            const float g = newG * userG;
-            for (int i = 0; i < numSamples; ++i)
-            {
-                left [i] += sL[i] * g;
-                right[i] += sR[i] * g;
-            }
+            // Passer les buffers Serum dans la pipeline — FX, sidechain, limiter inclus
+            dspPipeline_.setSerumInput(sL, sR, numSamples, g);
         }
 
-        // ── Final master limiter (sampler + Serum combined) ───────────────────
-        {
-            auto& lim = dspPipeline_.getMasterLimiter();
-            lim.process(left,  numSamples);
-            lim.process(right, numSamples);
-        }
+        dspPipeline_.processStereo(left, right, numSamples);
 
         // Apply master output gain to both channels
         const float outGain = outputGain_.load(std::memory_order_relaxed);
@@ -1800,6 +1828,10 @@ void MainComponent::loadSerumPlugin(const juce::String& vst3Path)
     if (serumHost_.load(vst3Path, currentSampleRate_, currentBufferSize_, &err))
     {
         serumStatusLabel_.setText(serumHost_.getPluginName(), juce::dontSendNotification);
+        const int latency = serumHost_.getLatencySamples();
+        juce::Logger::writeToLog("Serum latency: " + juce::String(latency) + " samples ("
+            + juce::String(latency * 1000.0 / currentSampleRate_, 1) + " ms)"
+            + (latency > 0 ? " — no compensation" : ""));
         openSerumEditor();
     }
     else

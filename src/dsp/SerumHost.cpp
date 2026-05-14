@@ -55,6 +55,15 @@ bool SerumHost::load(const juce::String& vst3Path, double sampleRate, int blockS
     plugin_->prepareToPlay(sampleRate_, blockSize_);
     serumBuffer_.setSize(2, blockSize_, false, true, false);
 
+    bpmPlayHead_.sampleRate.store (sampleRate_, std::memory_order_relaxed);
+    bpmPlayHead_.samplePos = 0;
+    resetPositionFlag_.store (false, std::memory_order_relaxed);
+    allNotesOffPending_.store (false, std::memory_order_relaxed);
+    pendingPitchBendRange_.store (12, std::memory_order_relaxed);  // EWI default ±12 ST
+    plugin_->setPlayHead (&bpmPlayHead_);
+
+    DBG("SerumHost: latency = " << plugin_->getLatencySamples() << " samples");
+
     plugin_->addListener(this);
     presetNameDirty_ = true;
 
@@ -78,6 +87,7 @@ void SerumHost::unload()
     if (plugin_ != nullptr)
     {
         plugin_->removeListener(this);
+        plugin_->setPlayHead (nullptr);
         plugin_->releaseResources();
         plugin_.reset();
     }
@@ -99,8 +109,39 @@ void SerumHost::processBlock(juce::MidiBuffer& midi) noexcept
         return;
     }
 
+    if (resetPositionFlag_.exchange (false, std::memory_order_relaxed))
+        bpmPlayHead_.samplePos = 0;
+
+    // Pending MIDI injections (message thread → audio thread via atomics)
+    {
+        juce::MidiBuffer extra;
+
+        if (allNotesOffPending_.exchange (false, std::memory_order_relaxed))
+        {
+            for (int ch = 1; ch <= 16; ++ch)
+                extra.addEvent (juce::MidiMessage::allNotesOff (ch), 0);
+        }
+
+        const int pbr = pendingPitchBendRange_.exchange (-1, std::memory_order_relaxed);
+        if (pbr >= 0)
+        {
+            // RPN 0 = Pitch Bend Sensitivity
+            extra.addEvent (juce::MidiMessage::controllerEvent (1, 101,   0), 0);
+            extra.addEvent (juce::MidiMessage::controllerEvent (1, 100,   0), 0);
+            extra.addEvent (juce::MidiMessage::controllerEvent (1,   6, pbr), 0);
+            extra.addEvent (juce::MidiMessage::controllerEvent (1,  38,   0), 0);
+            extra.addEvent (juce::MidiMessage::controllerEvent (1, 101, 127), 0);  // RPN null
+            extra.addEvent (juce::MidiMessage::controllerEvent (1, 100, 127), 0);
+        }
+
+        for (const auto meta : extra)
+            midi.addEvent (meta.getMessage(), meta.samplePosition);
+    }
+
     serumBuffer_.clear();
     plugin_->processBlock(serumBuffer_, midi);
+
+    bpmPlayHead_.samplePos += serumBuffer_.getNumSamples();
 
     const float gain = outputGain_.load(std::memory_order_relaxed);
     if (gain != 1.0f)

@@ -81,7 +81,75 @@ public:
     // Called automatically via AudioProcessorListener; exposed for testing.
     void markPresetNameDirty() { presetNameDirty_ = true; }
 
+    void setBpm (float bpm) noexcept
+    {
+        bpmPlayHead_.bpm.store (static_cast<double> (bpm), std::memory_order_relaxed);
+    }
+
+    void setIsPlaying (bool playing) noexcept
+    {
+        bpmPlayHead_.isPlaying.store (playing, std::memory_order_relaxed);
+    }
+
+    // Remet la position PPQ à zéro — resync LFOs/arp Serum au prochain bloc
+    void resetPlaybackPosition() noexcept
+    {
+        resetPositionFlag_.store (true, std::memory_order_relaxed);
+    }
+
+    // Injecte CC 123 (All Notes Off) sur les 16 canaux au prochain processBlock.
+    // Thread-safe : peut être appelé depuis le message thread.
+    void sendAllNotesOff() noexcept
+    {
+        allNotesOffPending_.store (true, std::memory_order_relaxed);
+    }
+
+    // Envoie un RPN Pitch Bend Sensitivity (semitones) au prochain processBlock.
+    // Appelé automatiquement avec 12 ST après load(). Override si l'EWI est configuré autrement.
+    void setPitchBendRange (int semitones) noexcept
+    {
+        pendingPitchBendRange_.store (semitones, std::memory_order_relaxed);
+    }
+
+    // Latence introduite par le plugin (oversampling etc.). 0 si non chargé.
+    int getLatencySamples() const noexcept
+    {
+        return (plugin_ != nullptr) ? plugin_->getLatencySamples() : 0;
+    }
+
 private:
+    // ── BPM PlayHead — audio thread reads, GUI thread writes ─────────────────
+    struct BpmPlayHead : juce::AudioPlayHead
+    {
+        std::atomic<double> bpm        { 120.0 };
+        std::atomic<double> sampleRate { 48000.0 };
+        std::atomic<bool>   isPlaying  { true };
+        int64_t             samplePos  { 0 };   // audio thread only
+
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            PositionInfo pos;
+            const double bpmVal = bpm.load (std::memory_order_relaxed);
+            const double sr     = sampleRate.load (std::memory_order_relaxed);
+
+            pos.setBpm (bpmVal);
+            pos.setIsPlaying (isPlaying.load (std::memory_order_relaxed));
+            pos.setIsLooping (false);
+            pos.setTimeSignature (TimeSignature { 4, 4 });
+
+            const double ppq = samplePos / sr * bpmVal / 60.0;
+            pos.setPpqPosition (ppq);
+            pos.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+            pos.setTimeInSamples (samplePos);
+
+            return pos;
+        }
+    } bpmPlayHead_;
+
+    std::atomic<bool> resetPositionFlag_     { false };
+    std::atomic<bool> allNotesOffPending_    { false };
+    std::atomic<int>  pendingPitchBendRange_ { -1 };
+
     juce::AudioPluginFormatManager             formatManager_;
     std::unique_ptr<juce::AudioPluginInstance> plugin_;
     juce::AudioBuffer<float>                   serumBuffer_;
