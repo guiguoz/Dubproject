@@ -234,7 +234,7 @@ public:
             stepAtomic_.store(globalStep, std::memory_order_relaxed);
 
             const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
-            const bool atSceneBoundary = (transLen > 0 && globalStep % transLen == 0);
+            const bool atSceneBoundary = (transLen > 0 && globalStep % transLen == transLen - 1);
 
             if (atSceneBoundary)
                 sceneEndFlag_.store(true, std::memory_order_release);

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Colours.h"
-#include "MusicVisualizerComponent.h"
 #include "NeonButton.h"
 #include "dsp/StepSequencer.h"
 #include "dsp/Sampler.h"
@@ -274,9 +273,6 @@ public:
         hScrollBar_.addListener(this);
         addAndMakeVisible(hScrollBar_);
 
-        addAndMakeVisible(visualizer_);
-        visualizer_.toBack();
-
         // ── Looper band ───────────────────────────────────────────────────────
         looperRecBtn_.setButtonText("REC");
         looperRecBtn_.setColour(juce::TextButton::buttonColourId,  SaxFXColours::cardBody);
@@ -342,12 +338,6 @@ public:
     }
 
     ~StepSequencerPanel() override { stopTimer(); }
-
-    /// Wires the visualizer audio provider (called once from MainComponent after init).
-    void setVisProvider(std::function<void(float*, int)> fn)
-    {
-        visualizer_.setAudioProvider(std::move(fn));
-    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -551,8 +541,6 @@ public:
 
     void resized() override
     {
-        visualizer_.setBounds(getLocalBounds());
-
         const int W = getWidth();
         const int H = getHeight();
 
@@ -1011,11 +999,6 @@ private:
                 duckingLevel_ = duckingLevel_ * 0.85f + targetGain * 0.15f;
         }
 
-        // Update visualizer with current levels, input RMS and BPM
-        visualizer_.update(vuLevels_,
-                           getInputRms ? getInputRms() : 0.f,
-                           currentBpm_);
-
         // ── Looper UI refresh ─────────────────────────────────────────────────
         if (getLooperState)
         {
@@ -1422,8 +1405,6 @@ private:
     // Swing
     juce::Slider swingSlider_;
     juce::Label  swingLabel_;
-
-    MusicVisualizerComponent visualizer_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
 };

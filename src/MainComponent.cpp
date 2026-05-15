@@ -335,9 +335,10 @@ MainComponent::MainComponent()
     {
         auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
         sc.userGains[static_cast<std::size_t>(slot)] = userGain;
-        const auto ms = samplerEngine_.getSlotMixState(slot);
-        const float aiGain = ms.active ? ms.gain : 1.0f;
-        dspPipeline_.getSampler().setSlotGain(slot, aiGain * userGain);
+        // Contrôle direct : le slider fixe le gain de sortie final.
+        // Le gain IA (ms.gain) peut être très petit si l'ONNX sous-estime un slot —
+        // le multiplier ici plafonnerait le slider (hihat inaudible malgré volume élevé).
+        dspPipeline_.getSampler().setSlotGain(slot, userGain);
     };
 
     // Mute per slot — relancer le magic mix ici causait une perte de gain sur les autres
@@ -517,10 +518,12 @@ MainComponent::MainComponent()
             {
                 const auto ms = samplerEngine_.getSlotMixState(i);
                 if (!ms.active) continue;
+                if (ms.gain <= 0.f) continue;   // ONNX retourne 0 → garder le gain existant
                 const std::size_t idx = static_cast<std::size_t>(i);
-                sc.gains[idx] = ms.gain;
-                dspPipeline_.getSampler().setSlotGain(i, ms.gain * sc.userGains[idx]);
-                stepSeqPanel_.setSlotVolume(i, sc.userGains[idx]);
+                sc.gains[idx]     = ms.gain;    // référence/diagnostique uniquement
+                sc.userGains[idx] = ms.gain;    // le gain IA devient le point de départ du fader
+                dspPipeline_.getSampler().setSlotGain(i, ms.gain);
+                stepSeqPanel_.setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
             }
         }
 
@@ -644,9 +647,6 @@ MainComponent::MainComponent()
         return dspPipeline_.getLastRms();
     };
 
-    stepSeqPanel_.setVisProvider([this](float* dst, int n) {
-        dspPipeline_.copyVisSamples(dst, n);
-    });
 
     addAndMakeVisible(stepSeqPanel_);
 
@@ -2771,7 +2771,16 @@ void MainComponent::applyScene(int idx, int fromIdx)
         }
 
         dspPipeline_.getSampler().setSlotMuted    (i, sc.mutes[i]);
-        dspPipeline_.getSampler().setSlotGain     (i, sc.gains[sidx] * sc.userGains[sidx]);
+        // userGains est le seul contrôle de volume : sc.gains (calibration IA) y est déjà intégré
+        // dès qu'onDone tourne (onDone écrit sc.userGains = ms.gain). On ne multiplie plus les deux
+        // pour éviter que les gains IA très faibles (hihat 0.09, snare 0.22) n'écrasent le fader.
+        // Fallback : si userGains est nul (projet pré-IA), garder le gain courant ou 0.5.
+        const float targetGain = sc.userGains[sidx] > 0.001f
+            ? sc.userGains[sidx]
+            : (gainsBeforeScene[static_cast<std::size_t>(i)] > 0.001f
+                ? gainsBeforeScene[static_cast<std::size_t>(i)]
+                : 0.5f);
+        dspPipeline_.getSampler().setSlotGain     (i, targetGain);
         dspPipeline_.getSampler().setSlotDelaySend(i, sc.delaySends[sidx]);
         stepSeqPanel_.setSlotMuted (i, sc.mutes[i]);
         stepSeqPanel_.setSlotVolume(i, sc.userGains[sidx]);
@@ -2822,17 +2831,24 @@ void MainComponent::applyScene(int idx, int fromIdx)
         std::array<float, 9> targetGains_local {};
         for (int i = 0; i < 9; ++i)
             targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
-        // Réinitialiser les gains au départ pour que le crossfade parte de la bonne valeur
+        // Reset les slots existants à leur gain de départ pour que le crossfade parte
+        // de la bonne valeur. Les nouveaux slots (gainsBeforeScene≈0, target>0) sont
+        // exclus du reset : leur gain cible (écrit ligne 2783) reste actif dès le flip,
+        // sinon le crossfade partirait de 0 et noierait l'attaque (kick inaudible).
         for (int i = 0; i < 9; ++i)
-            dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
+            if (gainsBeforeScene[i] >= 0.001f || targetGains_local[i] < 0.001f)
+                dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
         {
             const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
             const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
             const float toEnergy   = sceneManager_.getSceneEnergy(idx);
 
-            // Floor –60 dB sur les slots qui naissent, uniquement pour les profils
-            // lents (Musical→Calme ou Calme→Calme) où une rampe depuis 0 serait molle.
+            // Nouveaux slots : start == target → pas de fondu → l'attaque est préservée.
+            // Floor –60 dB uniquement pour les profils lents sur slots existants.
             auto startGains = gainsBeforeScene;
+            for (int i = 0; i < 9; ++i)
+                if (startGains[i] < 0.001f && targetGains_local[i] > 0.001f)
+                    startGains[i] = targetGains_local[i];
             const bool slowProfile = (fromEnergy >= 0.20f && toEnergy < 0.20f)
                                   || (fromEnergy <  0.20f && toEnergy < 0.20f);
             if (slowProfile)
