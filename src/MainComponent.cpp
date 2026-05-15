@@ -887,6 +887,10 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                 // ── Réserve #2 : SR normalisation ────────────────────────────────
                 // If the file SR differs from the project SR, resample the raw PCM
                 // so that all analysis and processing runs at the project rate.
+                // NOTE: no intermediate callAsync here — a second reloadSlotData would
+                // race with any voice still reading the first background buffer.
+                // The SR-corrected version is pushed in a single reload at each exit.
+                bool srNormalized = false;
                 if (snapProjectSr > 0.0 && std::abs(sr - snapProjectSr) > 1.0)
                 {
                     const float srRatio = static_cast<float>(sr / snapProjectSr);
@@ -895,13 +899,7 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                     {
                         raw = std::move(resampled);
                         sr  = snapProjectSr;
-                        // Push SR-corrected version immediately (replaces initial load)
-                        juce::MessageManager::callAsync(
-                            [this, slot, srFixed = raw]() mutable
-                            {
-                                dspPipeline_.getSampler().reloadSlotData(
-                                    slot, std::move(srFixed));
-                            });
+                        srNormalized = true;
                     }
                 }
 
@@ -914,7 +912,14 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                      features.contentType == ::dsp::ContentCategory::SNARE ||
                      features.contentType == ::dsp::ContentCategory::HIHAT ||
                      features.contentType == ::dsp::ContentCategory::PERC);
-                if (isPercussive) return;
+                if (isPercussive)
+                {
+                    if (srNormalized)
+                        juce::MessageManager::callAsync(
+                            [this, slot, fix = std::move(raw)]() mutable
+                            { dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix)); });
+                    return;
+                }
 
                 if (shutdownFlag_.load(std::memory_order_acquire)) return;
 
@@ -973,7 +978,21 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                 const float totalSemitones = keyShiftSemitones + pitchFixSemitones;
                 const bool  doShift        = std::abs(totalSemitones) > 0.25f;
 
-                if (!doStretch && !doShift) return;  // nothing to do
+                if (!doStretch && !doShift)
+                {
+                    if (srNormalized)
+                        juce::MessageManager::callAsync(
+                            [this, slot, fix = std::move(raw),
+                             bpm  = bpmResult.bpm,
+                             conf = bpmResult.confidence]() mutable
+                            {
+                                auto env = computeEnvelope(fix);
+                                dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
+                                stepSeqPanel_.setSlotBpm(slot, bpm, conf);
+                                stepSeqPanel_.setSlotWaveform(slot, std::move(env));
+                            });
+                    return;
+                }
 
                 if (shutdownFlag_.load(std::memory_order_acquire)) return;
 
@@ -1618,9 +1637,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     stepSeqPanel_.setSwing(data.swing);
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
-
-    // Re-lancer l'IA après chargement de projet
-    juce::MessageManager::callAsync([this] { triggerAI(); });
 }
 
 //==============================================================================

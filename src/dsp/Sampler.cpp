@@ -78,7 +78,7 @@ void Sampler::loadSample(int slot, const float* data, int numSamples,
     // (Same rationale as clearSlot() — "let the fadeout finish".)
     std::vector<float> newData(data, data + numSamples);
     s.data[bgIdx].swap(newData);
-    s.sampleCount[bgIdx] = numSamples;
+    s.sampleCount[bgIdx].store(numSamples, std::memory_order_relaxed);
 
     s.activeDataIdx.store(bgIdx, std::memory_order_release);
     s.loaded.store(true, std::memory_order_release);
@@ -282,7 +282,7 @@ int Sampler::getSlotSampleCount(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0;
     auto& s = slots_[static_cast<std::size_t>(slot)];
-    return s.sampleCount[s.activeDataIdx.load(std::memory_order_relaxed)];
+    return s.sampleCount[s.activeDataIdx.load(std::memory_order_relaxed)].load(std::memory_order_relaxed);
 }
 
 float Sampler::getSlotPlayheadRatio(int slot) const noexcept
@@ -292,11 +292,11 @@ float Sampler::getSlotPlayheadRatio(int slot) const noexcept
     const auto& sl = slots_     [static_cast<std::size_t>(slot)];
     
     int activeIdx = sl.activeDataIdx.load(std::memory_order_relaxed);
-    if (!sl.loaded.load() || sl.sampleCount[activeIdx] <= 0) return 0.f;
-    
+    if (!sl.loaded.load() || sl.sampleCount[activeIdx].load(std::memory_order_relaxed) <= 0) return 0.f;
+
     // readPos is written only by the audio thread
     return static_cast<float>(ps.voices[ps.currentVoice].readPos)
-           / static_cast<float>(sl.sampleCount[activeIdx]);
+           / static_cast<float>(sl.sampleCount[activeIdx].load(std::memory_order_relaxed));
 }
 
 void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
@@ -307,7 +307,8 @@ void Sampler::reloadSlotData(int slot, std::vector<float> newData) noexcept
     int bgIdx = 1 - s.activeDataIdx.load(std::memory_order_acquire);
 
     s.data[bgIdx].swap(newData);
-    s.sampleCount[bgIdx] = static_cast<int>(s.data[bgIdx].size());
+    s.sampleCount[bgIdx].store(static_cast<int>(s.data[bgIdx].size()),
+                                std::memory_order_relaxed);
 
     s.activeDataIdx.store(bgIdx, std::memory_order_release);
     // loaded was already true; no store needed.
@@ -457,7 +458,7 @@ void Sampler::process(float* buffer, int numSamples) noexcept
                 auto& vState = ps.voices[vi];
                 if (!vState.playing) continue;
 
-                const int totalSamp = sl.sampleCount[vState.dataIdx];
+                const int totalSamp = sl.sampleCount[vState.dataIdx].load(std::memory_order_relaxed);
                 if (totalSamp <= 0) {
                     vState.playing = false;
                     continue;
@@ -774,7 +775,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples,
                 auto& vState = ps.voices[vi];
                 if (!vState.playing) continue;
 
-                const int totalSamp = sl.sampleCount[vState.dataIdx];
+                const int totalSamp = sl.sampleCount[vState.dataIdx].load(std::memory_order_relaxed);
                 if (totalSamp <= 0) {
                     vState.playing = false;
                     continue;

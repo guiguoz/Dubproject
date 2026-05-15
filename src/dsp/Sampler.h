@@ -33,7 +33,7 @@ struct PcmView
 struct SampleSlot
 {
     std::vector<float> data[2];          // Double buffer for smooth sample changes
-    int                sampleCount[2] { 0, 0 };
+    std::atomic<int>   sampleCount[2] {};
     std::atomic<int>   activeDataIdx{ 0 };
 
     std::atomic<float> gain        { 1.0f };
