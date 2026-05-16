@@ -211,7 +211,10 @@ public:
     /// Each track loops independently on its own step count.
     void process(int numSamples, Sampler& sampler) noexcept
     {
-        flipIfPrepared();
+        // Immediate flip only when no bar-quantized transition is pending.
+        // When transLen > 0, the flip is deferred to step 0 inside the loop below.
+        if (pendingTransLen_.load(std::memory_order_relaxed) == 0)
+            flipIfPrepared();
 
         const float bpm = bpm_.load(std::memory_order_relaxed);
         if (!playing_.load(std::memory_order_relaxed) || bpm <= 0.f)
@@ -238,6 +241,15 @@ public:
 
             if (atSceneBoundary)
                 sceneEndFlag_.store(true, std::memory_order_release);
+
+            // Bar-quantized flip: activate the new step buffer BEFORE triggering step 0.
+            // prepareStepBuffer() was called from navigateScene() (message thread) well
+            // before this point, so the buffer is ready regardless of timer latency.
+            if (transLen > 0 && globalStep % transLen == 0)
+            {
+                flipIfPrepared();
+                pendingTransLen_.store(0, std::memory_order_relaxed);
+            }
 
             // Always trigger regardless of scene boundary: the bass/kick on step 0
             // must play even when the transition flag fires at that same step.
@@ -286,9 +298,8 @@ public:
     /// Consumes the scene-end signal (returns true once per cycle boundary).
     bool consumeSceneEnd() noexcept
     {
-        const bool fired = sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
-        if (fired) pendingTransLen_.store(0, std::memory_order_relaxed);
-        return fired;
+        return sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
+        // pendingTransLen_ cleared by the audio thread at step 0, after the buffer flip.
     }
 
     /// Returns true if a quantized scene transition is already armed.

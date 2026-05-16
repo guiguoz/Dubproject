@@ -2701,7 +2701,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
         for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
                 stepSeqPanel_.setStepState(i, s, false);
-        stepSequencer_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
+        if (!stepSequencer_.hasPendingTransition())
+            stepSequencer_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
         for (int i = 0; i < 9; ++i)
             dspPipeline_.getSampler().setSlotGain(i, 1.0f);
         return;
@@ -2828,9 +2829,11 @@ void MainComponent::applyScene(int idx, int fromIdx)
             stepSeqPanel_.setStepState(i, s, sc.steps[sidx2][static_cast<std::size_t>(s)]);
     }
 
-    // Swap atomique des patterns via double-buffer → audio lit le nouveau buffer
-    // au prochain appel de process() (flipIfPrepared au début du bloc).
-    stepSequencer_.prepareStepBuffer(nextStepBuf);
+    // When a bar-quantized transition is armed (navigateScene pre-armed the buffer),
+    // skip: the audio thread will flip at step 0. Otherwise (sequencer stopped or
+    // direct applyScene call), prepare immediately for an instant flip.
+    if (!stepSequencer_.hasPendingTransition())
+        stepSequencer_.prepareStepBuffer(nextStepBuf);
 
     // Appliquer le gain Serum de la nouvelle scène (crossfade le ramènera depuis serumGainBefore)
     const float serumGainTarget = sc.serumGain > 0.f ? sc.serumGain : serumGainBefore;
@@ -2910,6 +2913,22 @@ void MainComponent::navigateScene(int delta)
     for (int i = 0; i < 9; ++i)
         sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
     stepSequencer_.setPendingTransitionLen(sceneLen);
+
+    // Pre-arm the step buffer immediately so the audio thread can flip at exactly
+    // step 0, independent of timer latency (fixes missed triggers on first step).
+    {
+        const auto& nextSc = sceneManager_.scene(target);
+        ::dsp::StepSequencer::StepBuf nextBuf;
+        for (int i = 0; i < 9; ++i)
+        {
+            const std::size_t sidx     = static_cast<std::size_t>(i);
+            const int         numSteps = nextSc.trackBarCounts[sidx] * 16;
+            nextBuf.trackStepCount[i]  = numSteps;
+            for (int s = 0; s < ::dsp::StepSequencer::kMaxSteps; ++s)
+                nextBuf.steps[i][s] = nextSc.steps[sidx][static_cast<std::size_t>(s)];
+        }
+        stepSequencer_.prepareStepBuffer(nextBuf);
+    }
 
     preloadSceneAsync(target);
     sceneManager_.setPendingScene(target);
