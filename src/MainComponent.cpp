@@ -2084,7 +2084,7 @@ void MainComponent::paint(juce::Graphics& g)
 
     // ── Sidebar separator before transport ────────────────────────────────────
     {
-        const int sepY = kHeaderH + 382;
+        const int sepY = kHeaderH + 424;
         g.setColour(ui::SaxFXColours::cardBorder);
         g.fillRect(sidebarX + 12, sepY, kSidebarW - 24, 1);
     }
@@ -2093,21 +2093,24 @@ void MainComponent::paint(juce::Graphics& g)
     {
         g.setFont(juce::Font(juce::FontOptions{}.withHeight(8.f)));
         g.setColour(ui::SaxFXColours::textSecondary.withAlpha(0.50f));
-        g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 385, kSidebarW - 24, 10,
+
+        g.drawText("SPATIAL", sidebarX + 12, kHeaderH + 310, kSidebarW - 24, 10,
+                   juce::Justification::centredLeft);
+        g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 427, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // Labels KEY et VIEW — miroir des positions dans resized() (yFlow = kHeaderH+519)
-        const int masterKeyY_p = kHeaderH + 519;
-        const int viewBtnY_p   = kHeaderH + 549;
+        // Labels KEY et VIEW — miroir des positions dans resized() (yFlow = kHeaderH+561)
+        const int masterKeyY_p = kHeaderH + 561;
+        const int viewBtnY_p   = kHeaderH + 591;
         g.drawText("KEY",  sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
         g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // EWI SYNTH section (yFlow after PLAY = kHeaderH+637)
-        g.drawText("EWI SYNTH",  sidebarX + 12, kHeaderH + 637, kSidebarW - 24, 10,
+        // EWI SYNTH section (yFlow after PLAY = kHeaderH+679)
+        g.drawText("EWI SYNTH",  sidebarX + 12, kHeaderH + 679, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
-        g.drawText("EWI DEVICE", sidebarX + 12, kHeaderH + 691, kSidebarW - 24, 10,
+        g.drawText("EWI DEVICE", sidebarX + 12, kHeaderH + 733, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
     }
 
@@ -2270,11 +2273,11 @@ void MainComponent::resized()
         infoLabel_.setBounds(sidebarX, kHeaderH + 308, kSidebarW, 10);
 
         // ── SPATIAL pad ─────────────────────────────────────────────────
-        spatialViz_.setBounds(sbBtnX, kHeaderH + 320, sbBtnW, 58);
+        spatialViz_.setBounds(sbBtnX, kHeaderH + 320, sbBtnW, 100);
 
         // ── TRANSPORT section ────────────────────────────────────────────
-        // Separator + label drawn in paint() at kHeaderH+382/385
-        int y = kHeaderH + 394;
+        // Separator + label drawn in paint() at kHeaderH+424/427
+        int y = kHeaderH + 436;
         sceneUpBtn_   .setBounds(sbBtnX, y, sbBtnW, 26); y += 28;
         sceneNumLabel_.setBounds(sbBtnX, y, sbBtnW, 18); y += 20;
         sceneDownBtn_ .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
@@ -2283,8 +2286,8 @@ void MainComponent::resized()
         sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);
 
         // ── Section sous COPY : KEY/MODE, clavier/portée, PLAY, nuage IA ──
-        // yFlow = kHeaderH + 394 + 26+28+18+20+26+30+22+25+22 + 8 = kHeaderH + 519
-        int yFlow = kHeaderH + 519;
+        // yFlow = kHeaderH + 436 + 26+28+18+20+26+30+22+25+22 + 8 = kHeaderH + 561
+        int yFlow = kHeaderH + 561;
 
         const int halfW = sbBtnW / 2 - 2;
 

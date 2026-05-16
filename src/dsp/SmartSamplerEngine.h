@@ -840,12 +840,12 @@ private:
         switch (type)
         {
             case ContentType::KICK:  return 0.55f;       // −5.2 dBFS
-            case ContentType::SNARE: return 0.30f;       // −10.5 dBFS
-            case ContentType::HIHAT: return 0.13f;       // −17.7 dBFS
+            case ContentType::SNARE: return 0.35f;       // −9.1 dBFS
+            case ContentType::HIHAT: return 0.45f;       // −6.9 dBFS  (était 0.13, trop faible)
             case ContentType::BASS:  return kBassTargetGain;  // −3.1 dBFS
-            case ContentType::SYNTH: return 0.22f;       // −13.1 dBFS
-            case ContentType::PAD:   return 0.30f;       // −10.5 dBFS (présence accrue)
-            case ContentType::PERC:  return 0.22f;       // −13.1 dBFS (discret)
+            case ContentType::SYNTH: return 0.35f;       // −9.1 dBFS
+            case ContentType::PAD:   return 0.55f;       // −5.2 dBFS  (était 0.30, trop faible)
+            case ContentType::PERC:  return 0.45f;       // −6.9 dBFS  (était 0.22, trop faible)
             case ContentType::LOOP:  return 0.38f;       // −8.4 dBFS
             default:                 return 0.30f;
         }
