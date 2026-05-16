@@ -184,11 +184,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                             sc.userGains[static_cast<std::size_t>(i)] =
                                 juce::jlimit(0.f, 2.f, static_cast<float>((*ugArr)[i]));
 
-                // v16: reset AI-calibrated userGains that are suspiciously low
+                // v16: reset AI-calibrated userGains that are too low to hear
+                // Threshold 0.50 catches both old gains (HAT 0.09) and new gains (HAT 0.318)
                 if (data.version < 16)
                     for (int i = 0; i < 9; ++i)
                         if (!sc.filePaths[static_cast<std::size_t>(i)].empty()
-                            && sc.userGains[static_cast<std::size_t>(i)] < 0.25f)
+                            && sc.userGains[static_cast<std::size_t>(i)] < 0.50f)
                             sc.userGains[static_cast<std::size_t>(i)] = 1.0f;
 
                 if (data.version >= 15)
