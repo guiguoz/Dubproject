@@ -525,6 +525,17 @@ MainComponent::MainComponent()
                 dspPipeline_.getSampler().setSlotGain(i, ms.gain);
                 stepSeqPanel_.setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
             }
+
+            // Normalise le gain Serum vers un niveau RMS cible (≈ −14 dBFS).
+            // Déclenché une seule fois par run IA — n'écrase pas les réglages manuels hors magic mix.
+            if (serumHost_.isLoaded() && serumMixFeatures_.rms > 0.01f)
+            {
+                constexpr float kSerumTargetRms = 0.20f;
+                const float normGain = juce::jlimit(0.2f, 3.0f,
+                    kSerumTargetRms / (serumMixFeatures_.rms + 1e-6f));
+                serumUserGain_.store(normGain, std::memory_order_relaxed);
+                sc.serumGain = normGain;
+            }
         }
 
         mixStateDirty_ = true;
