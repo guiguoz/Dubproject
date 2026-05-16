@@ -184,6 +184,13 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                             sc.userGains[static_cast<std::size_t>(i)] =
                                 juce::jlimit(0.f, 2.f, static_cast<float>((*ugArr)[i]));
 
+                // v16: reset AI-calibrated userGains that are suspiciously low
+                if (data.version < 16)
+                    for (int i = 0; i < 9; ++i)
+                        if (!sc.filePaths[static_cast<std::size_t>(i)].empty()
+                            && sc.userGains[static_cast<std::size_t>(i)] < 0.25f)
+                            sc.userGains[static_cast<std::size_t>(i)] = 1.0f;
+
                 if (data.version >= 15)
                     sc.serumGain = juce::jlimit(0.f, 2.f,
                         static_cast<float>(entry.getProperty("serumGain", 1.0)));
@@ -233,7 +240,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     15);
+    root->setProperty("version",     16);
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));
 

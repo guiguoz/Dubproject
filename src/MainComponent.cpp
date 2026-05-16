@@ -2884,6 +2884,25 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 + "->"      + juce::String(serumGainTarget, 2));
         }
     }
+
+    // Populate spatial visualization (mirrors onTypesDetected).
+    {
+        static const juce::Colour kSlotColours[9] = {
+            juce::Colour { 0xFF4CDFA8 }, juce::Colour { 0xFF06B6D4 },
+            juce::Colour { 0xFFC8C7C7 }, juce::Colour { 0xFF8B5CF6 },
+            juce::Colour { 0xFFF97316 }, juce::Colour { 0xFFF43F5E },
+            juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
+            juce::Colour { 0xFFFF6B35 },
+        };
+        auto& sampler = dspPipeline_.getSampler();
+        for (int i = 0; i < 9; ++i)
+        {
+            const auto ct     = samplerEngine_.getDetectedType(i);
+            const auto sp     = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
+            const bool loaded = sampler.isLoaded(i);
+            spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
+        }
+    }
 }
 
 void MainComponent::navigateScene(int delta)
