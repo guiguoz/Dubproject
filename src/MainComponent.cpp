@@ -1299,6 +1299,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.trimStart      = src.trimStart;
         dst.trimEnd        = src.trimEnd;
         dst.delaySends     = src.delaySends;
+        dst.serumGain      = src.serumGain;
         for (int t = 0; t < 9; ++t)
         {
             const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1549,6 +1550,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.trimStart      = src.trimStart;
             dst.trimEnd        = src.trimEnd;
             dst.delaySends     = src.delaySends;
+            dst.serumGain      = src.serumGain;
             for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -2440,7 +2442,10 @@ void MainComponent::timerCallback()
     }
 
     // Crossfade entre scènes : interpolation de gains sur ~150ms
-    sceneManager_.updateCrossfade(33, dspPipeline_.getSampler());
+    float serumCrossfadeGain = -1.f;
+    if (sceneManager_.updateCrossfade(33, dspPipeline_.getSampler(), &serumCrossfadeGain))
+        if (serumCrossfadeGain >= 0.f)
+            serumUserGain_.store(serumCrossfadeGain, std::memory_order_relaxed);
 
     // Mise à jour état nuage IA
     if (samplerEngine_.isBusy())
@@ -2673,6 +2678,7 @@ void MainComponent::captureCurrentScene()
         for (int s = 0; s < numSteps; ++s)
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
     }
+    sc.serumGain = serumUserGain_.load(std::memory_order_relaxed);
     // Rafraîchir le score d'énergie de la scène capturée.
     const int ci = sceneManager_.currentIdx();
     sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
@@ -2685,6 +2691,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     std::array<float, 9> gainsBeforeScene {};
     for (int i = 0; i < 9; ++i)
         gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
+    const float serumGainBefore = serumUserGain_.load(std::memory_order_relaxed);
 
     const auto& sc = sceneManager_.scene(idx);
 
@@ -2825,6 +2832,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // au prochain appel de process() (flipIfPrepared au début du bloc).
     stepSequencer_.prepareStepBuffer(nextStepBuf);
 
+    // Appliquer le gain Serum de la nouvelle scène (crossfade le ramènera depuis serumGainBefore)
+    const float serumGainTarget = sc.serumGain > 0.f ? sc.serumGain : serumGainBefore;
+    serumUserGain_.store(serumGainTarget, std::memory_order_relaxed);
+
     // Crossfade pur : ramper les gains depuis l'ancienne scène sans stopAllSlots.
     if (stepSequencer_.isPlaying())
     {
@@ -2833,11 +2844,12 @@ void MainComponent::applyScene(int idx, int fromIdx)
             targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
         // Reset les slots existants à leur gain de départ pour que le crossfade parte
         // de la bonne valeur. Les nouveaux slots (gainsBeforeScene≈0, target>0) sont
-        // exclus du reset : leur gain cible (écrit ligne 2783) reste actif dès le flip,
-        // sinon le crossfade partirait de 0 et noierait l'attaque (kick inaudible).
+        // exclus du reset : leur gain cible reste actif dès le flip (pas de fade-in).
         for (int i = 0; i < 9; ++i)
             if (gainsBeforeScene[i] >= 0.001f || targetGains_local[i] < 0.001f)
                 dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
+        // Remettre Serum au gain de départ pour que le crossfade le ramène au target
+        serumUserGain_.store(serumGainBefore, std::memory_order_relaxed);
         {
             const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
             const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
@@ -2857,10 +2869,13 @@ void MainComponent::applyScene(int idx, int fromIdx)
                         startGains[i] = 0.001f;
 
             sceneManager_.armAdaptiveCrossfade(startGains, targetGains_local,
-                                               fromEnergy, toEnergy);
+                                               fromEnergy, toEnergy,
+                                               serumGainBefore, serumGainTarget);
             DBG("crossfade: " + juce::String(resolvedFrom) + "->" + juce::String(idx)
                 + " fromE=" + juce::String(fromEnergy, 2)
-                + " toE="   + juce::String(toEnergy,   2));
+                + " toE="   + juce::String(toEnergy,   2)
+                + " serum:" + juce::String(serumGainBefore, 2)
+                + "->"      + juce::String(serumGainTarget, 2));
         }
     }
 }

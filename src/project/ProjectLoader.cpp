@@ -183,6 +183,10 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                         for (int i = 0; i < 9 && i < ugArr->size(); ++i)
                             sc.userGains[static_cast<std::size_t>(i)] =
                                 juce::jlimit(0.f, 2.f, static_cast<float>((*ugArr)[i]));
+
+                if (data.version >= 15)
+                    sc.serumGain = juce::jlimit(0.f, 2.f,
+                        static_cast<float>(entry.getProperty("serumGain", 1.0)));
             }
         }
     }
@@ -229,7 +233,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     13);
+    root->setProperty("version",     15);
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));
 
@@ -362,7 +366,8 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             juce::Array<juce::var> userGainsArr;
             for (int i = 0; i < 9; ++i)
                 userGainsArr.add(static_cast<double>(sc.userGains[static_cast<std::size_t>(i)]));
-            entry->setProperty("userGains", userGainsArr);
+            entry->setProperty("userGains",  userGainsArr);
+            entry->setProperty("serumGain",  static_cast<double>(sc.serumGain));
 
             scenesArr.add(juce::var(entry.get()));
         }

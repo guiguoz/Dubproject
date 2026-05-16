@@ -26,6 +26,7 @@ struct SceneData
     std::array<int,   9>                 trimEnd        { -1,-1,-1,-1,-1,-1,-1,-1,-1 };
     std::array<float, 9>                 delaySends     { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };
     std::array<float, 9>                 userGains      { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
+    float                                serumGain      { 1.f };
     bool                                 used           { false };
 };
 
@@ -115,10 +116,13 @@ public:
     void armAdaptiveCrossfade(const std::array<float, 9>& startGains,
                               const std::array<float, 9>& targetGains,
                               float fromEnergy,
-                              float toEnergy) noexcept
+                              float toEnergy,
+                              float startSerumGain  = 1.f,
+                              float targetSerumGain = 1.f) noexcept
     {
         const auto [dur, curve] = chooseProfile(fromEnergy, toEnergy);
-        crossfade_ = { true, 0, dur, curve, startGains, targetGains };
+        crossfade_ = { true, 0, dur, curve, startGains, targetGains,
+                       startSerumGain, targetSerumGain };
     }
 
     // ── Énergie des scènes ───────────────────────────────────────────────────
@@ -139,7 +143,10 @@ public:
             if (active == 0) continue;
             sum += 0.5f + 0.5f * (static_cast<float>(active) / static_cast<float>(total));
         }
-        return std::clamp(sum / 9.f, 0.f, 1.f);
+        // Serum actif : contribue à hauteur de 1 slot supplémentaire (pondéré par son gain)
+        if (sc.serumGain > 0.05f)
+            sum += 0.5f + 0.5f * std::clamp(sc.serumGain, 0.f, 1.f);
+        return std::clamp(sum / 10.f, 0.f, 1.f);
     }
 
     void  setSceneEnergy(int idx, float e) noexcept
@@ -154,8 +161,10 @@ public:
 
     /// Avance l'interpolation d'un tick (tickMs ≈ 33ms à 30Hz).
     /// Écrit directement sur le sampler via setSlotGain().
+    /// serumGainOut (optionnel) : gain Serum interpolé à appliquer par l'appelant.
     /// Retourne false quand le crossfade est terminé.
-    bool updateCrossfade(int tickMs, Sampler& sampler) noexcept
+    bool updateCrossfade(int tickMs, Sampler& sampler,
+                         float* serumGainOut = nullptr) noexcept
     {
         if (!crossfade_.active)
             return false;
@@ -188,10 +197,16 @@ public:
             sampler.setSlotGain(i, gain);
         }
 
+        if (serumGainOut)
+            *serumGainOut = crossfade_.startSerumGain
+                + (crossfade_.targetSerumGain - crossfade_.startSerumGain) * t;
+
         if (crossfade_.elapsedMs >= crossfade_.durationMs)
         {
             for (int i = 0; i < 9; ++i)
                 sampler.setSlotGain(i, crossfade_.targetGains[i]);
+            if (serumGainOut)
+                *serumGainOut = crossfade_.targetSerumGain;
             crossfade_.active = false;
             return false;
         }
@@ -205,12 +220,14 @@ private:
 
     struct CrossfadeState
     {
-        bool           active     { false };
-        int            elapsedMs  { 0 };
-        int            durationMs { kCrossfadeDurationMs };
-        CrossfadeCurve curve      { CrossfadeCurve::Linear };
+        bool           active          { false };
+        int            elapsedMs       { 0 };
+        int            durationMs      { kCrossfadeDurationMs };
+        CrossfadeCurve curve           { CrossfadeCurve::Linear };
         std::array<float, 9> startGains  {};
         std::array<float, 9> targetGains {};
+        float          startSerumGain  { 1.f };
+        float          targetSerumGain { 1.f };
     };
     CrossfadeState crossfade_;
 
