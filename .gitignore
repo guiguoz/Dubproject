@@ -77,3 +77,6 @@ nul
 
 # Dataset WAV files (too large for git — use Git LFS or external storage)
 data/dataset/
+
+# Output directory (exe, DLL, ONNX models — built artifacts)
+bin/

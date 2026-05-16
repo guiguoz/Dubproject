@@ -104,6 +104,12 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
   pour le silencer, jamais `setEnabled(false)`.
 - **Plein écran** : double-clic sur zone vide de l'UI → fullscreen ;
   Escape → retour fenêtre (géré dans `Main.cpp::MainWindow::keyPressed`).
+- **`spatialViz_` auto-peuplé** : `applyScene()` appelle `spatialViz_.setSlotState()` en fin
+  de fonction — plus besoin de lancer l'IA pour peupler la visualisation spatiale.
+- **Magic mix normalise Serum** : après chaque run IA, si Serum est chargé et actif
+  (RMS > 0.01), `serumUserGain_` est calé vers −14 dBFS RMS (`kSerumTargetRms = 0.20`),
+  clampé à `[0.2, 3.0]`. Persisté dans `sc.serumGain`. Les réglages MIDI learn manuels
+  ne sont PAS écrasés entre deux runs IA.
 
 ---
 
@@ -115,6 +121,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 | ONNX slot 8 | Heuristique uniquement | Retrain modèle sur 9 slots |
 | MIDI CC par paramètre d'effet | Non implémenté | Requiert refactor MidiLearnMap |
 | Pitch tracking < 85 Hz | YIN filtré 40 Hz HP | `setMinFrequency()` au risque d'instabilité |
+| Serum auto-gain | Implémenté dans `onDone` | `targetGain = 0.20 / rms`, clampé `[0.2, 3.0]` |
 
 ---
 
@@ -136,6 +143,8 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 
 ## Format projet `.saxfx`
 
-Version courante : **v8** (`"version": 8` en JSON).
-Migrations v1→v8 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
+Version courante : **v16** (`"version": 16` en JSON).
+Migrations v1→v16 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
 Slot guard : rejette `slot >= 9` au chargement.
+Migration v16 : tout `userGains[i] < 0.50` sur slot non vide est réinitialisé à 1.0
+au chargement (ancienne calibration IA trop basse).

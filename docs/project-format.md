@@ -1,12 +1,12 @@
 # Format de fichier projet SaxFX Live / DubEngine (`.saxfx`)
 
-Les projets sont des fichiers **JSON** UTF-8 avec l’extension `.saxfx`. La **source de vérité** du schéma est le code : `src/project/ProjectLoader.cpp` (sauvegarde / chargement / migrations) et `src/project/ProjectData.h` (modèle C++).
+Les projets sont des fichiers **JSON** UTF-8 avec l'extension `.saxfx`. La **source de vérité** du schéma est le code : `src/project/ProjectLoader.cpp` (sauvegarde / chargement / migrations) et `src/project/ProjectData.h` (modèle C++).
 
 ## Version actuelle (écriture)
 
-À l’enregistrement, le champ racine **`version`** est toujours **`8`** (nombre entier JSON).
+À l'enregistrement, le champ racine **`version`** est toujours **`16`** (nombre entier JSON).
 
-Les fichiers plus anciens (1 … 7) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v8.
+Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v16.
 
 ### Table des versions (résumé)
 
@@ -17,62 +17,40 @@ Les fichiers plus anciens (1 … 7) sont **chargés** et migrés en mémoire par
 | 3 | `aiManaged` par effet ; champs `muted`, `gridDiv` sur les samples ; `musicContext` |
 | 4 | `bpm` racine ; `samples[].steps` (16 booléens) par slot |
 | 5 | `masterKeyRoot`, `masterKeyMajor`, `slotMix`, `scenes` (8 scènes), `currentScene` |
-| 6 | Par scène : `trackBarCounts[9]` (1–32 barres), grilles `steps` jusqu’à 512 booléens par piste |
+| 6 | Par scène : `trackBarCounts[9]` (1–32 barres), grilles `steps` jusqu'à 512 booléens par piste |
 | 7 | `trimStart` / `trimEnd` par slot dans chaque scène |
-| 8 | Même schéma que v7 côté champs ; **garde chargement** `slot >= 9` rejeté sur les samples ; numéro de format incrémenté |
+| 8 | `delaySends[9]` par scène (send bus delay par slot) |
+| 9–11 | `dubDelayEnabled`, `dubDelaySend`, `dubDelayWet`, `dubDelayFeedback`, `dubDelayTone`, `dubDelayDrive`, `dubDelayDiv` à la racine |
+| 12 | `midiLearn[]` à la racine — bindings MIDI CC → paramètre |
+| 13 | `userGains[9]` par scène — gain fader utilisateur, indépendant des gains IA |
+| 14 | `serumState` à la racine (état preset Serum, base64) ; `swing` racine |
+| 15 | `serumGain` par scène — gain Serum persisté par scène |
+| 16 | Migration : `userGains[i] < 0.50` réinitialisé à 1.0 au load si slot non vide |
 
-## Structure JSON v8 (vue d’ensemble)
+## Structure JSON v16 (vue d'ensemble)
 
 Racine :
 
 | Clé | Type | Description |
 |-----|------|-------------|
-| `version` | `number` | Toujours `8` à l’écriture |
+| `version` | `number` | Toujours `16` à l'écriture |
 | `projectName` | `string` | Nom du projet |
 | `bpm` | `number` | Tempo **maître** global (float) |
-| `effectChain` | `array` | Effets dans l’ordre de la chaîne |
-| `samples` | `array` | Slots sampler actifs (seulement les entrées avec fichier) |
-| `midiMappings` | `array` | Liaisons note MIDI → slot |
-| `musicContext` | `object` | Contexte musical détecté / style (voir ci-dessous) |
 | `masterKeyRoot` | `number` | 0=C … 11=B |
 | `masterKeyMajor` | `bool` | Mode majeur / mineur |
 | `currentScene` | `number` | Index de scène courante (0–7) |
+| `swing` | `number` | Swing global 0.0–1.0 (v14) |
 | `slotMix` | `array` | États **Magic mix** (un objet par slot concerné, seulement si `applied`) |
 | `scenes` | `array` | Scènes utilisées (`used: true`) |
-
-### `effectChain[]`
-
-| Clé | Type |
-|-----|------|
-| `type` | `string` — nom aligné sur `dsp::effectTypeName()` |
-| `enabled` | `bool` |
-| `aiManaged` | `bool` |
-| `params` | `array` de `number` — un float par index de paramètre |
-
-### `samples[]` (entrées avec `path` non vide)
-
-| Clé | Type |
-|-----|------|
-| `slot` | `number` — **0 … 8** (9 pistes) |
-| `path` | `string` — chemin fichier WAV |
-| `gain`, `loop`, `oneShot`, `muted`, `gridDiv` | types évidents |
-| `steps` | `array` de 16 `bool` — motif “legacy” par slot (voir scènes pour longueur complète) |
-
-### `midiMappings[]`
-
-| Clé | Type |
-|-----|------|
-| `note` | `number` |
-| `slot` | `number` |
-
-### `musicContext`
-
-| Clé | Type |
-|-----|------|
-| `bpm` | `number` (0 = non défini) |
-| `keyRoot` | `number` (-1 = inconnu) |
-| `isMajor` | `bool` |
-| `style` | `number` — cast depuis `SmartMixEngine::Style` |
+| `dubDelayEnabled` | `bool` | Bus dub delay activé (v11) |
+| `dubDelaySend` | `number` | Send vers le bus delay (v11) |
+| `dubDelayWet` | `number` | Wet du bus delay (v11) |
+| `dubDelayFeedback` | `number` | Feedback (v11) |
+| `dubDelayTone` | `number` | Tone EQ (v11) |
+| `dubDelayDrive` | `number` | Drive (v11) |
+| `dubDelayDiv` | `number` | Division temporelle (v11) |
+| `midiLearn` | `array` | Bindings MIDI CC → paramètre (v12) |
+| `serumState` | `string` | État preset Serum, base64 (v14) |
 
 ### `slotMix[]` (slots où le magic mix a été appliqué)
 
@@ -82,43 +60,62 @@ Racine :
 | `gain`, `pan`, `width`, `depth` | `number` |
 | `applied` | `bool` |
 
+### `midiLearn[]` (v12)
+
+| Clé | Type |
+|-----|------|
+| `target` | `number` — cast depuis `midi::MappingTarget` |
+| `cc` | `number` 0–127 |
+| `min`, `max` | `number` |
+
 ### `scenes[]`
 
 Chaque élément représente une scène ; seules les scènes marquées `used: true` sont sérialisées.
 
-| Clé | Type |
-|-----|------|
-| `index` | `number` 0–7 |
-| `bpm` | `number` (par scène, peut différer du maître selon usage UI) |
-| `used` | `bool` |
-| `trackBarCounts` | `array` de 9 `number` (1–32) |
-| `filePaths` | `array` de 9 `string` |
-| `mutes` | `array` de 9 `bool` |
-| `gains` | `array` de 9 `number` |
-| `steps` | `array` de 9 tableaux de `bool` — longueur piste `t` = `trackBarCounts[t] * 16` |
-| `trimStart`, `trimEnd` | `array` de 9 `number` (`trimEnd` = -1 signifie pas de trim) |
+| Clé | Type | Version |
+|-----|------|---------|
+| `index` | `number` 0–7 | v5 |
+| `bpm` | `number` | v5 |
+| `used` | `bool` | v5 |
+| `trackBarCounts` | `array` de 9 `number` (1–32) | v6 |
+| `filePaths` | `array` de 9 `string` | v5 |
+| `mutes` | `array` de 9 `bool` | v5 |
+| `gains` | `array` de 9 `number` — gains calibration IA (diagnostique) | v5 |
+| `steps` | `array` de 9 tableaux de `bool` — longueur piste `t` = `trackBarCounts[t] * 16` | v6 |
+| `trimStart`, `trimEnd` | `array` de 9 `number` (`trimEnd` = -1 = pas de trim) | v7 |
+| `delaySends` | `array` de 9 `number` — send bus delay par slot (0=muet, 0.8=PAD) | v8 |
+| `userGains` | `array` de 9 `number` — gain fader utilisateur (point de départ du slider) | v13 |
+| `serumGain` | `number` — gain Serum pour cette scène | v15 |
 
 ## Exemple minimal (illustratif)
 
 ```json
 {
-  "version": 8,
+  "version": 16,
   "projectName": "Exemple",
   "bpm": 120.0,
-  "effectChain": [],
-  "samples": [],
-  "midiMappings": [],
-  "musicContext": { "bpm": 0.0, "keyRoot": -1, "isMajor": true, "style": 0 },
   "masterKeyRoot": 0,
   "masterKeyMajor": true,
   "currentScene": 0,
+  "swing": 0.0,
   "slotMix": [],
-  "scenes": []
+  "scenes": [],
+  "dubDelayEnabled": false,
+  "dubDelaySend": 0.2,
+  "dubDelayWet": 0.28,
+  "dubDelayFeedback": 0.48,
+  "dubDelayTone": 0.55,
+  "dubDelayDrive": 0.15,
+  "dubDelayDiv": 1,
+  "midiLearn": [],
+  "serumState": ""
 }
 ```
 
-## Ancien format v1 (référence historique)
+## Règles d'évolution du format
 
-Les premiers projets utilisaient des clés plates du type `effects.reverb`, `harmonizer`, etc. Ce layout n’est plus écrit ; le chargeur **convertit** vers la structure `effectChain` en mémoire. Ne pas s’en servir comme modèle pour de nouveaux fichiers.
-
-Pour toute évolution du format : incrémenter la version, ajouter la migration dans `ProjectLoader::load`, et documenter ici en une phrase.
+- Incrémenter `version` dans `ProjectLoader::save()`.
+- Ajouter la migration dans `ProjectLoader::load()` (bloc `if (data.version >= N)`).
+- Documenter ici en une ligne dans la table des versions.
+- Ne jamais baisser la version.
+- Slot guard : rejeter `slot >= 9` au chargement.
