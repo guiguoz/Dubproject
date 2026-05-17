@@ -1311,6 +1311,8 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.trimEnd        = src.trimEnd;
         dst.delaySends     = src.delaySends;
         dst.serumGain      = src.serumGain;
+        dst.serumState     = src.serumState;
+        dst.serumPresetName = src.serumPresetName;
         for (int t = 0; t < 9; ++t)
         {
             const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1345,14 +1347,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     // ── Swing global ──────────────────────────────────────────────────────────
     data.swing = stepSequencer_.getSwing();
 
-    // ── v14 — Serum preset state ──────────────────────────────────────────────
-    if (serumHost_.isLoaded())
-    {
-        juce::MemoryBlock block;
-        serumHost_.getState(block);
-        if (!block.isEmpty())
-            data.serumState = block.toBase64Encoding().toStdString();
-    }
+    // Serum preset state + name are captured per-scene in captureCurrentScene().
 
     if (project::ProjectLoader::save(data, path.toStdString()))
         juce::Logger::writeToLog("Project saved: " + path);
@@ -1562,6 +1557,8 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.trimEnd        = src.trimEnd;
             dst.delaySends     = src.delaySends;
             dst.serumGain      = src.serumGain;
+            dst.serumState     = src.serumState;
+            dst.serumPresetName = src.serumPresetName;
             for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1624,26 +1621,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateMidiLearnUI();
     }
 
-    // ── v14 — Serum preset state ──────────────────────────────────────────────
-    if (!data.serumState.empty())
-    {
-        if (serumHost_.isLoaded())
-        {
-            juce::MemoryBlock block;
-            if (block.fromBase64Encoding (juce::String (data.serumState)))
-            {
-                serumHost_.setState (block.getData(), static_cast<int>(block.getSize()));
-            }
-            else
-            {
-                juce::Logger::writeToLog("SerumState: base64 decode failed — preset not restored");
-            }
-        }
-        else
-        {
-            juce::Logger::writeToLog("SerumState: Serum not loaded — preset not restored (load Serum manually)");
-        }
-    }
+    // Serum preset state + name are now per-scene — restored by applyScene().
 
     // ── Swing (absent dans anciens projets → 0 = straight) ───────────────────
     stepSequencer_.setSwing(data.swing);
@@ -1968,6 +1946,37 @@ void MainComponent::ensureGrainNoise(int w, int h)
     }
 }
 
+void MainComponent::mouseDown(const juce::MouseEvent& e)
+{
+    if (serumZone_.isEmpty() || !serumZone_.contains(e.getPosition()) || !serumHost_.isLoaded())
+        return;
+
+    auto* aw = new juce::AlertWindow("Nom du preset Serum",
+                                     "Entrez le nom du preset :",
+                                     juce::MessageBoxIconType::NoIcon);
+    aw->addTextEditor("name", currentPresetName_, "Nom :");
+    aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
+    aw->addButton("Annuler", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    aw->enterModalState(true,
+        juce::ModalCallbackFunction::create(
+            [this, aw](int result)
+            {
+                if (result == 1)
+                {
+                    const auto name = aw->getTextEditorContents("name").trim();
+                    if (name.isNotEmpty())
+                        serumHost_.setPresetNameManual(name);
+                    else
+                        serumHost_.clearManualPresetName();
+                    currentPresetName_ = name;
+                    sceneManager_.scene(sceneManager_.currentIdx()).serumPresetName =
+                        name.toStdString();
+                    if (!serumZone_.isEmpty()) repaint(serumZone_);
+                }
+                delete aw;
+            }));
+}
+
 void MainComponent::mouseDoubleClick(const juce::MouseEvent& /*e*/)
 {
     if (auto* peer = getPeer())
@@ -2169,7 +2178,7 @@ void MainComponent::paint(juce::Graphics& g)
             {
                 g.setFont(juce::Font(juce::FontOptions{}.withHeight(11.f).withStyle("Italic")));
                 g.setColour(textSecondary.withAlpha(0.45f));
-                g.drawText("ouvrir l'UI Serum pour\nselectionner un preset",
+                g.drawText("cliquer pour nommer\nce preset",
                            presetAreaX, presetAreaY, presetAreaW, presetAreaH,
                            juce::Justification::centred);
             }
@@ -2217,7 +2226,8 @@ void MainComponent::paint(juce::Graphics& g)
                    juce::Justification::centredLeft);
 
         g.setColour(ui::SaxFXColours::textPrimary.withAlpha(0.20f));
-        g.drawText("DubEngine v0.1.0", statusW - 260, statusY, 250, kStatusH,
+        g.drawText("DubEngine v0.1.0  fmt v" + juce::String(project::ProjectLoader::kFormatVersion),
+                   statusW - 260, statusY, 250, kStatusH,
                    juce::Justification::centredRight);
     }
 
@@ -2402,7 +2412,8 @@ void MainComponent::timerCallback()
     {
         presetNameTick_ = 0;
         const auto name = serumHost_.getCurrentPresetName();
-        if (name != currentPresetName_)
+        if (name.isNotEmpty() && !serumHost_.isPresetNameManual()
+            && name != currentPresetName_)
         {
             currentPresetName_ = name;
             if (!serumZone_.isEmpty())
@@ -2693,6 +2704,17 @@ void MainComponent::captureCurrentScene()
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
     }
     sc.serumGain = serumUserGain_.load(std::memory_order_relaxed);
+
+    // Capture Serum preset state and name for this scene
+    if (serumHost_.isLoaded())
+    {
+        juce::MemoryBlock block;
+        serumHost_.getState(block);
+        if (!block.isEmpty())
+            sc.serumState = block.toBase64Encoding().toStdString();
+    }
+    sc.serumPresetName = currentPresetName_.toStdString();
+
     // Rafraîchir le score d'énergie de la scène capturée.
     const int ci = sceneManager_.currentIdx();
     sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
@@ -2895,6 +2917,22 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 + "->"      + juce::String(serumGainTarget, 2));
         }
     }
+
+    // Restore Serum preset for this scene
+    if (!sc.serumState.empty() && serumHost_.isLoaded())
+    {
+        juce::MemoryBlock block;
+        if (block.fromBase64Encoding(juce::String(sc.serumState)))
+            serumHost_.setState(block.getData(), static_cast<int>(block.getSize()));
+        else
+            juce::Logger::writeToLog("applyScene: Serum state decode failed for scene " + juce::String(idx));
+    }
+    currentPresetName_ = juce::String::fromUTF8(sc.serumPresetName.c_str());
+    if (currentPresetName_.isNotEmpty())
+        serumHost_.setPresetNameManual(currentPresetName_);
+    else
+        serumHost_.clearManualPresetName();
+    if (!serumZone_.isEmpty()) repaint(serumZone_);
 
     // Populate spatial visualization (mirrors onTypesDetected).
     {

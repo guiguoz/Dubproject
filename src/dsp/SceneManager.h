@@ -27,6 +27,8 @@ struct SceneData
     std::array<float, 9>                 delaySends     { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };
     std::array<float, 9>                 userGains      { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };
     float                                serumGain      { 1.f };
+    std::string                          serumState;      // Serum preset state (base64), empty = none
+    std::string                          serumPresetName; // User-provided name for this scene's preset
     bool                                 used           { false };
 };
 

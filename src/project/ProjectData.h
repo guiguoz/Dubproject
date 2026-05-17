@@ -68,6 +68,8 @@ struct SceneSaveData
     std::array<float, 9>                  delaySends    { 0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f,0.f };  // v8
     std::array<float, 9>                  userGains     { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f };  // v13
     float                                 serumGain     { 1.f };                                      // v15
+    std::string                           serumState;      // v18 — Serum preset state per scene (base64)
+    std::string                           serumPresetName; // v18 — user-provided preset name per scene
     bool                                  used          { false };
 };
 
@@ -111,6 +113,8 @@ struct ProjectData
     std::vector<MidiLearnEntry>      midiLearnEntries;
     // v14 — Serum VST3 preset state (base64-encoded binary blob; empty = no Serum)
     std::string                      serumState;
+    // v17 — Serum preset name (user-provided; empty = not set)
+    std::string                      serumPresetName;
     // swing global [0..1] : 0=straight, 0.5=swing, 1.0=shuffle (absent → 0)
     float                            swing { 0.f };
 };

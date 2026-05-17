@@ -195,6 +195,25 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                 if (data.version >= 15)
                     sc.serumGain = juce::jlimit(0.f, 2.f,
                         static_cast<float>(entry.getProperty("serumGain", 1.0)));
+
+                if (data.version >= 18)
+                {
+                    sc.serumState      = getString(entry, "serumState");
+                    sc.serumPresetName = getString(entry, "serumPresetName");
+                }
+            }
+        }
+
+        // v18 migration: distribute root-level serumState/serumPresetName to used scenes
+        if (data.version < 18)
+        {
+            for (auto& sc : data.scenes)
+            {
+                if (!sc.used) continue;
+                if (sc.serumState.empty() && !data.serumState.empty())
+                    sc.serumState = data.serumState;
+                if (sc.serumPresetName.empty() && !data.serumPresetName.empty())
+                    sc.serumPresetName = data.serumPresetName;
             }
         }
     }
@@ -229,6 +248,9 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     // ── v14 — Serum preset state (absent = empty, Serum not used) ────────────
     data.serumState = getString(root, "serumState");
 
+    // ── v17 — Serum preset name (user-provided; absent = empty) ──────────────
+    data.serumPresetName = getString(root, "serumPresetName");
+
     // swing (absent in older projects → 0.0 = straight, backwards-compat)
     data.swing = getFloat(root, "swing", 0.f);
 
@@ -241,7 +263,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
 {
     juce::DynamicObject::Ptr root = new juce::DynamicObject();
-    root->setProperty("version",     16);
+    root->setProperty("version",     kFormatVersion);
     root->setProperty("projectName", juce::String(data.projectName));
     root->setProperty("bpm",         static_cast<double>(data.bpm));
 
@@ -377,6 +399,11 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             entry->setProperty("userGains",  userGainsArr);
             entry->setProperty("serumGain",  static_cast<double>(sc.serumGain));
 
+            if (!sc.serumState.empty())
+                entry->setProperty("serumState", juce::String(sc.serumState));
+            if (!sc.serumPresetName.empty())
+                entry->setProperty("serumPresetName", juce::String(sc.serumPresetName));
+
             scenesArr.add(juce::var(entry.get()));
         }
         root->setProperty("scenes", scenesArr);
@@ -406,9 +433,7 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         root->setProperty("midiLearn", learnArr);
     }
 
-    // ── v14 — Serum preset state (omitted when empty = no Serum in project) ──
-    if (!data.serumState.empty())
-        root->setProperty("serumState", juce::String(data.serumState));
+    // serumState / serumPresetName moved to per-scene storage in v18 — not written at root level.
 
     // swing (always saved; readers default to 0 when absent for backwards-compat)
     if (data.swing > 0.f)

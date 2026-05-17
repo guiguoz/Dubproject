@@ -117,7 +117,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 
 | Item | Statut | Piste |
 |------|--------|-------|
-| Nom preset Serum | Bloqué — API VST3 renvoie "prog 1" | Inspecter state binaire hex (DBG) ou IUnitInfo bas niveau |
+| Nom preset Serum | Partiel — click-to-edit (v17 `serumPresetName`) + scan binaire best-effort (ASCII + UTF-16 LE, 64 KB) | IUnitInfo bas niveau si auto-détection reste insuffisante |
 | ONNX slot 8 | Heuristique uniquement | Retrain modèle sur 9 slots |
 | MIDI CC par paramètre d'effet | Non implémenté | Requiert refactor MidiLearnMap |
 | Pitch tracking < 85 Hz | YIN filtré 40 Hz HP | `setMinFrequency()` au risque d'instabilité |
@@ -143,8 +143,8 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 
 ## Format projet `.saxfx`
 
-Version courante : **v16** (`"version": 16` en JSON).
-Migrations v1→v16 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
+Version courante : **v18** (`"version": 18` en JSON).
+Migrations v1→v18 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
 Slot guard : rejette `slot >= 9` au chargement.
 Migration v16 : tout `userGains[i] < 0.50` sur slot non vide est réinitialisé à 1.0
 au chargement (ancienne calibration IA trop basse).

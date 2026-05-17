@@ -81,6 +81,26 @@ public:
     // Called automatically via AudioProcessorListener; exposed for testing.
     void markPresetNameDirty() { presetNameDirty_ = true; }
 
+    // Persist a user-provided preset name; blocks auto-detection from overwriting it.
+    void setPresetNameManual(const juce::String& name)
+    {
+        cachedPresetName_  = name;
+        presetNameSource_  = PresetNameSource::Manual;
+        presetNameDirty_   = false;
+    }
+
+    void clearManualPresetName()
+    {
+        cachedPresetName_  = {};
+        presetNameSource_  = PresetNameSource::Auto;
+        presetNameDirty_   = true;
+    }
+
+    bool isPresetNameManual() const noexcept
+    {
+        return presetNameSource_ == PresetNameSource::Manual;
+    }
+
     void setBpm (float bpm) noexcept
     {
         bpmPlayHead_.bpm.store (static_cast<double> (bpm), std::memory_order_relaxed);
@@ -171,8 +191,11 @@ private:
         presetNameDirty_ = true;
     }
 
-    mutable juce::String cachedPresetName_;
-    mutable bool         presetNameDirty_ { true };
+    enum class PresetNameSource { Auto, Manual };
+
+    mutable juce::String      cachedPresetName_;
+    mutable bool              presetNameDirty_   { true };
+    mutable PresetNameSource  presetNameSource_  { PresetNameSource::Auto };
 };
 
 } // namespace dsp

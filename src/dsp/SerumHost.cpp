@@ -1,5 +1,18 @@
 #include "SerumHost.h"
 
+namespace {
+
+static bool isBlacklisted(const juce::String& s)
+{
+    return s.startsWithIgnoreCase("prog ")
+        || s.startsWithIgnoreCase("serum")
+        || s.startsWithIgnoreCase("xfer")
+        || s.startsWith("<")
+        || s.startsWith("VST");
+}
+
+} // anonymous namespace
+
 namespace dsp {
 
 SerumHost::SerumHost()
@@ -92,8 +105,9 @@ void SerumHost::unload()
         plugin_.reset();
     }
 
-    cachedPresetName_ = {};
-    presetNameDirty_  = true;
+    cachedPresetName_  = {};
+    presetNameDirty_   = true;
+    presetNameSource_  = PresetNameSource::Auto;
 
     serumBuffer_.setSize(0, 0);
 }
@@ -187,12 +201,19 @@ juce::String SerumHost::getCurrentPresetName() const
     if (!presetNameDirty_)
         return cachedPresetName_;
 
+    // User-set name is authoritative — don't overwrite with scan results.
+    if (presetNameSource_ == PresetNameSource::Manual)
+    {
+        presetNameDirty_ = false;
+        return cachedPresetName_;
+    }
+
     presetNameDirty_ = false;
 
-    // ── 1. Standard API — only trust it if it looks like a real name ─────────
+    // ── 1. Standard API ───────────────────────────────────────────────────────
     {
         const auto n = plugin_->getProgramName(plugin_->getCurrentProgram());
-        if (n.isNotEmpty() && !n.startsWith("prog ") && !n.startsWithIgnoreCase("program")
+        if (n.isNotEmpty() && !n.startsWithIgnoreCase("prog ") && !n.startsWithIgnoreCase("program")
             && n.length() >= 2)
         {
             cachedPresetName_ = n;
@@ -200,68 +221,70 @@ juce::String SerumHost::getCurrentPresetName() const
         }
     }
 
-    // ── 2. State data — Serum stores the preset name in its serialised state ─
+    // ── 2. VST3 state → JUCE XML wrapper → IEditController JSON → "presetName" ──
+    // Serum V2 stores the preset name in the IEditController component as JSON:
+    //   { "component": "controller", "presetName": "...", ... }
+    // The outer state is a JUCE VST3PluginState XML, prefixed with an 8-byte binary
+    // header ("VC2!" + 4-byte size). Each child element contains JUCE base64-encoded
+    // binary. The binary itself starts with "XferJson\0" + 8-byte int64, followed by JSON.
     juce::MemoryBlock state;
     plugin_->getStateInformation(state);
 
-    if (!state.isEmpty())
+    if (state.isEmpty()) { cachedPresetName_ = {}; return {}; }
+
+    const char* raw = static_cast<const char*>(state.getData());
+    const int   sz  = (int)state.getSize();
+
+    // Find XML start (skip binary header)
+    int xmlOffset = -1;
+    for (int i = 0; i < std::min(sz - 1, 64); ++i)
+        if (raw[i] == '<') { xmlOffset = i; break; }
+
+    if (xmlOffset < 0) { cachedPresetName_ = {}; return {}; }
+
+    auto xml = juce::XmlDocument::parse(juce::String::fromUTF8(raw + xmlOffset, sz - xmlOffset));
+    if (!xml) { cachedPresetName_ = {}; return {}; }
+
+    for (auto* child = xml->getFirstChildElement(); child != nullptr; child = child->getNextElement())
     {
-        const char* raw = static_cast<const char*>(state.getData());
-        // Only inspect the first 512 bytes — avoids reading wavetable data.
-        const int   sz  = (int)std::min(state.getSize(), (size_t)512);
+        juce::MemoryBlock inner;
+        if (!inner.fromBase64Encoding(child->getAllSubText())) continue;
 
-        // XML attribute search ("presetName=", "name=", …)
-        const auto text = juce::String::fromUTF8(raw, sz);
-        for (const char* attr : { "presetName=\"", "name=\"", "PresetName=\"", "patch_name=\"" })
+        const char* p = static_cast<const char*>(inner.getData());
+        const int   n = (int)inner.getSize();
+
+        // Find JSON start (skip "XferJson\0" + 8-byte int64 header)
+        int jsonStart = -1;
+        if (n >= 9 && std::memcmp(p, "XferJson", 8) == 0)
         {
-            const int idx = text.indexOf(attr);
-            if (idx >= 0)
+            for (int i = 9; i < std::min(n, 32); ++i)
+                if (p[i] == '{') { jsonStart = i; break; }
+        }
+        else
+        {
+            for (int i = 0; i < std::min(n, 32); ++i)
+                if (p[i] == '{') { jsonStart = i; break; }
+        }
+        if (jsonStart < 0) continue;
+
+        const auto json = juce::String::fromUTF8(p + jsonStart, n - jsonStart);
+
+        // Search for "presetName":"..." in the JSON (Serum V2 IEditController field)
+        static constexpr const char kField[] = "\"presetName\":\"";
+        const int idx = json.indexOf(kField);
+        if (idx >= 0)
+        {
+            const int start = idx + (int)(sizeof(kField) - 1);
+            const int end   = json.indexOf(start, "\"");
+            if (end > start && (end - start) <= 64)
             {
-                const int start = idx + (int)std::strlen(attr);
-                const int end   = text.indexOf(start, "\"");
-                if (end > start && (end - start) <= 64)
+                const auto val = json.substring(start, end).trim();
+                if (val.isNotEmpty() && !isBlacklisted(val))
                 {
-                    auto candidate = text.substring(start, end);
-                    if (candidate.isNotEmpty())
-                    {
-                        cachedPresetName_ = candidate;
-                        return cachedPresetName_;
-                    }
+                    cachedPresetName_ = val;
+                    return cachedPresetName_;
                 }
             }
-        }
-
-        // Binary scan — look for the longest printable ASCII string in the header
-        juce::String best;
-        int i = 4;
-        while (i < sz)
-        {
-            const auto c = static_cast<unsigned char>(raw[i]);
-            if (c >= 32 && c < 127)
-            {
-                const int start = i;
-                while (i < sz && static_cast<unsigned char>(raw[i]) >= 32
-                               && static_cast<unsigned char>(raw[i]) < 127)
-                    ++i;
-                const int len = i - start;
-                if (len >= 3 && len <= 64)
-                {
-                    juce::String s(raw + start, len);
-                    if (!s.containsOnly("0123456789.+-=_") &&
-                        !s.startsWith("<") && !s.startsWith("VST") &&
-                        !s.startsWith("Xfer") && len > best.length())
-                        best = s;
-                }
-            }
-            else { ++i; }
-        }
-
-        DBG("SerumHost: state scan best candidate = \"" + best + "\"");
-
-        if (best.isNotEmpty())
-        {
-            cachedPresetName_ = best;
-            return cachedPresetName_;
         }
     }
 

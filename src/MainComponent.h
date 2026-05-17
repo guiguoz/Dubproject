@@ -49,6 +49,7 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     //==========================================================================
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
 private:

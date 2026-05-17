@@ -4,7 +4,7 @@ Les projets sont des fichiers **JSON** UTF-8 avec l'extension `.saxfx`. La **sou
 
 ## Version actuelle (écriture)
 
-À l'enregistrement, le champ racine **`version`** est toujours **`16`** (nombre entier JSON).
+À l'enregistrement, le champ racine **`version`** est toujours **`18`** (nombre entier JSON).
 
 Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v16.
 
@@ -26,6 +26,8 @@ Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire pa
 | 14 | `serumState` à la racine (état preset Serum, base64) ; `swing` racine |
 | 15 | `serumGain` par scène — gain Serum persisté par scène |
 | 16 | Migration : `userGains[i] < 0.50` réinitialisé à 1.0 au load si slot non vide |
+| 17 | `serumPresetName` à la racine — nom preset Serum saisi manuellement (click-to-edit) |
+| 18 | `serumState` + `serumPresetName` déplacés dans `scenes[]` — preset Serum **par scène** ; migration v<18 : copie du root vers toutes les scènes utilisées |
 
 ## Structure JSON v16 (vue d'ensemble)
 
@@ -51,6 +53,7 @@ Racine :
 | `dubDelayDiv` | `number` | Division temporelle (v11) |
 | `midiLearn` | `array` | Bindings MIDI CC → paramètre (v12) |
 | `serumState` | `string` | État preset Serum, base64 (v14) |
+| `serumPresetName` | `string` | *Supprimé en v18 — déplacé dans `scenes[].serumPresetName`* |
 
 ### `slotMix[]` (slots où le magic mix a été appliqué)
 
@@ -86,6 +89,8 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
 | `delaySends` | `array` de 9 `number` — send bus delay par slot (0=muet, 0.8=PAD) | v8 |
 | `userGains` | `array` de 9 `number` — gain fader utilisateur (point de départ du slider) | v13 |
 | `serumGain` | `number` — gain Serum pour cette scène | v15 |
+| `serumState` | `string` — état preset Serum base64 pour cette scène (v18) | v18 |
+| `serumPresetName` | `string` — nom du preset Serum pour cette scène (v18) | v18 |
 
 ## Exemple minimal (illustratif)
 
