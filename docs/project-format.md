@@ -29,13 +29,13 @@ Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire pa
 | 17 | `serumPresetName` à la racine — nom preset Serum saisi manuellement (click-to-edit) |
 | 18 | `serumState` + `serumPresetName` déplacés dans `scenes[]` — preset Serum **par scène** ; migration v<18 : copie du root vers toutes les scènes utilisées |
 
-## Structure JSON v16 (vue d'ensemble)
+## Structure JSON v18 (vue d'ensemble)
 
 Racine :
 
 | Clé | Type | Description |
 |-----|------|-------------|
-| `version` | `number` | Toujours `16` à l'écriture |
+| `version` | `number` | Toujours `18` à l'écriture |
 | `projectName` | `string` | Nom du projet |
 | `bpm` | `number` | Tempo **maître** global (float) |
 | `masterKeyRoot` | `number` | 0=C … 11=B |
@@ -96,7 +96,7 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
 
 ```json
 {
-  "version": 16,
+  "version": 18,
   "projectName": "Exemple",
   "bpm": 120.0,
   "masterKeyRoot": 0,
@@ -104,7 +104,14 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
   "currentScene": 0,
   "swing": 0.0,
   "slotMix": [],
-  "scenes": [],
+  "scenes": [
+    {
+      "index": 0,
+      "used": true,
+      "serumState": "<base64>",
+      "serumPresetName": "ARP_Power_Grid_1"
+    }
+  ],
   "dubDelayEnabled": false,
   "dubDelaySend": 0.2,
   "dubDelayWet": 0.28,
@@ -112,8 +119,7 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
   "dubDelayTone": 0.55,
   "dubDelayDrive": 0.15,
   "dubDelayDiv": 1,
-  "midiLearn": [],
-  "serumState": ""
+  "midiLearn": []
 }
 ```
 

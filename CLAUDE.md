@@ -85,13 +85,16 @@ Appliqué dans `applyScene()` avant `armAdaptiveCrossfade`.
 configuré dans `onTypesDetected`. Guard anti-rebuild si la config n'a pas changé.
 API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI thread uniquement.
 
-### 4. SerumHost — limitations connues
+### 4. SerumHost — format état VST3
 
-- `getProgramName(getCurrentProgram())` retourne toujours **"prog 1"** — Serum V2 VST3
-  ne remonte pas le nom du preset via l'API standard JUCE.
-- `AudioProcessorListener` + parsing d'état (512 premiers octets) implémentés mais
-  inefficaces pour Serum : le preset name reste inaccessible pour l'instant.
-- → Afficher un message fallback côté UI ; ne pas bloquer dessus.
+- `getProgramName(getCurrentProgram())` retourne toujours **"Prog 1"** (capital P) —
+  Serum V2 VST3 ne remonte pas le vrai nom via l'API standard JUCE.
+- **Auto-détection implémentée** : `getCurrentPresetName()` parse le bloc binaire VST3 :
+  - Raw state : 8 octets header (`"VC2!" + int32`) + XML `<VST3PluginState>`
+  - Enfants `<IComponent>` / `<IEditController>` : base64 JUCE → binaire `"XferJson\0"` + int64 + JSON
+  - Champ `"presetName"` dans le JSON de `<IEditController>` → nom réel du preset
+- Fallback `presetNameSource_ = Manual` : si l'utilisateur saisit un nom manuellement,
+  il n'est jamais écrasé par le scan automatique.
 
 ### 5. Conventions importantes
 
@@ -117,7 +120,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 
 | Item | Statut | Piste |
 |------|--------|-------|
-| Nom preset Serum | Partiel — click-to-edit (v17 `serumPresetName`) + scan binaire best-effort (ASCII + UTF-16 LE, 64 KB) | IUnitInfo bas niveau si auto-détection reste insuffisante |
+| Nom preset Serum | Résolu — auto-détection via parsing XML/JSON de l'état VST3 (v18) + fallback click-to-edit Manuel | — |
 | ONNX slot 8 | Heuristique uniquement | Retrain modèle sur 9 slots |
 | MIDI CC par paramètre d'effet | Non implémenté | Requiert refactor MidiLearnMap |
 | Pitch tracking < 85 Hz | YIN filtré 40 Hz HP | `setMinFrequency()` au risque d'instabilité |
@@ -137,7 +140,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 | `src/dsp/SerumHost.h/.cpp` | Hôte VST3 + AudioProcessorListener |
 | `src/ui/ScaleStaffComponent.h/.cpp` | Portée musicale (gammes jouables selon tonalité) |
 | `src/ui/Colours.h` | Palette UI (`SaxFXColours::accent`, `aiBadge`, `neonCyan`…) |
-| `docs/project-format.md` | Schéma JSON `.saxfx` v8 |
+| `docs/project-format.md` | Schéma JSON `.saxfx` v18 |
 
 ---
 
