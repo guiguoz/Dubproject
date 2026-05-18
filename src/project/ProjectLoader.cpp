@@ -170,8 +170,14 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
 
                 if (const auto* teArr = entry["trimEnd"].getArray())
                     for (int i = 0; i < 9 && i < teArr->size(); ++i)
+                    {
+                        const int te = static_cast<int>((*teArr)[i]);
+                        const int ts = sc.trimStart[static_cast<std::size_t>(i)];
+                        // Reject degenerate trims: trimEnd too close to trimStart
+                        // means the resulting buffer would be inaudibly short (< 100 samples ≈ 2 ms).
                         sc.trimEnd[static_cast<std::size_t>(i)] =
-                            static_cast<int>((*teArr)[i]);
+                            (te >= 0 && te - ts < 100) ? -1 : te;
+                    }
 
                 if (const auto* dsArr = entry["delaySends"].getArray())
                     for (int i = 0; i < 9 && i < dsArr->size(); ++i)
@@ -184,9 +190,11 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                             sc.userGains[static_cast<std::size_t>(i)] =
                                 juce::jlimit(0.f, 2.f, static_cast<float>((*ugArr)[i]));
 
-                // v16: reset AI-calibrated userGains that are too low to hear
-                // Threshold 0.50 catches both old gains (HAT 0.09) and new gains (HAT 0.318)
-                if (data.version < 16)
+                // Reset AI-calibrated userGains that are too low to hear.
+                // v<16: old gains (HAT 0.09). v16-18: gains from old magic mix runs where
+                // targetGainForType had not yet been raised (SNR/HAT/PAD/PRC ≈ 0.22-0.39).
+                // v19 = first version where projects are guaranteed clean.
+                if (data.version < 19)
                     for (int i = 0; i < 9; ++i)
                         if (!sc.filePaths[static_cast<std::size_t>(i)].empty()
                             && sc.userGains[static_cast<std::size_t>(i)] < 0.50f)

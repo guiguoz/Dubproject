@@ -2845,8 +2845,11 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 {
                     const int s2 = juce::jlimit(0, total - 1, ts);
                     const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
-                    std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
-                    dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
+                    if (e2 - s2 >= 100)  // guard: ignore degenerate trims (< ~2 ms at 44100 Hz)
+                    {
+                        std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
+                        dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
+                    }
                 }
             }
         }

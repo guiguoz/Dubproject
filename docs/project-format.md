@@ -4,7 +4,7 @@ Les projets sont des fichiers **JSON** UTF-8 avec l'extension `.saxfx`. La **sou
 
 ## Version actuelle (écriture)
 
-À l'enregistrement, le champ racine **`version`** est toujours **`18`** (nombre entier JSON).
+À l'enregistrement, le champ racine **`version`** est toujours **`19`** (nombre entier JSON).
 
 Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v16.
 
@@ -28,8 +28,9 @@ Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire pa
 | 16 | Migration : `userGains[i] < 0.50` réinitialisé à 1.0 au load si slot non vide |
 | 17 | `serumPresetName` à la racine — nom preset Serum saisi manuellement (click-to-edit) |
 | 18 | `serumState` + `serumPresetName` déplacés dans `scenes[]` — preset Serum **par scène** ; migration v<18 : copie du root vers toutes les scènes utilisées |
+| 19 | Migration : `userGains[i] < 0.50` réinitialisé à 1.0 pour les projets v≤18 (gains snare/hat calibrés trop bas par ancien magic mix) |
 
-## Structure JSON v18 (vue d'ensemble)
+## Structure JSON v19 (vue d'ensemble)
 
 Racine :
 

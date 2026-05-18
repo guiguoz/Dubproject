@@ -140,14 +140,14 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 | `src/dsp/SerumHost.h/.cpp` | Hôte VST3 + AudioProcessorListener |
 | `src/ui/ScaleStaffComponent.h/.cpp` | Portée musicale (gammes jouables selon tonalité) |
 | `src/ui/Colours.h` | Palette UI (`SaxFXColours::accent`, `aiBadge`, `neonCyan`…) |
-| `docs/project-format.md` | Schéma JSON `.saxfx` v18 |
+| `docs/project-format.md` | Schéma JSON `.saxfx` v19 |
 
 ---
 
 ## Format projet `.saxfx`
 
-Version courante : **v18** (`"version": 18` en JSON).
-Migrations v1→v18 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
+Version courante : **v19** (`"version": 19` en JSON).
+Migrations v1→v19 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
 Slot guard : rejette `slot >= 9` au chargement.
-Migration v16 : tout `userGains[i] < 0.50` sur slot non vide est réinitialisé à 1.0
-au chargement (ancienne calibration IA trop basse).
+Migration v19 : tout `userGains[i] < 0.50` sur slot non vide est réinitialisé à 1.0
+au chargement pour les projets v≤18 (ancienne calibration IA trop basse — snare/hat).
