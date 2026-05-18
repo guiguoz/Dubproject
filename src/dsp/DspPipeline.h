@@ -78,6 +78,12 @@ class DspPipeline
 
     void resetDucking() noexcept { smoothDuck_ = 1.0f; }
 
+    void resetAllDelays() noexcept
+    {
+        dubDelay_.reset();
+        pingPongDelay_.reset();
+    }
+
     // ── Master Limiter (GUI thread) ──────────────────────────────────────────
     void setMasterLimiterEnabled(bool enabled) noexcept { masterLimiter_.setEnabled(enabled); }
     bool isMasterLimiterEnabled() const noexcept { return masterLimiter_.isEnabled(); }

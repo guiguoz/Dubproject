@@ -44,6 +44,9 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
     void unloadSerumPlugin();
     void openSerumEditor();
 
+    // ── Panic : coupe tous les slots + delays instantanément ─────────────────
+    void triggerPanic() noexcept;
+
     //==========================================================================
     // Component
     //==========================================================================
@@ -214,6 +217,9 @@ private:
     //==========================================================================
     int  autosaveTick_     { 0 };
     int  autosaveFadeTimer_{ 0 };
+    int  autosaveSlot_     { 0 };
+    bool panicArmed_       { false };
+    uint8_t panicCC_       { 64 };   // CC#64 (sustain) par défaut — FCB1010 footswitch
 
     // ── Sidechain config cache (évite rebuilds répétés dans onTypesDetected) ───
     int                lastSidechainKick_    { -1 };

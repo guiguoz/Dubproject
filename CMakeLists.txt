@@ -137,6 +137,11 @@ if(SAXFX_ENABLE_ONNX)
     ort_copy_dll(SaxFXLive)
 endif()
 
+# Windows crash handler (minidump)
+if(WIN32)
+    target_link_libraries(SaxFXLive PRIVATE DbgHelp)
+endif()
+
 # Copy AI models next to the exe after each build
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/models")
     add_custom_command(TARGET SaxFXLive POST_BUILD

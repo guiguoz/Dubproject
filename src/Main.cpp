@@ -1,5 +1,10 @@
 #include "MainComponent.h"
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+ #include <DbgHelp.h>
+#endif
+
 //==============================================================================
 /**
  * SaxFXLiveApplication — point d'entrée de l'application JUCE
@@ -24,6 +29,26 @@ public:
     //==========================================================================
     void initialise(const juce::String& /*commandLine*/) override
     {
+#if JUCE_WINDOWS
+        SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* ep) -> LONG
+        {
+            const auto dir = juce::File::getSpecialLocation(
+                juce::File::userApplicationDataDirectory).getChildFile("DubEngine");
+            dir.createDirectory();
+            const auto ts  = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
+            const auto dmp = dir.getChildFile("crash_" + ts + ".dmp");
+            HANDLE hFile   = CreateFileW(dmp.getFullPathName().toWideCharPointer(),
+                GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+            if (hFile != INVALID_HANDLE_VALUE)
+            {
+                MINIDUMP_EXCEPTION_INFORMATION mei { GetCurrentThreadId(), ep, FALSE };
+                MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
+                    hFile, MiniDumpNormal, ep ? &mei : nullptr, nullptr, nullptr);
+                CloseHandle(hFile);
+            }
+            return EXCEPTION_CONTINUE_SEARCH;
+        });
+#endif
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
@@ -76,6 +101,14 @@ public:
                 if (auto* peer = getPeer(); peer != nullptr && peer->isFullScreen())
                 {
                     peer->setFullScreen(false);
+                    return true;
+                }
+            }
+            if (key == juce::KeyPress::spaceKey)
+            {
+                if (auto* mc = dynamic_cast<MainComponent*>(getContentComponent()))
+                {
+                    mc->triggerPanic();
                     return true;
                 }
             }

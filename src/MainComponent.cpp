@@ -1453,12 +1453,21 @@ void MainComponent::openAudioSettings()
     options.launchAsync();
 }
 
+void MainComponent::triggerPanic() noexcept
+{
+    dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Instant);
+    dspPipeline_.resetAllDelays();
+    stepSequencer_.setPlaying(false);
+}
+
 void MainComponent::doAutosave()
 {
     const auto dir = juce::File::getSpecialLocation(
         juce::File::userApplicationDataDirectory).getChildFile("DubEngine");
     dir.createDirectory();
-    saveProjectToFile(dir.getChildFile("autosave.saxfx"));
+    saveProjectToFile(dir.getChildFile(
+        "autosave." + juce::String(autosaveSlot_) + ".saxfx"));
+    autosaveSlot_     = (autosaveSlot_ + 1) % 3;
     autosaveFadeTimer_ = 120;
 }
 
@@ -2406,6 +2415,21 @@ void MainComponent::timerCallback()
 
     // ── Appliquer les mappings MIDI actifs ────────────────────────────────────
     applyMidiMappings();
+
+    // ── Panic CC : footcontroller (CC configurable) + fallback CC#120/123 ────
+    {
+        const float ccVal = midiManager_.getCcValue(static_cast<int>(panicCC_));
+        if (ccVal >= 0.5f && !panicArmed_)
+        {
+            panicArmed_ = true;
+            triggerPanic();
+        }
+        else if (ccVal < 0.5f)
+            panicArmed_ = false;
+
+        if (midiManager_.getCcValue(120) >= 0.5f || midiManager_.getCcValue(123) >= 0.5f)
+            triggerPanic();
+    }
 
     // ── Preset Serum : mise à jour 1×/s (~30 ticks) ──────────────────────────
     if (++presetNameTick_ >= 30)
