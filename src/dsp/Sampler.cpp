@@ -747,6 +747,7 @@ void Sampler::processStereo(float* left, float* right, int numSamples,
         if (!sl.loaded.load(std::memory_order_acquire))
         {
             for (int vi=0; vi<2; ++vi) ps.voices[vi].playing = false;
+            outputPeaks_[idx].store(0.f, std::memory_order_relaxed);
             continue;
         }
 

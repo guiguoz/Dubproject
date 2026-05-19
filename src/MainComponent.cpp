@@ -2971,13 +2971,20 @@ void MainComponent::applyScene(int idx, int fromIdx)
             juce::Colour { 0xFFFF6B35 },
         };
         auto& sampler = dspPipeline_.getSampler();
+        using CT = ::dsp::SmartSamplerEngine::ContentType;
+        static constexpr CT kDefaultTypes[9] = {
+            CT::LOOP, CT::BASS, CT::KICK, CT::SNARE, CT::HIHAT,
+            CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
+        };
         for (int i = 0; i < 9; ++i)
         {
-            const auto ct     = samplerEngine_.getDetectedType(i);
-            const auto sp     = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
-            const bool loaded = sampler.isLoaded(i);
+            const auto detected = samplerEngine_.getDetectedType(i);
+            const auto ct       = (detected != CT::OTHER) ? detected : kDefaultTypes[i];
+            const auto sp       = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
+            const bool loaded   = sampler.isLoaded(i);
             spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
         }
+        spatialViz_.setSaxActive(true);
     }
 }
 
