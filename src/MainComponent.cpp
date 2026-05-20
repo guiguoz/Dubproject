@@ -152,8 +152,8 @@ MainComponent::MainComponent()
     addAndMakeVisible(aiCloud_);
 
     // ── EWI Synth section ─────────────────────────────────────────────────────
-    styleSideBtn(serumLoadBtn_, "LOAD SERUM");
-    styleSideBtn(serumShowUiBtn_, "SHOW UI");
+    styleSideBtn(serumLoadBtn_, "SERUM");
+    styleSideBtn(serumShowUiBtn_, "SHOW");
     serumShowUiBtn_.onClick = [this] { openSerumEditor(); };
     addAndMakeVisible(serumShowUiBtn_);
 
@@ -165,6 +165,16 @@ MainComponent::MainComponent()
         loadSerumPlugin(kSerumPath);
     };
     addAndMakeVisible(serumLoadBtn_);
+
+    styleSideBtn(swamLoadBtn_, "SWAM");
+    swamLoadBtn_.onClick = [this]
+    {
+        static const juce::String kSwamPath {
+            "C:\\Program Files\\Common Files\\VST3\\SWAM\\Trumpets\\SWAM Trumpet.vst3"
+        };
+        loadSerumPlugin(kSwamPath);
+    };
+    addAndMakeVisible(swamLoadBtn_);
 
     serumStatusLabel_.setText("not loaded", juce::dontSendNotification);
     serumStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
@@ -2341,9 +2351,10 @@ void MainComponent::resized()
         // ── EWI SYNTH section (labels drawn in paint()) ──────────────────────
         // "EWI SYNTH" header at yFlow (10px), then buttons 12px below
         {
-            const int halfB = (sbBtnW - 4) / 2;
-            serumLoadBtn_  .setBounds(sbBtnX,           yFlow + 12, halfB, 22);
-            serumShowUiBtn_.setBounds(sbBtnX + halfB + 4, yFlow + 12, halfB, 22);
+            const int thirdB = (sbBtnW - 8) / 3;
+            serumLoadBtn_  .setBounds(sbBtnX,                    yFlow + 12, thirdB, 22);
+            swamLoadBtn_   .setBounds(sbBtnX + thirdB + 4,       yFlow + 12, thirdB, 22);
+            serumShowUiBtn_.setBounds(sbBtnX + 2 * (thirdB + 4), yFlow + 12, thirdB, 22);
         }
         yFlow += 38; // 12+22+4
         serumStatusLabel_.setBounds(sbBtnX, yFlow,      sbBtnW, 12); yFlow += 16; // 12+4

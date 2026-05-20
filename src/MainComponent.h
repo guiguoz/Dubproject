@@ -98,6 +98,7 @@ private:
 
     // ── EWI Synth UI ─────────────────────────────────────────────────────────
     juce::TextButton                    serumLoadBtn_;
+    juce::TextButton                    swamLoadBtn_;
     juce::TextButton                    serumShowUiBtn_;
     juce::Label                         serumStatusLabel_;
     juce::TextEditor                    ewiDeviceEditor_;
