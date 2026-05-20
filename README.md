@@ -1,10 +1,11 @@
 # DubEngine
 
-Real-time audio effects processor for live saxophone performance, built with JUCE/C++.
-Designed for dub techno live sets with a neon dark interface.
+Live dub techno performance tool built with JUCE/C++.
+Instrument : AKAI EWI USB (vent MIDI) — neon dark interface.
 
 **Input** : Focusrite Scarlett Solo 2nd gen (ASIO / WASAPI fallback)
-**Effects** : 12 effect types with drag-and-drop effect chain
+**Delay** : Stereo ping-pong dub delay (per-slot send bus)
+**Synth** : Serum V2 VST3 hosted internally (`SerumHost`)
 **Sampler** : 9-track step sequencer with AI-assisted mixing
 **Control** : MIDI pedalboard (e.g. Behringer FCB1010)
 **Target latency** : <= 20 ms
@@ -14,41 +15,6 @@ Designed for dub techno live sets with a neon dark interface.
 ---
 
 ## Features
-
-### Effect Chain (12 types)
-
-| Effect | Description | Presets |
-|--------|-------------|---------|
-| Reverb | JUCE freeverb (room, damping, width, mix) | 6 |
-| Delay | Tempo-synced with note divisions | 5 |
-| Flanger | LFO-modulated comb filter | 5 |
-| Harmonizer | 2-voice pitch-shifted harmony (WSOLA) | 7 |
-| Envelope Filter | Dynamics-driven auto-wah | 5 |
-| Octaver | Sub-octave generator (-1, -2 oct) | 5 |
-| PitchFork | Fixed pitch shift | 5 |
-| Whammy | Expression-controlled pitch bend | 5 |
-| AutoPitch | Chromatic pitch correction | 4 |
-| Slicer | Rhythmic gate/tremolo | 6 (PresetLibrary) + 15 built-in |
-| Accordeur | Chromatic tuner (A=415-465 Hz) | 2 |
-| Synth | Pitch-tracking synth (PolyBLEP, SuperSaw, Moog filter) | 22 built-in |
-
-Effects are organized in a modular chain with per-effect enable/disable,
-drag-and-drop reordering, and SmartMixEngine auto-optimization.
-
-### Synth Effect
-
-Full pitch-tracking synthesizer that **replaces** the saxophone signal (100% wet — dry sax is always silent when Synth is active):
-
-- **Oscillators**: Saw, Square, Sine, SubBass (PolyBLEP anti-aliased), SuperSaw (7-voice unison with detune)
-- **Filter**: Moog ladder (4-pole resonant lowpass, self-oscillation at resonance=1.0)
-- **Envelope**: Amplitude envelope follower — synth breathes with the sax input level
-- **Pitch tracking**: YIN detector feeds `currentFreq_` with portamento glide (kGlide=0.05)
-- **8 parameters**: Waveform, Octave, Detune, Cutoff, Resonance, Attack, Release, **Volume**
-  - param 7 = **Volume** (0=silent, 1=full) — NOT a dry/wet mix
-  - `enabled=true` always; set Volume=0 to silence, raise to hear synth
-- **Position in chain**: first — receives raw sax, subsequent effects (Harmonizer, Flanger…) process the synth signal
-- **22 presets**: Dub Techno (sub bass, chord stab, deep pad, dub siren, techno lead),
-  Techno (acid bass, reese, hoover, Detroit pad), Leads, Ambient, Percussive, FX/Creative
 
 ### Sampler & Step Sequencer
 
@@ -215,25 +181,18 @@ Dubproject/   (nom du dossier local peut varier)
 │   ├── logo.png                  App logo (embedded via juce_add_binary_data)
 │   ├── MainComponent.h/.cpp      Main app (audio callback, UI layout)
 │   ├── dsp/                      DSP engine
-│   │   ├── IEffect.h             Effect interface + EffectType enum
-│   │   ├── EffectChain.h/.cpp    Ordered effect chain container
-│   │   ├── EffectFactory.h/.cpp  Effect creation by name/enum
-│   │   ├── EffectChainOptimizer  AI-driven parameter optimization
-│   │   ├── SmartMixEngine.h      Intelligent defaults + genre overrides
-│   │   ├── DelayEffect.h/.cpp    Tempo-synced delay (5 presets)
-│   │   ├── SlicerEffect.h/.cpp   Rhythmic gate (15 built-in presets)
-│   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
-│   │   ├── [12 more effects]     Reverb, Flanger, Harmonizer, etc.
-│   │   ├── DspPipeline.h/.cpp    Audio processing pipeline
-│   │   ├── Sampler.h/.cpp        9-slot sample player (kFadeInLen=88, kFadeOutLen=256/350ms stop, double-buffer lock-free reload)
-│   │   ├── StepSequencer.h       Up-to-512-step sequencer, 9 tracks (kTracks=9, kMaxSteps=512)
+│   │   ├── DspPipeline.h/.cpp    Audio processing pipeline (stereo, lock-free)
+│   │   ├── Sampler.h/.cpp        9-slot sample player (double-buffer lock-free)
+│   │   ├── StepSequencer.h       Up-to-512-step sequencer, 9 tracks
+│   │   ├── SceneManager.h        8 scenes + adaptive crossfade
+│   │   ├── PingPongDelay.h/.cpp  Stereo dub delay (per-slot send bus)
+│   │   ├── SerumHost.h/.cpp      VST3 host for Serum V2
+│   │   ├── SmartSamplerEngine.h  AI magic mix orchestrator
 │   │   ├── BpmDetector.h/.cpp    Tempo detection
-│   │   ├── KeyDetector.h/.cpp    Key/scale detection
-│   │   ├── YinPitchTracker.cpp   YIN pitch detection
 │   │   ├── WsolaShifter.h/.cpp   WSOLA pitch shifting
 │   │   ├── AiContentClassifier   ONNX sample classifier
-│   │   ├── AiMixEngine.h/.cpp    ONNX mix optimizer (8-slot model, slot 8 uses heuristic path)
-│   │   ├── MasterLimiter.h       tanh soft-clipper (unity gain < threshold, no 1.5× boost)
+│   │   ├── AiMixEngine.h/.cpp    ONNX mix optimizer (8-slot model)
+│   │   ├── MasterLimiter.h       tanh soft-clipper
 │   │   ├── FeatureExtractor      Spectral feature extraction
 │   │   ├── OnnxInference.h       ONNX Runtime wrapper
 │   │   └── InferenceThread.h     Async inference thread
@@ -246,10 +205,6 @@ Dubproject/   (nom du dossier local peut varier)
 │   │   ├── AnimatedValue.h       Cubic-out interpolator for smooth UI transitions
 │   │   ├── NeonButton.h          TextButton + glow + configurable hover animation (setFadeOutMs)
 │   │   ├── SampleEditorComponent.h Waveform trim dialog (IN/OUT markers, Play/Stop)
-│   │   ├── EffectRackUnit.h      Effect card (icon, name, knobs)
-│   │   ├── PedalboardPanel.h     Drag-and-drop effect chain
-│   │   ├── EffectChainEditor.h   Chain editor wrapper
-│   │   ├── PresetLibrary.h       Compile-time preset tables
 │   │   ├── StepSequencerPanel.h  Sequencer grid UI (scrollbar, waveform, playhead)
 │   │   ├── SpatialVisualization.h 2D stereo field display (pan × depth)
 │   │   └── [more UI components]  MagicButton, RotaryKnob, etc.
@@ -410,39 +365,20 @@ Dubproject/   (nom du dossier local peut varier)
 #### Signal flow (stereo path)
 
 ```
-Focusrite Scarlett (mono in)
+AKAI EWI USB (MIDI in) + Focusrite Scarlett (audio in optionnel)
   └─► getNextAudioBlock()
-        ├─ RMS input (VU meter LEFT)
-        ├─ StepSequencer::process()       — triggers sampler slots
+        ├─ RMS input (VU meter)
+        ├─ StepSequencer::process()         — triggers sampler slots on MIDI/step events
         └─ DspPipeline::processStereo(left, right)
-              ├─ 1. YIN pitch tracker     — analyse left, ne modifie pas
-              ├─ 2. BPM detector          — analyse left, ne modifie pas
-              ├─ 3. RMS smoothing         — sur left avant effets
-              ├─ 4. Pitch Stabilization   — gating (confidence/rms), log-EMA smoothing, hold (200ms)
-              ├─ 5. std::copy(left → right)     — source identique aux 2 canaux
-              ├─ 5. EffectChain::processStereo(left, right)  — vrai stéréo
-              │     ├─ [Reverb] → Freeverb filtres peigne/allpass séparés L/R
-              │     ├─ [Delay]  → ping-pong L→R→L→R
-              │     └─ autres effets → dual-mono indépendant (défaut IEffect)
-              ├─ 6. ExpressionMapper
-              ├─ 7. Sampler::processStereo()    — additionné sur left+right
-              ├─ 8. KeyboardSynth::processStereoAdd()
-              ├─ 9. MonoSubFilter               — force < 120 Hz en mono (PA compat.)
-              └─ 10. MasterLimiter (L+R)
+              ├─ 1. BPM detector            — analyse, ne modifie pas
+              ├─ 2. Sampler::processStereo() — 9 slots additifs, pan stéréo par slot
+              ├─ 3. PingPongDelay            — bus send par slot, stéréo L→R→L→R
+              ├─ 4. MonoSubFilter            — force < 120 Hz en mono (PA compat.)
+              └─ 5. MasterLimiter (L+R)
 ```
-
-#### Synth Effect — comportement
-
-- **Toujours `enabled = true`** — le volume (param 7) contrôle la présence
-- **100% wet** — `buf[i] = clipSample(osc) * volume` — le sax disparaît complètement
-- **Envelope follower** — le synth "respire" avec le sax (amplitude suit le RMS d'entrée)
-- **Pitch tracking** — YIN détecte la fréquence fondamentale, le synth la suit avec glide
-- **Position** — premier dans la chaîne → reçoit le sax brut → les effets suivants traitent le synth
-- Si `volume = 0` → silence (pas de sax) ; monter le knob pour entendre le synth
 
 #### AI Mix (SmartSamplerEngine) — comportement
 
-- Gains calibrés pour coexister avec un sax live : ~3 dB de headroom réservé
 - Ducking désactivé (`duckingEnabled_ = false`) — pas de pompage
 - ⚡ Magic Mix doit être **relancé** après chaque changement de mute/slot pour recalculer
 - Slot 8 (DRM) bypasse le modèle ONNX 8-slot → heuristic `ContentType::LOOP`

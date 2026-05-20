@@ -8,7 +8,7 @@ threading, pipeline audio) et [README.md](README.md) (features, build, roadmap).
 ## Résumé projet (30 secondes)
 
 Application **desktop JUCE C++17** de performance live **dub techno**.
-- Instrument : **AKAI EWI** (vent MIDI) → traitement EWI temps réel (EffectChain)
+- Instrument : **AKAI EWI** (vent MIDI) → déclenchement MIDI du sampler
 - Playback : **sampler 9 slots** piloté par step sequencer (jusqu'à 512 pas/track)
 - IA intégrée : classifieur ONNX (8 types) + optimiseur de mix ONNX (8 slots)
 - **Synth VST3 : Serum V2** hosté en interne (`SerumHost`)
