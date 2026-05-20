@@ -106,12 +106,12 @@ public:
     /// Public pour les tests unitaires ; aucun état modifié.
     static CrossfadeProfile chooseProfile(float from, float to) noexcept
     {
-        constexpr float kT = 0.20f;
+        constexpr float kT = 0.15f;
         const bool fHigh = (from >= kT), tHigh = (to >= kT);
-        if ( fHigh && !tHigh) return { 400, CrossfadeCurve::EaseIn    };
-        if (!fHigh &&  tHigh) return { 120, CrossfadeCurve::EaseOut   };
-        if ( fHigh &&  tHigh) return { 200, CrossfadeCurve::Linear    };
-        return                       { 250, CrossfadeCurve::Smoothstep };
+        if ( fHigh && !tHigh) return { 600, CrossfadeCurve::EaseIn    };
+        if (!fHigh &&  tHigh) return {  80, CrossfadeCurve::EaseOut   };
+        if ( fHigh &&  tHigh) return { 250, CrossfadeCurve::Linear    };
+        return                       { 350, CrossfadeCurve::Smoothstep };
     }
 
     /// Crossfade adaptatif : durée et courbe choisies selon l'énergie from/to.

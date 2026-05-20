@@ -2909,11 +2909,16 @@ void MainComponent::applyScene(int idx, int fromIdx)
         for (int i = 0; i < 9; ++i)
             targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
         // Reset les slots existants à leur gain de départ pour que le crossfade parte
-        // de la bonne valeur. Les nouveaux slots (gainsBeforeScene≈0, target>0) sont
-        // exclus du reset : leur gain cible reste actif dès le flip (pas de fade-in).
+        // de la bonne valeur. Slots rythmiques (KICK/SNARE/HAT) : cut net, jamais de fade.
+        // Nouveaux fichiers non-rythmiques : partir de 0 pour un fade-in propre.
+        static constexpr bool kIsRhythm[9] = { false, false, true, true, true, false, false, false, false };
         for (int i = 0; i < 9; ++i)
-            if (gainsBeforeScene[i] >= 0.001f || targetGains_local[i] < 0.001f)
+        {
+            if (loadedNewFile[static_cast<std::size_t>(i)] && !kIsRhythm[i])
+                dspPipeline_.getSampler().setSlotGain(i, 0.f);
+            else if (gainsBeforeScene[i] >= 0.001f || targetGains_local[i] < 0.001f)
                 dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
+        }
         // Remettre Serum au gain de départ pour que le crossfade le ramène au target
         serumUserGain_.store(serumGainBefore, std::memory_order_relaxed);
         {
@@ -2921,12 +2926,17 @@ void MainComponent::applyScene(int idx, int fromIdx)
             const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
             const float toEnergy   = sceneManager_.getSceneEnergy(idx);
 
-            // Nouveaux slots : start == target → pas de fondu → l'attaque est préservée.
+            // Nouveaux fichiers non-rythmiques : fade-in depuis silence (startGains=0).
+            // Slots rythmiques (KICK/SNARE/HAT) et slots inchangés : comportement habituel.
             // Floor –60 dB uniquement pour les profils lents sur slots existants.
             auto startGains = gainsBeforeScene;
             for (int i = 0; i < 9; ++i)
-                if (startGains[i] < 0.001f && targetGains_local[i] > 0.001f)
+            {
+                if (loadedNewFile[static_cast<std::size_t>(i)] && !kIsRhythm[i])
+                    startGains[i] = 0.f;
+                else if (startGains[i] < 0.001f && targetGains_local[i] > 0.001f)
                     startGains[i] = targetGains_local[i];
+            }
             const bool slowProfile = (fromEnergy >= 0.20f && toEnergy < 0.20f)
                                   || (fromEnergy <  0.20f && toEnergy < 0.20f);
             if (slowProfile)
