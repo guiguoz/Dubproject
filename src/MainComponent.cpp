@@ -2496,6 +2496,19 @@ void MainComponent::timerCallback()
         if (serumCrossfadeGain >= 0.f)
             serumUserGain_.store(serumCrossfadeGain, std::memory_order_relaxed);
 
+    // Appliquer les mutes différés une fois le crossfade terminé
+    if (!sceneManager_.isCrossfadeActive())
+    {
+        for (int i = 0; i < 9; ++i)
+        {
+            if (pendingMutes_[static_cast<std::size_t>(i)])
+            {
+                dspPipeline_.getSampler().setSlotMuted(i, true);
+                pendingMutes_[static_cast<std::size_t>(i)] = false;
+            }
+        }
+    }
+
     // Mise à jour état nuage IA
     if (samplerEngine_.isBusy())
         aiCloud_.setState(ui::PixelCloudComponent::State::Working);
@@ -2770,9 +2783,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     // BPM is global (master clock) — not overridden by scene data
 
-    // Remettre le séquenceur au step 0 → nouvelle scène part toujours du début
-    if (stepSequencer_.isPlaying())
-        stepSequencer_.resetPhase();
+    // Vider les mutes en attente de la transition précédente
+    pendingMutes_.fill(false);
 
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
@@ -2838,7 +2850,9 @@ void MainComponent::applyScene(int idx, int fromIdx)
             samplerEngine_.setSlotFilePath(i, newPath);
         }
 
-        dspPipeline_.getSampler().setSlotMuted    (i, sc.mutes[i]);
+        if (!sc.mutes[i])
+            dspPipeline_.getSampler().setSlotMuted(i, false);  // unmute immédiat
+        pendingMutes_[static_cast<std::size_t>(i)] = sc.mutes[i];
         // userGains est le seul contrôle de volume : sc.gains (calibration IA) y est déjà intégré
         // dès qu'onDone tourne (onDone écrit sc.userGains = ms.gain). On ne multiplie plus les deux
         // pour éviter que les gains IA très faibles (hihat 0.09, snare 0.22) n'écrasent le fader.
@@ -2908,6 +2922,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
         std::array<float, 9> targetGains_local {};
         for (int i = 0; i < 9; ++i)
             targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
+        // Slots qui vont être mutés : crossfader vers 0 d'abord, mute appliqué après
+        for (int i = 0; i < 9; ++i)
+            if (pendingMutes_[static_cast<std::size_t>(i)])
+                targetGains_local[i] = 0.f;
         // Reset les slots existants à leur gain de départ pour que le crossfade parte
         // de la bonne valeur. Slots rythmiques (KICK/SNARE/HAT) : cut net, jamais de fade.
         // Nouveaux fichiers non-rythmiques : partir de 0 pour un fade-in propre.
@@ -2995,6 +3013,19 @@ void MainComponent::applyScene(int idx, int fromIdx)
             spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
         }
         spatialViz_.setSaxActive(true);
+    }
+
+    // Séquenceur arrêté : pas de crossfade armé → appliquer les mutes directement
+    if (!stepSequencer_.isPlaying())
+    {
+        for (int i = 0; i < 9; ++i)
+        {
+            if (pendingMutes_[static_cast<std::size_t>(i)])
+            {
+                dspPipeline_.getSampler().setSlotMuted(i, true);
+                pendingMutes_[static_cast<std::size_t>(i)] = false;
+            }
+        }
     }
 }
 

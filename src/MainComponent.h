@@ -192,6 +192,8 @@ private:
     };
     std::array<PreloadCache, 9> preloadCache_;
     std::atomic<int>            preloadTargetScene_ { -1 };
+    // Mutes en attente d'application après la fin du crossfade de gain
+    std::array<bool, 9>         pendingMutes_ {};
     void preloadSceneAsync(int targetScene);
 
     float                           overrideBpm_{ 0.f };
