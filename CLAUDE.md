@@ -103,8 +103,6 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
   exposer de contrôles manuels pour ces paramètres.
 - **Ducking désactivé par défaut** : activer via `dspPipeline_.setDuckingEnabled(true)`.
 - **BPM global** : partagé par toutes les scènes. `setBpm()` une seule fois.
-- **SynthEffect toujours activé** : volume à 0.0 au démarrage. Utiliser `setParamValue(7, 0.0)`
-  pour le silencer, jamais `setEnabled(false)`.
 - **Plein écran** : double-clic sur zone vide de l'UI → fullscreen ;
   Escape → retour fenêtre (géré dans `Main.cpp::MainWindow::keyPressed`).
 - **`spatialViz_` auto-peuplé** : `applyScene()` appelle `spatialViz_.setSlotState()` en fin

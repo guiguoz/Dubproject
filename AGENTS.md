@@ -60,8 +60,6 @@ Ordre logique stéréo (résumé) :
 6. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
 7. **MasterLimiter** sur L et R.
 
-**Synth** : effet **100 % wet** sur l'EWI ; le signal sec disparaît quand le synth est audible — voir `SynthEffect`.
-
 **Slot 8 (DRM)** : modèle ONNX limité à 8 slots ; slot 8 = voie heuristique `ContentType::LOOP` uniquement.
 
 ## Threads et synchronisation

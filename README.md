@@ -220,8 +220,6 @@ Dubproject/   (nom du dossier local peut varier)
 │   │   ├── EffectFactory.h/.cpp  Effect creation by name/enum
 │   │   ├── EffectChainOptimizer  AI-driven parameter optimization
 │   │   ├── SmartMixEngine.h      Intelligent defaults + genre overrides
-│   │   ├── SynthEffect.h/.cpp    Pitch-tracking synth (22 presets)
-│   │   ├── KeyboardSynth.h/.cpp  Keyboard solo synth (Mono/Legato, ADSR, Glide, PolyBLEP, 6 presets)
 │   │   ├── DelayEffect.h/.cpp    Tempo-synced delay (5 presets)
 │   │   ├── SlicerEffect.h/.cpp   Rhythmic gate (15 built-in presets)
 │   │   ├── TunerEffect.h/.cpp    Chromatic tuner (A=442 ref)
