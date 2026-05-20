@@ -209,6 +209,14 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     sc.serumState      = getString(entry, "serumState");
                     sc.serumPresetName = getString(entry, "serumPresetName");
                 }
+
+                if (data.version >= 20)
+                {
+                    sc.dubDelayFeedback = static_cast<float>(entry.getProperty("dubDelayFeedback", 0.40));
+                    sc.dubDelayWet      = static_cast<float>(entry.getProperty("dubDelayWet",      0.28));
+                    sc.dubDelayTone     = static_cast<float>(entry.getProperty("dubDelayTone",     0.50));
+                    sc.dubDelayDrive    = static_cast<float>(entry.getProperty("dubDelayDrive",    0.15));
+                }
             }
         }
 
@@ -411,6 +419,11 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                 entry->setProperty("serumState", juce::String(sc.serumState));
             if (!sc.serumPresetName.empty())
                 entry->setProperty("serumPresetName", juce::String(sc.serumPresetName));
+
+            entry->setProperty("dubDelayFeedback", static_cast<double>(sc.dubDelayFeedback));
+            entry->setProperty("dubDelayWet",      static_cast<double>(sc.dubDelayWet));
+            entry->setProperty("dubDelayTone",     static_cast<double>(sc.dubDelayTone));
+            entry->setProperty("dubDelayDrive",    static_cast<double>(sc.dubDelayDrive));
 
             scenesArr.add(juce::var(entry.get()));
         }

@@ -1310,9 +1310,13 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.trimStart      = src.trimStart;
         dst.trimEnd        = src.trimEnd;
         dst.delaySends     = src.delaySends;
-        dst.serumGain      = src.serumGain;
-        dst.serumState     = src.serumState;
-        dst.serumPresetName = src.serumPresetName;
+        dst.serumGain        = src.serumGain;
+        dst.serumState       = src.serumState;
+        dst.serumPresetName  = src.serumPresetName;
+        dst.dubDelayFeedback = src.dubDelayFeedback;
+        dst.dubDelayWet      = src.dubDelayWet;
+        dst.dubDelayTone     = src.dubDelayTone;
+        dst.dubDelayDrive    = src.dubDelayDrive;
         for (int t = 0; t < 9; ++t)
         {
             const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1565,9 +1569,13 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.trimStart      = src.trimStart;
             dst.trimEnd        = src.trimEnd;
             dst.delaySends     = src.delaySends;
-            dst.serumGain      = src.serumGain;
-            dst.serumState     = src.serumState;
-            dst.serumPresetName = src.serumPresetName;
+            dst.serumGain        = src.serumGain;
+            dst.serumState       = src.serumState;
+            dst.serumPresetName  = src.serumPresetName;
+            dst.dubDelayFeedback = src.dubDelayFeedback;
+            dst.dubDelayWet      = src.dubDelayWet;
+            dst.dubDelayTone     = src.dubDelayTone;
+            dst.dubDelayDrive    = src.dubDelayDrive;
             for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -2509,6 +2517,11 @@ void MainComponent::timerCallback()
         }
     }
 
+    // Morphing PingPongDelay entre scènes (4 secondes)
+    sceneManager_.updateMorph();
+    if (sceneManager_.isMorphing())
+        applyDubDelayMorph(sceneManager_.getMorphProgress());
+
     // Mise à jour état nuage IA
     if (samplerEngine_.isBusy())
         aiCloud_.setState(ui::PixelCloudComponent::State::Working);
@@ -2752,6 +2765,14 @@ void MainComponent::captureCurrentScene()
     }
     sc.serumPresetName = currentPresetName_.toStdString();
 
+    {
+        auto& dd = dspPipeline_.getDubDelay();
+        sc.dubDelayFeedback = dd.getFeedback();
+        sc.dubDelayWet      = dd.getWet();
+        sc.dubDelayTone     = dd.getTone();
+        sc.dubDelayDrive    = dd.getDrive();
+    }
+
     // Rafraîchir le score d'énergie de la scène capturée.
     const int ci = sceneManager_.currentIdx();
     sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
@@ -2970,6 +2991,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 + " toE="   + juce::String(toEnergy,   2)
                 + " serum:" + juce::String(serumGainBefore, 2)
                 + "->"      + juce::String(serumGainTarget, 2));
+            sceneManager_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
         }
     }
 
@@ -3215,4 +3237,16 @@ void MainComponent::copyCurrentSceneToNext()
             juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
                                      " copied into scene " + juce::String(sceneManager_.currentIdx() + 1));
         });
+}
+
+void MainComponent::applyDubDelayMorph(float t)
+{
+    const auto& from = sceneManager_.getScene(sceneManager_.getMorphFromScene());
+    const auto& to   = sceneManager_.getScene(sceneManager_.getMorphToScene());
+    auto& delay      = dspPipeline_.getDubDelay();
+    const auto lerp  = [](float a, float b, float x) { return a + (b - a) * x; };
+    delay.setFeedback(lerp(from.dubDelayFeedback, to.dubDelayFeedback, t));
+    delay.setWet     (lerp(from.dubDelayWet,      to.dubDelayWet,      t));
+    delay.setTone    (lerp(from.dubDelayTone,     to.dubDelayTone,     t));
+    delay.setDrive   (lerp(from.dubDelayDrive,    to.dubDelayDrive,    t));
 }

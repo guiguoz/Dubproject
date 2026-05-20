@@ -126,7 +126,7 @@ Deux panneaux ajoutés (`kInfoZoneH = 180 px`) :
 
 ## Format projet `.saxfx`
 
-- Ecriture actuelle : **`version: 8`** (entier JSON). Chargement : migrations depuis v1+ dans `ProjectLoader::load`.
+- Ecriture actuelle : **`version: 20`** (entier JSON). Chargement : migrations depuis v1+ dans `ProjectLoader::load`.
 - Détail des clés : [docs/project-format.md](docs/project-format.md). **Source de vérité** : `ProjectLoader.cpp` + `ProjectData.h`.
 
 ## Tests

@@ -27,6 +27,11 @@ public:
   void setDiv(int div) noexcept;     // store as int (atomic)
   void setFreeze(bool) noexcept;     // optional freeze state for transitions
 
+  float getFeedback() const noexcept { return fb_.load  (std::memory_order_relaxed); }
+  float getWet()      const noexcept { return wet_.load (std::memory_order_relaxed); }
+  float getTone()     const noexcept { return tone_.load(std::memory_order_relaxed); }
+  float getDrive()    const noexcept { return drive_.load(std::memory_order_relaxed); }
+
   // Core processing: inL/inR are the inputs for this block; outputs written to outL/outR
   void processAdd(const float* inL, const float* inR,
                   float* outL, float* outR, int n) noexcept;

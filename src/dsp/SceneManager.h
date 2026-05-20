@@ -29,6 +29,10 @@ struct SceneData
     float                                serumGain      { 1.f };
     std::string                          serumState;      // Serum preset state (base64), empty = none
     std::string                          serumPresetName; // User-provided name for this scene's preset
+    float                                dubDelayFeedback { 0.40f };
+    float                                dubDelayWet      { 0.28f };
+    float                                dubDelayTone     { 0.50f };
+    float                                dubDelayDrive    { 0.15f };
     bool                                 used           { false };
 };
 
@@ -97,6 +101,37 @@ public:
     }
 
     bool isCrossfadeActive() const noexcept { return crossfade_.active; }
+
+    // ── Morphing PingPongDelay ───────────────────────────────────────────────
+
+    void startDubDelayMorph(int from, int to, float durationMs = 4000.f) noexcept
+    {
+        if (from < 0 || to < 0 || from >= kMaxScenes || to >= kMaxScenes)
+            return;
+        morphState_ = { true, 0.f, durationMs, from, to, 0 };
+    }
+
+    void updateMorph() noexcept
+    {
+        if (!morphState_.active) return;
+        morphState_.tickCounter += 33;
+        morphState_.progress = std::clamp(
+            static_cast<float>(morphState_.tickCounter) / morphState_.durationMs,
+            0.f, 1.f);
+        if (morphState_.progress >= 1.f)
+            morphState_.active = false;
+    }
+
+    bool  isMorphing()        const noexcept { return morphState_.active; }
+    float getMorphProgress()  const noexcept { return morphState_.progress; }
+    void  stopMorph()               noexcept { morphState_.active = false; }
+    int   getMorphFromScene() const noexcept { return morphState_.fromScene; }
+    int   getMorphToScene()   const noexcept { return morphState_.toScene; }
+
+    const SceneData& getScene(int idx) const noexcept
+    {
+        return scenes_[static_cast<std::size_t>(idx)];
+    }
 
     // ── Profil de crossfade ──────────────────────────────────────────────────
 
@@ -232,6 +267,17 @@ private:
         float          targetSerumGain { 1.f };
     };
     CrossfadeState crossfade_;
+
+    struct MorphState
+    {
+        bool  active      { false };
+        float progress    { 0.f };
+        float durationMs  { 4000.f };
+        int   fromScene   { -1 };
+        int   toScene     { -1 };
+        int   tickCounter { 0 };
+    };
+    MorphState morphState_;
 
     std::array<float, kMaxScenes> sceneEnergy_ {};
 };

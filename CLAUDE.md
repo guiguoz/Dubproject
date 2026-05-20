@@ -144,8 +144,8 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 
 ## Format projet `.saxfx`
 
-Version courante : **v19** (`"version": 19` en JSON).
-Migrations v1→v19 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
+Version courante : **v20** (`"version": 20` en JSON).
+Migrations v1→v20 dans `ProjectLoader.cpp`. Ne jamais baisser la version.
 Slot guard : rejette `slot >= 9` au chargement.
 Migration v19 : tout `userGains[i] < 0.50` sur slot non vide est réinitialisé à 1.0
 au chargement pour les projets v≤18 (ancienne calibration IA trop basse — snare/hat).

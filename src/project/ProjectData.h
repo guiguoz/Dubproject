@@ -70,6 +70,10 @@ struct SceneSaveData
     float                                 serumGain     { 1.f };                                      // v15
     std::string                           serumState;      // v18 — Serum preset state per scene (base64)
     std::string                           serumPresetName; // v18 — user-provided preset name per scene
+    float                                 dubDelayFeedback { 0.40f };  // v20
+    float                                 dubDelayWet      { 0.28f };  // v20
+    float                                 dubDelayTone     { 0.50f };  // v20
+    float                                 dubDelayDrive    { 0.15f };  // v20
     bool                                  used          { false };
 };
 
