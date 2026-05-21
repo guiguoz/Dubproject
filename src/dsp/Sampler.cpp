@@ -87,8 +87,14 @@ void Sampler::loadSample(int slot, const float* data, int numSamples,
 void Sampler::clearSlot(int slot) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
-    stop(slot);
-    // We do not set loaded=false immediately so the fadeout can finish!
+    auto& sl = slots_[static_cast<std::size_t>(slot)];
+    // loaded=false coupe le playback immédiatement ET bloque les re-triggers futurs.
+    // L'audio thread bail avant toute lecture PCM (ligne ~433). PCM laissé en mémoire
+    // pour éviter le UAF ; écrasé au prochain loadSample().
+    sl.loaded.store(false, std::memory_order_release);
+    auto& ps = playStates_[static_cast<std::size_t>(slot)];
+    ps.voices[0].playing = false;
+    ps.voices[1].playing = false;
 }
 
 void Sampler::trigger(int slot) noexcept
