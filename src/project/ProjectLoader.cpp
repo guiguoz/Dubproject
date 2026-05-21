@@ -217,6 +217,11 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     sc.dubDelayTone     = static_cast<float>(entry.getProperty("dubDelayTone",     0.50));
                     sc.dubDelayDrive    = static_cast<float>(entry.getProperty("dubDelayDrive",    0.15));
                 }
+                if (data.version >= 21)
+                    if (const auto* arr = entry["pitchOffsets"].getArray())
+                        for (int i = 0; i < 9 && i < arr->size(); ++i)
+                            sc.pitchOffsets[static_cast<std::size_t>(i)] =
+                                juce::jlimit(-12.f, 12.f, static_cast<float>((*arr)[i]));
             }
         }
 
@@ -424,6 +429,13 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
             entry->setProperty("dubDelayWet",      static_cast<double>(sc.dubDelayWet));
             entry->setProperty("dubDelayTone",     static_cast<double>(sc.dubDelayTone));
             entry->setProperty("dubDelayDrive",    static_cast<double>(sc.dubDelayDrive));
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(static_cast<double>(sc.pitchOffsets[static_cast<std::size_t>(i)]));
+                entry->setProperty("pitchOffsets", arr);
+            }
 
             scenesArr.add(juce::var(entry.get()));
         }

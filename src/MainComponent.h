@@ -300,6 +300,7 @@ private:
     void updateSceneLabel();
     void updateSidebarBpm(float bpm);
     void applyDubDelayMorph(float t);
+    void onPitchOffsetChanged(int slot, float semitones);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

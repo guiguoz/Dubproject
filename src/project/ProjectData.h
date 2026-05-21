@@ -74,6 +74,7 @@ struct SceneSaveData
     float                                 dubDelayWet      { 0.28f };  // v20
     float                                 dubDelayTone     { 0.50f };  // v20
     float                                 dubDelayDrive    { 0.15f };  // v20
+    std::array<float, 9>                  pitchOffsets  {};            // v21 — semitones per slot
     bool                                  used          { false };
 };
 

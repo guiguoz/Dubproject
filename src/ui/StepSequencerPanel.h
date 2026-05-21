@@ -47,6 +47,7 @@ public:
     /// Called when user right-clicks a slot indicator and picks a type override.
     /// typeIndex = 0-7 (maps to ContentType enum), or -1 = clear override.
     std::function<void(int slot, int typeIndex)>          onTypeOverrideChanged;
+    std::function<void(int slot, float semitones)>        onPitchOffsetChanged;
     std::function<void(int slot)>                         onTrackCopyRequest;
     std::function<void(int slot)>                         onTrackPasteRequest;
     bool                                                  hasPasteData { false };
@@ -515,6 +516,12 @@ public:
         // Append BPM info as tooltip on the sample name label
         sampleNameLabels_[idx].setTooltip(
             sampleNameLabels_[idx].getText() + tooltipSuffix);
+    }
+
+    void setSlotPitchOffset(int slot, float semitones) noexcept
+    {
+        if (slot < 0 || slot >= 9) return;
+        slotPitchOffsets_[slot] = semitones;
     }
 
     void setSlotSampleName(int slot, const std::string& path)
@@ -1167,6 +1174,23 @@ private:
         typeSub.addItem(110, "Auto (annuler l'override)");
         menu.addSubMenu("Forcer le type...", typeSub);
 
+        // Pitch offset sub-menu — IDs 200..212
+        static constexpr std::array<float, 13> kSemitones {
+            -12.f, -7.f, -5.f, -3.f, -2.f, -1.f, 0.f, 1.f, 2.f, 3.f, 5.f, 7.f, 12.f
+        };
+        const float curPitch = slotPitchOffsets_[slot];
+        juce::PopupMenu pitchSub;
+        pitchSub.addSectionHeader("Transposition — S" + juce::String(slot + 1));
+        for (int i = 0; i < static_cast<int>(kSemitones.size()); ++i)
+        {
+            const float st = kSemitones[static_cast<std::size_t>(i)];
+            const bool ticked = (std::abs(st - curPitch) < 0.05f);
+            juce::String label = (st > 0.f ? "+" : "") + juce::String(static_cast<int>(st)) + " st";
+            if (st == 0.f) label = "0 st  (aucun)";
+            pitchSub.addItem(200 + i, label, true, ticked);
+        }
+        menu.addSubMenu("Transposition...", pitchSub);
+
         menu.showMenuAsync(juce::PopupMenu::Options{},
             [this, slot](int result)
             {
@@ -1178,6 +1202,13 @@ private:
                     onTypeOverrideChanged(slot, result - 100);
                 else if (result == 110 && onTypeOverrideChanged)
                     onTypeOverrideChanged(slot, -1);
+                else if (result >= 200 && result < 213 && onPitchOffsetChanged)
+                {
+                    static constexpr std::array<float, 13> kSt {
+                        -12.f,-7.f,-5.f,-3.f,-2.f,-1.f,0.f,1.f,2.f,3.f,5.f,7.f,12.f
+                    };
+                    onPitchOffsetChanged(slot, kSt[static_cast<std::size_t>(result - 200)]);
+                }
             });
     }
 
@@ -1405,6 +1436,8 @@ private:
     // Swing
     juce::Slider swingSlider_;
     juce::Label  swingLabel_;
+
+    float slotPitchOffsets_[9] = {};  // semitones, displayed in context menu
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
 };

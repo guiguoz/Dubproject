@@ -630,6 +630,11 @@ MainComponent::MainComponent()
             sc.filePaths  [static_cast<std::size_t>(slot)] = cb.filePath;
     };
 
+    stepSeqPanel_.onPitchOffsetChanged = [this](int slot, float semitones)
+    {
+        onPitchOffsetChanged(slot, semitones);
+    };
+
     // Changement de longueur de pattern via le menu pageLabel_
     stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
     {
@@ -889,13 +894,18 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
     // Snapshot project SR on GUI thread before handing off (Réserve #2)
     const double snapProjectSr = currentSampleRate_;
 
+    // Capture pitch offset before background hand-off (GUI thread only)
+    const float capturedPitchOffset =
+        sceneManager_.scene(sceneManager_.currentIdx())
+                     .pitchOffsets[static_cast<std::size_t>(slot)];
+
     // Save raw copy for potential BPM-retry (Réserve #3)
     rawPcmForRetry_[static_cast<std::size_t>(slot)] = raw;
     rawSrForRetry_ [static_cast<std::size_t>(slot)] = sr;
 
     backgroundTasks_.push_back(
         std::async(std::launch::async,
-            [this, slot, raw = std::move(raw), sr, snapProjectSr]() mutable
+            [this, slot, raw = std::move(raw), sr, snapProjectSr, capturedPitchOffset]() mutable
             {
                 // RAII guard: clear processingSlot on exit
                 struct SlotGuard {
@@ -991,7 +1001,7 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
 
                 if (shutdownFlag_.load(std::memory_order_acquire)) return;
 
-                const float keyShiftSemitones = 0.f; // key detection removed
+                const float keyShiftSemitones = capturedPitchOffset; // v21 manual pitch offset
 
                 // totalSemitones: key correction + pre-compensation for the pitch
                 // drop that Hermite resample will introduce in Pass 2.
@@ -1327,6 +1337,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         dst.dubDelayWet      = src.dubDelayWet;
         dst.dubDelayTone     = src.dubDelayTone;
         dst.dubDelayDrive    = src.dubDelayDrive;
+        dst.pitchOffsets     = src.pitchOffsets;
         for (int t = 0; t < 9; ++t)
         {
             const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -1586,6 +1597,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             dst.dubDelayWet      = src.dubDelayWet;
             dst.dubDelayTone     = src.dubDelayTone;
             dst.dubDelayDrive    = src.dubDelayDrive;
+            dst.pitchOffsets     = src.pitchOffsets;
             for (int t = 0; t < 9; ++t)
             {
                 const int numSteps = src.trackBarCounts[static_cast<std::size_t>(t)] * 16;
@@ -3141,13 +3153,14 @@ void MainComponent::preloadSceneAsync(int targetScene)
         if (newPath.empty() || newPath == curPath)
             continue;
 
-        const int trimStart      = sc.trimStart[static_cast<std::size_t>(slot)];
-        const int trimEnd        = sc.trimEnd  [static_cast<std::size_t>(slot)];
-        const int capturedSlot   = slot;
-        const int capturedTarget = targetScene;
+        const int   trimStart      = sc.trimStart    [static_cast<std::size_t>(slot)];
+        const int   trimEnd        = sc.trimEnd      [static_cast<std::size_t>(slot)];
+        const float pitchOff       = sc.pitchOffsets [static_cast<std::size_t>(slot)];
+        const int   capturedSlot   = slot;
+        const int   capturedTarget = targetScene;
 
         backgroundTasks_.push_back(std::async(std::launch::async,
-            [this, capturedSlot, capturedTarget, newPath, trimStart, trimEnd]()
+            [this, capturedSlot, capturedTarget, newPath, trimStart, trimEnd, pitchOff]()
             {
                 if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
                     return;
@@ -3170,11 +3183,30 @@ void MainComponent::preloadSceneAsync(int targetScene)
                 const int end   = (trimEnd >= 0) ? juce::jlimit(start + 1, numSamples, trimEnd)
                                                  : numSamples;
 
+                std::vector<float> pcm(buf.getReadPointer(0) + start,
+                                       buf.getReadPointer(0) + end);
+
+                if (std::abs(pitchOff) > 0.25f)
+                {
+                    ::dsp::WsolaShifter ws;
+                    ws.prepare(reader->sampleRate, 1024);
+                    ws.setShiftSemitones(pitchOff);
+                    std::vector<float> shifted(pcm.size(), 0.f);
+                    constexpr int kBlock = 1024;
+                    for (int i = 0; i < static_cast<int>(pcm.size()); i += kBlock)
+                    {
+                        if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
+                            return;
+                        const int n = std::min(kBlock, static_cast<int>(pcm.size()) - i);
+                        ws.process(pcm.data() + i, shifted.data() + i, n, 0.f);
+                    }
+                    pcm = std::move(shifted);
+                }
+
                 auto& cache      = preloadCache_[static_cast<std::size_t>(capturedSlot)];
                 cache.path       = newPath;
                 cache.sampleRate = reader->sampleRate;
-                cache.pcm.assign(buf.getReadPointer(0) + start,
-                                 buf.getReadPointer(0) + end);
+                cache.pcm        = std::move(pcm);
                 cache.ready.store(true, std::memory_order_release);
             }));
     }
@@ -3260,4 +3292,39 @@ void MainComponent::applyDubDelayMorph(float t)
     delay.setWet     (lerp(from.dubDelayWet,      to.dubDelayWet,      t));
     delay.setTone    (lerp(from.dubDelayTone,     to.dubDelayTone,     t));
     delay.setDrive   (lerp(from.dubDelayDrive,    to.dubDelayDrive,    t));
+}
+
+void MainComponent::onPitchOffsetChanged(int slot, float semitones)
+{
+    // 1. Persist in current scene
+    auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+    sc.pitchOffsets[static_cast<std::size_t>(slot)] = semitones;
+
+    // 2. Update panel checkmark
+    stepSeqPanel_.setSlotPitchOffset(slot, semitones);
+
+    // 3. Re-process from original file (apply new pitch via autoMatchSampleAsync)
+    const std::string path = sc.filePaths[static_cast<std::size_t>(slot)];
+    if (path.empty()) return;
+
+    juce::AudioFormatManager fmt;
+    fmt.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(
+        fmt.createReaderFor(juce::File { juce::String(path) }));
+    if (!reader) return;
+
+    const int n = static_cast<int>(reader->lengthInSamples);
+    if (n <= 0) return;
+
+    const int start = juce::jlimit(0, n - 1, sc.trimStart[static_cast<std::size_t>(slot)]);
+    const int end   = (sc.trimEnd[static_cast<std::size_t>(slot)] >= 0)
+                      ? juce::jlimit(start + 1, n, sc.trimEnd[static_cast<std::size_t>(slot)])
+                      : n;
+
+    juce::AudioBuffer<float> buf(1, n);
+    reader->read(&buf, 0, n, 0, true, false);
+
+    std::vector<float> raw(buf.getReadPointer(0) + start,
+                           buf.getReadPointer(0) + end);
+    autoMatchSampleAsync(slot, std::move(raw), reader->sampleRate);
 }
