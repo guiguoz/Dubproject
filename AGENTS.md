@@ -11,6 +11,7 @@ Application **desktop JUCE (C++17)** de performance live **dub techno**. Marque 
 - **Instrument principal : AKAI EWI** (vent MIDI) branché en entrée audio/MIDI. Il n'y a **plus de saxophone** ni de clavier physique — `KeyboardSynth` et `PianoKeyboardPanel` ont été supprimés définitivement.
 - **Le sampler 9 slots est l'instrument central** : boucles, kicks, basses, pads — tout le groove vient de là. L'EffectChain traite le signal EWI en temps réel (effets modulaires).
 - **L'utilisateur ne touche pas aux paramètres delay en live.** Les gains, sends, BPM-sync et activation du bus delay sont gérés automatiquement par l'IA ingé son (`SmartSamplerEngine::onTypesDetected`, callback déclenché à chaque chargement de scene). Ne pas ajouter de contrôles manuels pour ces paramètres.
+- **`SerumHost` est un hôte VST3 générique** : `loadSerumPlugin(path)` charge n'importe quel VST3 (Serum V2, SWAM Trumpet, etc.). SWAM s'intègre dans le même bus mix et la même IA que Serum — aucun changement DSP requis.
 - **`PingPongDelay` et `DubDelay` reçoivent un bus send séparé** (`tempSendL_/R_` dans `DspPipeline`), pas le mix sampler complet. Chaque slot a un `delaySend` atomique (`Sampler::SampleSlot::delaySend`) configuré par l'IA selon le type de contenu (KICK/BASS = 0, PAD = 0.8, etc.).
 - **`processAdd` = additif, wet-only.** `dubDelay_.processAdd(sendL, sendR, outL, outR, n)` : le signal dry est déjà dans `outL/outR`, `processAdd` y ajoute uniquement le signal traité. Ne jamais remplacer (`=`) le buffer de sortie dans cette fonction.
 - **Slot 8 (DRM)** : suit une voie heuristique (`ContentType::LOOP`) — le modèle ONNX de mix ne couvre que les slots 0-7.
@@ -77,16 +78,16 @@ Ordre logique stéréo (résumé) :
 L'énergie de chaque scène est calculée par `SceneManager::computeSceneEnergy(SceneData&)` :
 - Score 0.0–1.0 basé sur densité de pas + mutes (pas d'analyse audio)
 - Pré-calculé au chargement du projet ; invalidé à chaque `captureCurrentScene()`
-- Seuil musical/calme : `kT = 0.20f`
+- Seuil musical/calme : `kT = 0.15f`
 
 Durée et courbe du crossfade selon le delta d'énergie :
 
 | Transition | Durée | Courbe |
 |-----------|-------|--------|
-| Musical → Calme | 400 ms | EaseIn cubique |
-| Calme → Musical | 120 ms | EaseOut cubique |
-| Musical → Musical | 200 ms | Linéaire |
-| Calme → Calme | 250 ms | Smoothstep |
+| Musical → Calme | 600 ms | EaseIn cubique |
+| Calme → Musical | 80 ms | EaseOut cubique |
+| Musical → Musical | 250 ms | Linéaire |
+| Calme → Calme | 350 ms | Smoothstep |
 
 `armCrossfade()` (150 ms linéaire fixe) est conservé comme fallback.
 
@@ -100,6 +101,11 @@ Sidechain automatique kick→cibles configuré dans `onTypesDetected` :
 priorité BASS > PAD > SYNTH > LOOP, max 4 paires (`Sampler::kMaxSidechainPairs`).
 Guard dans `MainComponent` (`lastSidechainKick_` / `lastSidechainTargets_`) évite de rebuilder
 si la config n'a pas changé entre deux appels.
+
+**PingPongDelay morphing** : `SceneManager::startDubDelayMorph(from, to, 4000f)` démarre
+un morphing de 4 s des paramètres delay (feedback, wet, tone, drive) entre deux scènes.
+`updateMorph()` avance le compteur (tick 33 ms depuis `timerCallback`). Params stockés dans `SceneData`
+et persistés dans `.saxfx` v20 (`dubDelayFeedback/Wet/Tone/Drive` par scène).
 
 ## Zone info musicale (au-dessus du step sequencer)
 

@@ -11,7 +11,7 @@ Application **desktop JUCE C++17** de performance live **dub techno**.
 - Instrument : **AKAI EWI** (vent MIDI) → déclenchement MIDI du sampler
 - Playback : **sampler 9 slots** piloté par step sequencer (jusqu'à 512 pas/track)
 - IA intégrée : classifieur ONNX (8 types) + optimiseur de mix ONNX (8 slots)
-- **Synth VST3 : Serum V2** hosté en interne (`SerumHost`)
+- **Synth VST3 : Serum V2 + SWAM Trumpet** hostés via `SerumHost` (hôte VST3 générique — charge n'importe quel VST3)
 - **8 scènes** avec transitions adaptatives (crossfade variable 120–600 ms)
 
 ---
@@ -69,13 +69,13 @@ Worker threads → ONNX inference, BPM detection, pitch shifting
 
 | from → to | Durée | Courbe | Ressenti |
 |-----------|-------|--------|---------|
-| Musical → Calme | 400 ms | EaseIn (cubique) | fondu dramatique |
-| Calme → Musical | 120 ms | EaseOut (cubique) | attaque percutante |
-| Musical → Musical | 200 ms | Linéaire | blend propre |
-| Calme → Calme | 250 ms | Smoothstep | glissement organique |
+| Musical → Calme | 600 ms | EaseIn (cubique) | fondu dramatique |
+| Calme → Musical | 80 ms | EaseOut (cubique) | attaque percutante |
+| Musical → Musical | 250 ms | Linéaire | blend propre |
+| Calme → Calme | 350 ms | Smoothstep | glissement organique |
 
 Énergie = `SceneManager::computeSceneEnergy(SceneData&)` — 0.0 (silence) à 1.0 (tous slots pleins).
-Seuil musical/calme : `kT = 0.20f`.
+Seuil musical/calme : `kT = 0.15f`.
 
 **Gain floor** : pour les profils lents (Musical→Calme, Calme→Calme), les slots dont le
 gain de départ est 0 sont floored à –60 dB (0.001f) pour éviter une attaque molle.
@@ -111,6 +111,10 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
   (RMS > 0.01), `serumUserGain_` est calé vers −14 dBFS RMS (`kSerumTargetRms = 0.20`),
   clampé à `[0.2, 3.0]`. Persisté dans `sc.serumGain`. Les réglages MIDI learn manuels
   ne sont PAS écrasés entre deux runs IA.
+- **PingPongDelay morphing** : `SceneManager::startDubDelayMorph(from, to, 4000f)` interpole
+  feedback/wet/tone/drive sur 4 s lors de chaque changement de scène (sequencer en marche).
+  `applyDubDelayMorph(t)` appelé depuis `timerCallback()`. Params persistés dans `.saxfx` v20.
+- **clearSlot** : `loaded=false` + stop immédiat des 2 voix ; les steps restent en mémoire.
 
 ---
 
@@ -138,7 +142,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 | `src/dsp/SerumHost.h/.cpp` | Hôte VST3 + AudioProcessorListener |
 | `src/ui/ScaleStaffComponent.h/.cpp` | Portée musicale (gammes jouables selon tonalité) |
 | `src/ui/Colours.h` | Palette UI (`SaxFXColours::accent`, `aiBadge`, `neonCyan`…) |
-| `docs/project-format.md` | Schéma JSON `.saxfx` v19 |
+| `docs/project-format.md` | Schéma JSON `.saxfx` v20 |
 
 ---
 

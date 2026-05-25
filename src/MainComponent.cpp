@@ -1522,6 +1522,15 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             const float savedGain = sc.gain > 0.f ? sc.gain : 1.0f;
             dspPipeline_.getSampler().setSlotGain(i, savedGain);
         }
+        else
+        {
+            // Vide explicitement le slot s'il n'y a pas de sample configuré
+            dspPipeline_.getSampler().clearSlot(i);
+            samplerEngine_.clearSlot(i);
+            stepSeqPanel_.setSlotFilePath(i, "");
+            stepSeqPanel_.setSlotLoaded(i, false);
+            stepSeqPanel_.setSlotWaveform(i, {});
+        }
 
         for (int s = 0; s < 16; ++s)
         {
