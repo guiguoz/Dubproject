@@ -115,6 +115,8 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
   feedback/wet/tone/drive sur 4 s lors de chaque changement de scène (sequencer en marche).
   `applyDubDelayMorph(t)` appelé depuis `timerCallback()`. Params persistés dans `.saxfx` v20.
 - **clearSlot** : `loaded=false` + stop immédiat des 2 voix ; les steps restent en mémoire.
+- **Downmix PCM** : tous les sites de chargement (MainComponent + SmartSamplerEngine) utilisent le pattern `numCh > 1 ? (L+R)*0.5 : copy`. Ne jamais passer `buf(1, n)` / `read(..., false)` directement — les fichiers stéréo seraient tronqués au canal gauche.
+- **`SmartSamplerEngine::processSlotData` — 3 passes** : Pass 1 = BPM stretch via `WsolaShifter::resampleHermite()` (Catmull-Rom, qualité > interpolation linéaire) ; Pass 2 = correction pitch WSOLA ; Pass 3 = crop barre. L'ancienne `resample()` linéaire est conservée en legacy non-appelée.
 
 ---
 

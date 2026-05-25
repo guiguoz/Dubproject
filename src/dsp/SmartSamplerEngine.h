@@ -1292,9 +1292,17 @@ private:
             const int n = static_cast<int>(reader->lengthInSamples);
             if (n <= 0) continue;
 
-            juce::AudioBuffer<float> buf(1, n);
-            reader->read(&buf, 0, n, 0, true, false);
-            std::vector<float> pcm(buf.getReadPointer(0), buf.getReadPointer(0) + n);
+            const int numCh = std::max(1, static_cast<int>(reader->numChannels));
+            juce::AudioBuffer<float> buf(numCh, n);
+            reader->read(&buf, 0, n, 0, true, numCh > 1);
+            std::vector<float> pcm(n);
+            if (numCh > 1) {
+                const float* left = buf.getReadPointer(0);
+                const float* right = buf.getReadPointer(1);
+                for (int j = 0; j < n; ++j) pcm[j] = (left[j] + right[j]) * 0.5f;
+            } else {
+                std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + n, pcm.begin());
+            }
             cached = pcm;  // populate cache for subsequent reverts
             sampler_.reloadSlotData(i, std::move(pcm));
             sampler_.setSlotGain(i, 1.0f);
@@ -1337,8 +1345,7 @@ private:
         return output;
     }
 
-    // ── Linear-interpolation time-stretch ────────────────────────────────────
-
+    // Legacy linear resampler — kept for rollback/traceability
     static std::vector<float> resample(const std::vector<float>& input, float ratio)
     {
         const int inN  = static_cast<int>(input.size());
@@ -1388,11 +1395,18 @@ private:
         const int    nSamples = static_cast<int>(reader->lengthInSamples);
         if (nSamples <= 0) return false;
 
-        juce::AudioBuffer<float> buf(1, nSamples);
-        reader->read(&buf, 0, nSamples, 0, true, false);
+        const int numCh = std::max(1, static_cast<int>(reader->numChannels));
+        juce::AudioBuffer<float> buf(numCh, nSamples);
+        reader->read(&buf, 0, nSamples, 0, true, numCh > 1);
 
-        std::vector<float> pcm(buf.getReadPointer(0),
-                               buf.getReadPointer(0) + nSamples);
+        std::vector<float> pcm(nSamples);
+        if (numCh > 1) {
+            const float* left = buf.getReadPointer(0);
+            const float* right = buf.getReadPointer(1);
+            for (int j = 0; j < nSamples; ++j) pcm[j] = (left[j] + right[j]) * 0.5f;
+        } else {
+            std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + nSamples, pcm.begin());
+        }
 
         // ── Trim leading silence — align first transient to beat 1 ───────────
         bool modified = (trimLeadingSilence(pcm, sr) > 0);
@@ -1418,7 +1432,7 @@ private:
         // Pass 1: resample for BPM alignment
         if (doStretch)
         {
-            auto stretched = resample(pcm, stretchRatio);
+            auto stretched = WsolaShifter::resampleHermite(pcm, stretchRatio);
             if (!stretched.empty()) { pcm = std::move(stretched); modified = true; }
         }
         if (thread && thread->threadShouldExit()) return false;

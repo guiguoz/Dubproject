@@ -267,10 +267,17 @@ MainComponent::MainComponent()
         const int numSamples = static_cast<int>(reader->lengthInSamples);
         if (numSamples <= 0) return;
 
-        juce::AudioBuffer<float> buf(1, numSamples);
-        reader->read(&buf, 0, numSamples, 0, true, false);
-        std::vector<float> pcm(buf.getReadPointer(0),
-                               buf.getReadPointer(0) + numSamples);
+        const int numCh = std::max(1, static_cast<int>(reader->numChannels));
+        juce::AudioBuffer<float> buf(numCh, numSamples);
+        reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
+        std::vector<float> pcm(numSamples);
+        if (numCh > 1) {
+            const float* left = buf.getReadPointer(0);
+            const float* right = buf.getReadPointer(1);
+            for (int i = 0; i < numSamples; ++i) pcm[i] = (left[i] + right[i]) * 0.5f;
+        } else {
+            std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + numSamples, pcm.begin());
+        }
         const double fileSr = static_cast<double>(reader->sampleRate);
 
         samplerEngine_.setSlotFilePath(slot, path);
@@ -824,8 +831,17 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
     const int numSamples = static_cast<int>(reader->lengthInSamples);
     if (numSamples <= 0) return;
 
-    juce::AudioBuffer<float> buf(1, numSamples);
-    reader->read(&buf, 0, numSamples, 0, true, false);
+    const int numCh = std::max(1, static_cast<int>(reader->numChannels));
+    juce::AudioBuffer<float> buf(numCh, numSamples);
+    reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
+    std::vector<float> pcm(numSamples);
+    if (numCh > 1) {
+        const float* left = buf.getReadPointer(0);
+        const float* right = buf.getReadPointer(1);
+        for (int i = 0; i < numSamples; ++i) pcm[i] = (left[i] + right[i]) * 0.5f;
+    } else {
+        std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + numSamples, pcm.begin());
+    }
 
     // Apply trim inline so that only one loadSample() call is made per scene
     // transition — avoids a second reloadSlotData() write that would race with
@@ -836,16 +852,15 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
                       : numSamples;
 
     auto& sampler = dspPipeline_.getSampler();
-    sampler.loadSample(slot, buf.getReadPointer(0) + start, end - start,
+    sampler.loadSample(slot, pcm.data() + start, end - start,
                        static_cast<double>(reader->sampleRate));
     sampler.setSlotOneShot(slot, true);
 
     stepSeqPanel_.setSlotLoaded(slot, true);
 
-    // Update waveform preview for this slot
     {
-        auto pcm = sampler.getSlotPcmSnapshot(slot);
-        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(pcm));
+        auto snap = sampler.getSlotPcmSnapshot(slot);
+        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(snap));
     }
 }
 
