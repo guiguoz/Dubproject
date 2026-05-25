@@ -701,51 +701,51 @@ private:
         {
             case ContentType::KICK:
                 applyBiquad(pcm, makeHP(30.f, sr));
-                applyBiquad(pcm, makeLowShelf(45.f,  6.f, sr));        // sub dominant
-                applyBiquad(pcm, makePeaking (80.f,  2.f, 1.0f, sr)); // body rond
-                applyBiquad(pcm, makePeaking (300.f,-4.f, 1.5f, sr)); // coupe mud
-                applyBiquad(pcm, makeLP(1800.f, sr));                  // sombre, pas de click
+                applyBiquad(pcm, makeLowShelf(45.f,  6.f, sr));
+                applyBiquad(pcm, makePeaking (80.f,  2.f, 1.0f, sr));
+                applyBiquad(pcm, makePeaking (300.f,-4.f, 1.5f, sr));
+                applyBiquad(pcm, makeLP(2800.f, sr));                    // ← 1800 → 2800 Hz
                 break;
             case ContentType::SNARE:
                 applyBiquad(pcm, makeHP(80.f, sr));
-                applyBiquad(pcm, makePeaking(200.f,  2.f, 1.5f, sr)); // corps
-                applyBiquad(pcm, makePeaking(4000.f, 1.f, 2.0f, sr)); // snap discret
-                applyBiquad(pcm, makeHighShelf(8000.f, -3.f, sr));     // sombre
+                applyBiquad(pcm, makePeaking(200.f,  2.f, 1.5f, sr));
+                applyBiquad(pcm, makePeaking(4500.f, 2.f, 2.0f, sr));    // ← snap un peu plus présent
+                applyBiquad(pcm, makeHighShelf(8000.f, -1.5f, sr));      // ← -3 → -1.5 dB
                 break;
             case ContentType::HIHAT:
                 applyBiquad(pcm, makeHP(600.f, sr));
-                applyBiquad(pcm, makePeaking(3000.f, -2.f, 1.5f, sr)); // moins agressif
-                applyBiquad(pcm, makeHighShelf(8000.f, -4.f, sr));      // étouffé, lointain
-                applyBiquad(pcm, makeLP(11000.f, sr));
+                applyBiquad(pcm, makePeaking(3000.f, -1.f, 1.5f, sr));   // ← moins agressif
+                applyBiquad(pcm, makeHighShelf(8000.f, -2.f, sr));       // ← -4 → -2 dB
+                // Suppression du LP à 11 kHz
                 break;
             case ContentType::BASS:
                 applyBiquad(pcm, makeHP(25.f, sr));
-                applyBiquad(pcm, makeLowShelf(60.f,  5.f, sr));        // sub chaud
-                applyBiquad(pcm, makePeaking (120.f, 2.f, 1.0f, sr)); // corps
-                applyBiquad(pcm, makePeaking (250.f,-2.f, 1.5f, sr)); // anti-mud
-                applyBiquad(pcm, makeLP(5500.f, sr));                  // garde la graine, coupe les hauts
+                applyBiquad(pcm, makeLowShelf(60.f,  5.f, sr));
+                applyBiquad(pcm, makePeaking (120.f, 2.f, 1.0f, sr));
+                applyBiquad(pcm, makePeaking (250.f,-2.f, 1.5f, sr));
+                applyBiquad(pcm, makeLP(7500.f, sr));                    // ← 5500 → 7500 Hz
                 break;
             case ContentType::SYNTH:
                 applyBiquad(pcm, makeHP(80.f, sr));
-                applyBiquad(pcm, makePeaking(400.f,  1.f, 1.5f, sr)); // warmth
-                applyBiquad(pcm, makePeaking(1200.f,-1.f, 1.5f, sr)); // anti-nasal
-                applyBiquad(pcm, makeHighShelf(3500.f, -5.f, sr));     // très filtré, atmosphérique
+                applyBiquad(pcm, makePeaking(400.f,  1.f, 1.5f, sr));
+                applyBiquad(pcm, makePeaking(1200.f,-1.f, 1.5f, sr));
+                applyBiquad(pcm, makeHighShelf(3500.f, -2.5f, sr));      // ← -5 → -2.5 dB
                 break;
             case ContentType::PAD:
                 applyBiquad(pcm, makeHP(50.f, sr));
-                applyBiquad(pcm, makePeaking(200.f, 3.f, 1.0f, sr)); // warmth analogique
-                applyBiquad(pcm, makeHighShelf(2500.f, -7.f, sr));    // très sombre
+                applyBiquad(pcm, makePeaking(200.f, 3.f, 1.0f, sr));
+                applyBiquad(pcm, makeHighShelf(2500.f, -3.5f, sr));      // ← -7 → -3.5 dB (gros changement)
                 break;
             case ContentType::PERC:
                 applyBiquad(pcm, makeHP(100.f, sr));
-                applyBiquad(pcm, makePeaking(5000.f, -1.f, 2.f, sr)); // presence réduite
-                applyBiquad(pcm, makeHighShelf(7000.f, -3.f, sr));    // sombre
+                applyBiquad(pcm, makePeaking(5000.f, 0.f, 2.f, sr));     // ← présence neutre
+                applyBiquad(pcm, makeHighShelf(7000.f, -1.5f, sr));      // ← -3 → -1.5 dB
                 break;
             case ContentType::LOOP:
                 // Loop de drums complète (kick+hihat) — EQ neutre, préserve toute la bande
                 applyBiquad(pcm, makeHP(30.f, sr));
-                applyBiquad(pcm, makeLowShelf(80.f, 1.f, sr));      // légère chaleur sub
-                applyBiquad(pcm, makeHighShelf(8000.f, -2.f, sr));  // douceur sur le haut
+                applyBiquad(pcm, makeLowShelf(80.f, 1.f, sr));
+                applyBiquad(pcm, makeHighShelf(8000.f, 0.f, sr));        // ← flat (suppression du -2 dB)
                 break;
             case ContentType::OTHER:
                 applyBiquad(pcm, makeHP(60.f, sr));
@@ -1041,7 +1041,8 @@ private:
                     // Gains clamped to ±6dB to prevent saturation.
                     const float safeLoG = std::clamp(d.lowGain,  -6.f, 6.f);
                     const float safeMiG = std::clamp(d.midGain,  -6.f, 6.f);
-                    const float safeHiG = std::clamp(d.highGain, -6.f, 6.f);
+                    // Air bias post-IA pour compenser l'apprentissage sur d'anciens EQs sombres
+                    const float safeHiG = std::clamp(d.highGain + 1.0f, -6.f, 6.f);
                     applyBiquad(pcms[i], makeHP       (20.f,           sampleRate_)); // DC block
                     applyBiquad(pcms[i], makeLowShelf (100.f,  safeLoG, sampleRate_)); // sub-bass
                     applyBiquad(pcms[i], makePeaking  (2500.f, safeMiG, 1.0f, sampleRate_)); // présence

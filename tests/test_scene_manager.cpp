@@ -10,45 +10,45 @@ using Catch::Matchers::WithinAbs;
 
 // ── chooseProfile ─────────────────────────────────────────────────────────────
 
-TEST_CASE("chooseProfile -- Musical->Calme : 400 ms EaseIn", "[scene_manager]")
+TEST_CASE("chooseProfile -- Musical->Calme : 600 ms EaseIn", "[scene_manager]")
 {
     const auto p = SceneManager::chooseProfile(0.5f, 0.05f);
-    REQUIRE(p.durationMs == 400);
+    REQUIRE(p.durationMs == 600);
     REQUIRE(p.curve == CrossfadeCurve::EaseIn);
 }
 
-TEST_CASE("chooseProfile -- Calme->Musical : 120 ms EaseOut", "[scene_manager]")
+TEST_CASE("chooseProfile -- Calme->Musical : 80 ms EaseOut", "[scene_manager]")
 {
     const auto p = SceneManager::chooseProfile(0.05f, 0.5f);
-    REQUIRE(p.durationMs == 120);
+    REQUIRE(p.durationMs == 80);
     REQUIRE(p.curve == CrossfadeCurve::EaseOut);
 }
 
-TEST_CASE("chooseProfile -- Musical->Musical : 200 ms Linear", "[scene_manager]")
+TEST_CASE("chooseProfile -- Musical->Musical : 250 ms Linear", "[scene_manager]")
 {
     const auto p = SceneManager::chooseProfile(0.5f, 0.9f);
-    REQUIRE(p.durationMs == 200);
+    REQUIRE(p.durationMs == 250);
     REQUIRE(p.curve == CrossfadeCurve::Linear);
 }
 
-TEST_CASE("chooseProfile -- Calme->Calme : 250 ms Smoothstep", "[scene_manager]")
+TEST_CASE("chooseProfile -- Calme->Calme : 350 ms Smoothstep", "[scene_manager]")
 {
     const auto p = SceneManager::chooseProfile(0.05f, 0.10f);
-    REQUIRE(p.durationMs == 250);
+    REQUIRE(p.durationMs == 350);
     REQUIRE(p.curve == CrossfadeCurve::Smoothstep);
 }
 
-TEST_CASE("chooseProfile -- boundary kT=0.20 compte comme Musical", "[scene_manager]")
+TEST_CASE("chooseProfile -- boundary kT=0.15 compte comme Musical", "[scene_manager]")
 {
-    const auto p = SceneManager::chooseProfile(0.20f, 0.05f);
-    REQUIRE(p.durationMs == 400);
+    const auto p = SceneManager::chooseProfile(0.15f, 0.05f);
+    REQUIRE(p.durationMs == 600);
     REQUIRE(p.curve == CrossfadeCurve::EaseIn);
 }
 
 TEST_CASE("chooseProfile -- fromE==toE Musical produit Musical->Musical", "[scene_manager]")
 {
     const auto p = SceneManager::chooseProfile(0.5f, 0.5f);
-    REQUIRE(p.durationMs == 200);
+    REQUIRE(p.durationMs == 250);
     REQUIRE(p.curve == CrossfadeCurve::Linear);
 }
 
@@ -110,6 +110,7 @@ TEST_CASE("computeSceneEnergy -- tous slots mutes retourne 0", "[scene_manager]"
 {
     SceneData sc;
     sc.used = true;
+    sc.serumGain = 0.f;
     sc.mutes.fill(true);
     for (auto& p : sc.filePaths) p = "x";
     REQUIRE(SceneManager::computeSceneEnergy(sc) == 0.f);
@@ -119,6 +120,7 @@ TEST_CASE("computeSceneEnergy -- 1 slot actif 1 pas : energie dans ]0, 1/9]", "[
 {
     SceneData sc;
     sc.used = true;
+    sc.serumGain = 0.f;
     sc.filePaths[0] = "x";
     sc.trackBarCounts[0] = 1;
     sc.steps[0][0] = true;
