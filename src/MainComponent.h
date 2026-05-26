@@ -181,6 +181,7 @@ private:
     // Background task management
     //==========================================================================
     std::atomic<bool>                               shutdownFlag_{ false };
+    std::atomic<int>                                projectGen_{ 0 };
     std::array<std::atomic<bool>, 9>                processingSlot_{};
     std::vector<std::future<void>>                  backgroundTasks_;
 

@@ -32,6 +32,7 @@ add_executable(SaxFXTests
     test_ewi_filter.cpp
     test_slot_dynamics_ab.cpp
     test_scene_manager.cpp
+    test_p0_load.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/WsolaShifter.cpp
     ../src/dsp/Sampler.cpp
@@ -46,6 +47,10 @@ add_executable(SaxFXTests
 target_include_directories(SaxFXTests PRIVATE
     ../src        # allows #include "dsp/Foo.h"
     .             # allows #include "TestHelpers.h"
+)
+
+target_compile_definitions(SaxFXTests PRIVATE
+    P0_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/p0"
 )
 
 target_link_libraries(SaxFXTests PRIVATE

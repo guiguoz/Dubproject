@@ -918,9 +918,12 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
     rawPcmForRetry_[static_cast<std::size_t>(slot)] = raw;
     rawSrForRetry_ [static_cast<std::size_t>(slot)] = sr;
 
+    const int capturedGen = projectGen_.load(std::memory_order_acquire);
+
     backgroundTasks_.push_back(
         std::async(std::launch::async,
-            [this, slot, raw = std::move(raw), sr, snapProjectSr, capturedPitchOffset]() mutable
+            [this, slot, raw = std::move(raw), sr, snapProjectSr,
+             capturedPitchOffset, capturedGen]() mutable
             {
                 // RAII guard: clear processingSlot on exit
                 struct SlotGuard {
@@ -962,8 +965,10 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                 {
                     if (srNormalized)
                         juce::MessageManager::callAsync(
-                            [this, slot, fix = std::move(raw)]() mutable
-                            { dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix)); });
+                            [this, slot, fix = std::move(raw), capturedGen]() mutable {
+                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
+                                dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
+                            });
                     return;
                 }
 
@@ -993,8 +998,10 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                 {
                     const float detected = bpmResult.bpm;
                     juce::MessageManager::callAsync(
-                        [this, slot, detected]()
-                        { showBpmConfidencePopup(slot, detected); });
+                        [this, slot, detected, capturedGen]() {
+                            if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
+                            showBpmConfidencePopup(slot, detected);
+                        });
                     return;  // async processing will restart if user confirms
                 }
 
@@ -1030,8 +1037,9 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                         juce::MessageManager::callAsync(
                             [this, slot, fix = std::move(raw),
                              bpm  = bpmResult.bpm,
-                             conf = bpmResult.confidence]() mutable
-                            {
+                             conf = bpmResult.confidence,
+                             capturedGen]() mutable {
+                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
                                 auto env = computeEnvelope(fix);
                                 dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
                                 stepSeqPanel_.setSlotBpm(slot, bpm, conf);
@@ -1083,12 +1091,11 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                     [this, slot,
                      processed  = std::move(processed),
                      bpm        = bpmResult.bpm,
-                     confidence = bpmResult.confidence]() mutable
-                    {
-                        // Compute envelope before moving processed data
+                     confidence = bpmResult.confidence,
+                     capturedGen]() mutable {
+                        if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
                         auto envelope = computeEnvelope(processed);
-                        dspPipeline_.getSampler().reloadSlotData(slot,
-                                                                  std::move(processed));
+                        dspPipeline_.getSampler().reloadSlotData(slot, std::move(processed));
                         stepSeqPanel_.setSlotBpm(slot, bpm, confidence);
                         stepSeqPanel_.setSlotWaveform(slot, std::move(envelope));
                     });
@@ -1513,6 +1520,12 @@ void MainComponent::doAutosave()
 
 void MainComponent::applyProjectData(const project::ProjectData& data)
 {
+    // Invalidate all in-flight async callbacks from the previous project.
+    // processingSlot_ reset allows immediate re-launch for each slot.
+    projectGen_.fetch_add(1, std::memory_order_release);
+    for (auto& f : processingSlot_) f.store(false, std::memory_order_release);
+    preloadTargetScene_.store(-1, std::memory_order_relaxed);
+
     // Restore BPM
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
     stepSequencer_.setBpm(bpm);
@@ -3200,15 +3213,23 @@ void MainComponent::preloadSceneAsync(int targetScene)
 
                 const int numSamples = static_cast<int>(reader->lengthInSamples);
                 if (numSamples <= 0) return;
-                juce::AudioBuffer<float> buf(1, numSamples);
-                reader->read(&buf, 0, numSamples, 0, true, false);
+                const int numCh = std::max(1, static_cast<int>(reader->numChannels));
+                juce::AudioBuffer<float> buf(numCh, numSamples);
+                reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
 
                 const int start = juce::jlimit(0, numSamples - 1, trimStart);
                 const int end   = (trimEnd >= 0) ? juce::jlimit(start + 1, numSamples, trimEnd)
                                                  : numSamples;
-
-                std::vector<float> pcm(buf.getReadPointer(0) + start,
-                                       buf.getReadPointer(0) + end);
+                std::vector<float> pcm(static_cast<std::size_t>(end - start));
+                if (numCh > 1) {
+                    const float* L = buf.getReadPointer(0);
+                    const float* R = buf.getReadPointer(1);
+                    for (int i = 0; i < end - start; ++i)
+                        pcm[i] = (L[start + i] + R[start + i]) * 0.5f;
+                } else {
+                    std::copy(buf.getReadPointer(0) + start,
+                              buf.getReadPointer(0) + end, pcm.begin());
+                }
 
                 if (std::abs(pitchOff) > 0.25f)
                 {
