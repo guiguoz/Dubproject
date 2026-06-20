@@ -10,7 +10,7 @@ Instrument : AKAI EWI USB (vent MIDI) — neon dark interface.
 **Control** : MIDI pedalboard (e.g. Behringer FCB1010)
 **Target latency** : <= 20 ms
 
-**Onboarding (humains & IA)** : lire **[AGENTS.md](AGENTS.md)** (fil audio, threads, fichiers clés) puis **[docs/project-format.md](docs/project-format.md)** (JSON projet **v8**, aligné sur `ProjectLoader`).
+**Onboarding (humains & IA)** : lire **[AGENTS.md](AGENTS.md)** (fil audio, threads, fichiers clés) puis **[docs/project-format.md](docs/project-format.md)** (JSON projet **v20**, aligné sur `ProjectLoader`).
 
 ---
 
@@ -92,15 +92,16 @@ without retraining. Slot 8 uses a heuristic path: `ContentType::LOOP` EQ preset
 - IN / OUT draggable markers (±8 px snap) set start/end trim points
 - **Play / Stop** toggle previews the sample in isolation
 - Apply trims by reloading only the selected PCM range into the sampler slot
+- Trim points stored in **original-file coordinates** — multiple edit sessions accumulate correctly without drift across save/reload cycles
 
-### Project Save/Load (format v8)
+### Project Save/Load (format v20)
 
-- `.saxfx` JSON format, fully versioned with backward compatibility (v1–v7 auto-migrated)
-- Saves per-scene: **9 sample paths**, gains, mutes, step patterns, **bar counts per track** (up to 512 steps)
+- `.saxfx` JSON format, fully versioned with backward compatibility (v1–v19 auto-migrated)
+- Saves per-scene: **9 sample paths**, gains, mutes, step patterns, **bar counts per track** (up to 512 steps), **trim points in original-file coordinates**
 - Master clock BPM saved globally (not per-scene) — scene navigation never overrides tempo
 - AI mix states (gain, pan, width, depth) fully restored on project load
 - Bar counts and steps 16-511 correctly restored on project open
-- Slot guard: `slot >= 9` rejected on load (was `>= 8` in v7)
+- Slot guard: `slot >= 9` rejected on load
 
 ---
 
@@ -158,7 +159,7 @@ cmake --build build --config Release --parallel
 ### 4. Run
 
 ```bash
-./build/SaxFXLive_artefacts/Release/SaxFX\ Live.exe
+"bin/SaxFX Live.exe"
 ```
 
 ### 5. Run tests
@@ -263,6 +264,7 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 22** | Done | KeyboardSynth (Mono/Legato + ADSR + Glide + Velocity + PolyBLEP + Filter Env + 6 presets) + UX fixes |
 | **Sprint 23** | Done | Dub techno audio quality (sub ownership, mono-sub 120 Hz, delay BP, KICK→PAD sidechain) + fix micro-coupure scene transitions |
 | **Sprint 24** | Done | Vrai stéréo dans la chaîne d'effets (Reverb stéréo JUCE Freeverb, Delay ping-pong L→R→L→R, spread keyboard réduit 0.35→0.15) |
+| **Correctifs DSP** | Done | Downmix L+R propre sur tous les sites de chargement PCM ; Hermite 4-point (Catmull-Rom) pour BPM stretch ; fix chargement multi-projets ; trim éditeur en coordonnées fichier |
 
 ### Sprint 24 — Vrai stéréo dans la chaîne d'effets
 
