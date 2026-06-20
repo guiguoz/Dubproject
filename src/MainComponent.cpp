@@ -1228,9 +1228,18 @@ void MainComponent::openSampleEditor(int slot)
         "Edit Sample  —  " + (fileName.isEmpty() ? "S" + juce::String(slot + 1) : fileName)
         + "  [S" + juce::String(slot + 1) + "]";
 
+    // Offset du snapshot dans le fichier d'origine (coordonnées fichier).
+    // Le snapshot du sampler est déjà tronqué par applyScene — les indices retournés
+    // par l'éditeur sont relatifs à ce snapshot, pas au fichier complet.
+    // On additionne cet offset pour que trimStart/trimEnd restent toujours en
+    // coordonnées fichier, quel que soit le nombre d'éditions successives.
+    const int fileTrimOffset =
+        sceneManager_.scene(sceneManager_.currentIdx())
+                     .trimStart[static_cast<std::size_t>(slot)];
+
     auto* editor = new ui::SampleEditorComponent(std::move(pcm), currentSampleRate_);
 
-    editor->onApply = [this, slot](int startSample, int endSample)
+    editor->onApply = [this, slot, fileTrimOffset](int startSample, int endSample)
     {
         auto snapshot = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
         const int total = static_cast<int>(snapshot.size());
@@ -1241,14 +1250,19 @@ void MainComponent::openSampleEditor(int slot)
         // Appliquer au slot courant
         dspPipeline_.getSampler().reloadSlotData(slot, trimmed);
 
-        // Stocker les trim points dans TOUTES les scènes partageant ce fichier
+        // Convertir en coordonnées fichier : ajouter l'offset du snapshot courant.
+        // Sans cette correction, chaque réouverture de projet décale le trim du
+        // nombre de samples correspondant au trimStart de la scène précédente.
+        const int fileS = fileTrimOffset + s;
+        const int fileE = fileTrimOffset + e;
+
         const std::string filePath = stepSeqPanel_.getSlotFilePath(slot);
         for (int si = 0; si < kMaxScenes; ++si)
             for (int t = 0; t < 9; ++t)
                 if (sceneManager_.scene(si).filePaths[t] == filePath)
                 {
-                    sceneManager_.scene(si).trimStart[t] = s;
-                    sceneManager_.scene(si).trimEnd  [t] = e;
+                    sceneManager_.scene(si).trimStart[t] = fileS;
+                    sceneManager_.scene(si).trimEnd  [t] = fileE;
                 }
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
