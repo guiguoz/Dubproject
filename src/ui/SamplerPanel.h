@@ -60,6 +60,9 @@ public:
     /// Signature: (slotIndex, absoluteFilePath)
     std::function<void(int, std::string)> onSlotFileLoaded;
 
+    // Set from MainComponent so quantized-unmute can check if the sequencer is playing.
+    std::function<bool()> sequencerIsPlaying;
+
     // ── Layout ────────────────────────────────────────────────────────────────
 
     void resized() override
@@ -105,7 +108,8 @@ private:
 
         ch.onMuteChanged = [this, i](bool m)
         {
-            sampler_.setSlotMuted(i, m);
+            const bool quantize = !m && sequencerIsPlaying && sequencerIsPlaying();
+            sampler_.setSlotMuted(i, m, quantize);
         };
 
         ch.onLoopChanged = [this, i](bool l)

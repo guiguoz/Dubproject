@@ -22,6 +22,7 @@ Instrument : AKAI EWI USB (vent MIDI) — neon dark interface.
 - Up to 32-bar patterns per track (512 steps), variable per scene
 - Horizontal scrollbar for pattern navigation + ◀/▶ page buttons + mousewheel
 - BPM sync (master clock global, indépendant des scènes), swing, per-track mute/solo
+- **Quantized unmute** : démuter un slot en cours de lecture attend le prochain step 0 de la track (pas de démarrage intempestif en milieu de boucle) — unmute immédiat si le séquenceur est arrêté
 - Muter une piste relance automatiquement le magic mix si ⚡ est actif
 - AI content classification (ONNX) for automatic sample categorization
 
@@ -264,7 +265,7 @@ Dubproject/   (nom du dossier local peut varier)
 | **Sprint 22** | Done | KeyboardSynth (Mono/Legato + ADSR + Glide + Velocity + PolyBLEP + Filter Env + 6 presets) + UX fixes |
 | **Sprint 23** | Done | Dub techno audio quality (sub ownership, mono-sub 120 Hz, delay BP, KICK→PAD sidechain) + fix micro-coupure scene transitions |
 | **Sprint 24** | Done | Vrai stéréo dans la chaîne d'effets (Reverb stéréo JUCE Freeverb, Delay ping-pong L→R→L→R, spread keyboard réduit 0.35→0.15) |
-| **Correctifs DSP** | Done | Downmix L+R propre sur tous les sites de chargement PCM ; Hermite 4-point (Catmull-Rom) pour BPM stretch ; fix chargement multi-projets ; trim éditeur en coordonnées fichier |
+| **Correctifs DSP** | Done | Downmix L+R propre sur tous les sites de chargement PCM ; Hermite 4-point (Catmull-Rom) pour BPM stretch ; fix chargement multi-projets ; trim éditeur en coordonnées fichier ; quantized unmute (attend step 0 côté audio thread — zéro race condition) |
 
 ### Sprint 24 — Vrai stéréo dans la chaîne d'effets
 

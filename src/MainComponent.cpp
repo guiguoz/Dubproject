@@ -364,7 +364,8 @@ MainComponent::MainComponent()
     // triggerAI() (bouton ⚡) reprendra l'état de mute courant pour recalibrer.
     stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
     {
-        dspPipeline_.getSampler().setSlotMuted(slot, muted);
+        const bool quantize = !muted && stepSequencer_.isPlaying();
+        dspPipeline_.getSampler().setSlotMuted(slot, muted, quantize);
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle

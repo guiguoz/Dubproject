@@ -107,7 +107,8 @@ public:
     void setSlotGain(int slot, float gain) noexcept;
     void setSlotLoop(int slot, bool loop) noexcept;
     void setSlotOneShot(int slot, bool oneShot) noexcept;
-    void setSlotMuted(int slot, bool muted) noexcept;
+    void setSlotMuted(int slot, bool muted, bool quantized = false) noexcept;
+    void onTrackStep0(int slot) noexcept;
     void setSlotDelaySend(int slot, float send) noexcept;
     float getSlotDelaySend(int slot) const noexcept;
 
@@ -199,7 +200,8 @@ private:
         std::atomic<int>  stopPending     { 0 };  // 0=none, encodes StopMode
         std::atomic<bool> quantTrigPending{ false };
         std::atomic<int>  quantDiv        { static_cast<int>(GridDiv::Quarter) };
-        
+        std::atomic<bool> unmutePending   { false };
+
         VoiceState voices[2];
         int currentVoice{ 0 };
     };

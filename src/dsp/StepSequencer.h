@@ -260,6 +260,8 @@ public:
                     const int trackSteps = active.trackStepCount[track];
                     if (trackSteps <= 0) continue;
                     const int trackStep  = globalStep % trackSteps;
+                    if (trackStep == 0)
+                        sampler.onTrackStep0(track);
                     if (active.steps[track][trackStep])
                         sampler.trigger(track);
                 }

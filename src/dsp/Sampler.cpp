@@ -193,10 +193,31 @@ void Sampler::setSlotOneShot(int slot, bool oneShot) noexcept
     slots_[static_cast<std::size_t>(slot)].oneShot.store(oneShot, std::memory_order_relaxed);
 }
 
-void Sampler::setSlotMuted(int slot, bool muted) noexcept
+void Sampler::setSlotMuted(int slot, bool muted, bool quantized) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
-    slots_[static_cast<std::size_t>(slot)].muted.store(muted, std::memory_order_relaxed);
+    auto& sl = slots_[static_cast<std::size_t>(slot)];
+    auto& ps = playStates_[static_cast<std::size_t>(slot)];
+
+    if (muted) {
+        ps.unmutePending.store(false, std::memory_order_release);
+        sl.muted.store(true, std::memory_order_release);
+    } else if (quantized) {
+        ps.unmutePending.store(true, std::memory_order_release);
+        // muted reste true — l'audio thread l'effacera au prochain step 0
+    } else {
+        ps.unmutePending.store(false, std::memory_order_release);
+        sl.muted.store(false, std::memory_order_release);
+    }
+}
+
+void Sampler::onTrackStep0(int slot) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    if (playStates_[static_cast<std::size_t>(slot)]
+            .unmutePending.exchange(false, std::memory_order_acq_rel))
+        slots_[static_cast<std::size_t>(slot)].muted
+            .store(false, std::memory_order_release);
 }
 
 void Sampler::setSlotDelaySend(int slot, float send) noexcept
