@@ -2,6 +2,7 @@
 
 #include "dsp/DspPipeline.h"
 #include "dsp/FeatureExtractor.h"
+#include "dsp/KeyResult.h"
 #include "dsp/LooperEngine.h"
 #include "dsp/SceneManager.h"
 #include "dsp/SerumHost.h"
@@ -121,11 +122,17 @@ private:
     ui::SpatialVisualization   spatialViz_;
 
     // ── Master key ────────────────────────────────────────────────────────────
-    int              masterKeyRoot_  { 0 };
-    bool             masterKeyMajor_ { true };
+    int              masterKeyRoot_      { 0 };
+    bool             masterKeyMajor_     { true };
+    bool             masterKeySetByUser_ { false };  // true only after explicit UI selection
+    bool             keyMatchEnabled_    { false };  // global auto-transpose toggle (off by default)
     juce::ComboBox   masterKeyCombo_;
     juce::ComboBox   masterKeyModeCombo_;
     void             applyMasterKey();
+    // C2: key detection results per slot (message thread only).
+    std::array<::dsp::KeyResult, 9> slotKeyResults_ {};
+    void             updateSlotKeyBadge(int slot, const ::dsp::KeyResult& kr);
+    void             applyKeyMatchIfNeeded(int slot, const ::dsp::KeyResult& kr) noexcept;
     void             reApplyCurrentSceneTrims();
 
     // ── Sampler / Step Sequencer ──────────────────────────────────────────────
@@ -196,6 +203,9 @@ private:
     std::atomic<int>            preloadTargetScene_ { -1 };
     // Mutes en attente d'application après la fin du crossfade de gain
     std::array<bool, 9>         pendingMutes_ {};
+    // Trim appliqué en coordonnées fichier par slot (évite le double-trim en scène identique)
+    std::array<int,  9>         appliedTrimStart_ {};
+    std::array<int,  9>         appliedTrimEnd_   {};
     void preloadSceneAsync(int targetScene);
 
     float                           overrideBpm_{ 0.f };
@@ -223,6 +233,7 @@ private:
     int  autosaveFadeTimer_{ 0 };
     int  autosaveSlot_     { 0 };
     bool panicArmed_       { false };
+    int  bpmRestrechCountdown_ { 0 };   // A2: decremented in timerCallback; fires re-stretch at 0
     uint8_t panicCC_       { 64 };   // CC#64 (sustain) par défaut — FCB1010 footswitch
 
     // ── Sidechain config cache (évite rebuilds répétés dans onTypesDetected) ───
@@ -276,7 +287,8 @@ private:
     //==========================================================================
     void ensureGrainNoise(int w, int h);
     void loadSampleIntoSlot(int slot, const std::string& path,
-                            int trimStart = 0, int trimEnd = -1);
+                            int trimStart = 0, int trimEnd = -1,
+                            double* outFileSr = nullptr);
     void autoMatchSampleAsync(int slot, std::vector<float> rawPcm, double fileSr);
     void showBpmConfidencePopup(int slot, float detectedBpm);
     void openSampleEditor(int slot);
@@ -301,6 +313,7 @@ private:
     void updateSceneLabel();
     void updateSidebarBpm(float bpm);
     void applyDubDelayMorph(float t);
+    void scheduleRestrechAllSlots();   // A2: re-stretch all loaded slots from originalPcm
     void onPitchOffsetChanged(int slot, float semitones);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)

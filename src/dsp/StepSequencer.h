@@ -225,14 +225,21 @@ public:
         // Smooth swing toward target (audio thread — no lock needed)
         swingCurrent_ += 0.05f * (swingTarget_.load(std::memory_order_relaxed) - swingCurrent_);
 
+        const double phaseAtBlockStart = phase_;
         phase_ += static_cast<double>(numSamples)
                   / (sampleRate_ * 60.0 / static_cast<double>(bpm));
+        const double phaseIncrement = phase_ - phaseAtBlockStart;
 
         // Absolute-position firing loop — handles multiple steps per block correctly.
         // nextFirePhase_: absolute beat phase at which the next step fires.
         // nextFireStepIdx_: monotonically increasing step counter (% kMaxSteps for pattern index).
         while (phase_ > nextFirePhase_)
         {
+            const int stepOffset = (phaseIncrement > 1e-12)
+                ? std::clamp(static_cast<int>((nextFirePhase_ - phaseAtBlockStart) / phaseIncrement
+                                               * static_cast<double>(numSamples)),
+                             0, numSamples - 1)
+                : 0;
             const int globalStep = nextFireStepIdx_ % kMaxSteps;
             stepAtomic_.store(globalStep, std::memory_order_relaxed);
 
@@ -261,9 +268,9 @@ public:
                     if (trackSteps <= 0) continue;
                     const int trackStep  = globalStep % trackSteps;
                     if (trackStep == 0)
-                        sampler.onTrackStep0(track);
+                        sampler.onTrackStep0(track, stepOffset);
                     if (active.steps[track][trackStep])
-                        sampler.trigger(track);
+                        sampler.trigger(track, stepOffset);
                 }
             }
 

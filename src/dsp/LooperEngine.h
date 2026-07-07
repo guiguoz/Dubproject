@@ -55,11 +55,12 @@ private:
     juce::AudioBuffer<float> buf_;           // pre-allocated, audio thread only
     int    loopLenSamples_ { 0 };            // 0 = no length yet (arm-stop not pressed)
     int    recPos_         { 0 };            // audio thread only
-    int    playPos_        { 0 };            // audio thread only
+    double playPos_        { 0.0 };          // fractional; E: Hermite interpolation
     int    barSizeSamples_ { 0 };            // samples per bar at current BPM
     double sampleRate_     { 48000.0 };
 
     std::atomic<float>       bpm_           { 120.f };
+    std::atomic<float>       recordBpm_     { 0.f };  // E: BPM captured at recording start
     std::atomic<State>       state_         { State::Idle };
     std::atomic<OverdubMode> overdubMode_   { OverdubMode::Tape };
     std::atomic<int>         pendingPresses_{ 0 };

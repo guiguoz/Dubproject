@@ -2,6 +2,7 @@
 
 #include "dsp/BpmDetector.h"
 #include "dsp/FeatureExtractor.h"
+#include "dsp/KeyDetector.h"
 
 #include <cmath>
 #include <future>
@@ -139,6 +140,7 @@ MainComponent::MainComponent()
             looperEngine_.setBpm(bpm);
             stepSeqPanel_.setBpm(bpm);
             updateSidebarBpm(bpm);
+            bpmRestrechCountdown_ = 12;  // A2: 12 × 33 ms ≈ 400 ms debounce
         }
         else
         {
@@ -320,6 +322,7 @@ MainComponent::MainComponent()
         serumHost_.setBpm(bpm);
         looperEngine_.setBpm(bpm);
         updateSidebarBpm(bpm);
+        bpmRestrechCountdown_ = 12;  // A2: 12 × 33 ms ≈ 400 ms debounce
     };
 
     // Play/stop — StepSequencerPanel already calls seq_.setPlaying(); stop samples immediately
@@ -748,7 +751,8 @@ MainComponent::MainComponent()
         masterKeyCombo_.addItem(kNoteNames[i], i + 1);
     masterKeyCombo_.setSelectedId(1, juce::dontSendNotification);
     masterKeyCombo_.onChange = [this] {
-        masterKeyRoot_ = masterKeyCombo_.getSelectedId() - 1;
+        masterKeyRoot_      = masterKeyCombo_.getSelectedId() - 1;
+        masterKeySetByUser_ = true;  // user explicitly chose a key → auto-transpose can fire
         applyMasterKey();
     };
     addAndMakeVisible(masterKeyCombo_);
@@ -820,7 +824,8 @@ MainComponent::~MainComponent()
 //==============================================================================
 
 void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
-                                        int trimStart, int trimEnd)
+                                        int trimStart, int trimEnd,
+                                        double* outFileSr)
 {
     juce::AudioFormatManager fmt;
     fmt.registerBasicFormats();
@@ -844,6 +849,9 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
         std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + numSamples, pcm.begin());
     }
 
+    const double fileSr = reader->sampleRate;
+    if (outFileSr) *outFileSr = fileSr;
+
     // Apply trim inline so that only one loadSample() call is made per scene
     // transition — avoids a second reloadSlotData() write that would race with
     // a voice still reading the background buffer during its fadeOut.
@@ -852,10 +860,12 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
                       ? juce::jlimit(start + 1, numSamples, trimEnd)
                       : numSamples;
 
+    static constexpr bool kSlotLoop[9] = { true, true, false, false, false, true, true, false, true };
     auto& sampler = dspPipeline_.getSampler();
-    sampler.loadSample(slot, pcm.data() + start, end - start,
-                       static_cast<double>(reader->sampleRate));
+    sampler.loadSample(slot, pcm.data() + start, end - start, fileSr);
     sampler.setSlotOneShot(slot, true);
+    if (slot >= 0 && slot < 9)
+        sampler.setSlotLoop(slot, kSlotLoop[slot]);
 
     stepSeqPanel_.setSlotLoaded(slot, true);
 
@@ -884,11 +894,17 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
         sampler.setSlotOneShot(slot, true);
         stepSeqPanel_.setSlotLoaded(slot, true);
         stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(raw));
+
+        // A3: save original (pre-stretch) PCM for future BPM re-match and transpose.
+        sampler.saveOriginalPcm(slot, raw.data(), static_cast<int>(raw.size()), sr);
     }
 
     // Slot 0 is the reference master — never auto-shift it
     if (slot == 0)
+    {
+        dspPipeline_.getSampler().setSlotLoop(0, true); // MST est toujours un loop
         return;
+    }
 
     // Only one background job per slot at a time
     if (slot < 0 || slot >= static_cast<int>(processingSlot_.size()))
@@ -969,9 +985,16 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                             [this, slot, fix = std::move(raw), capturedGen]() mutable {
                                 if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
                                 dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
+                                dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
                             });
                     return;
                 }
+
+                if (shutdownFlag_.load(std::memory_order_acquire)) return;
+
+                // C2: key detection (offline, non-percussive slots only).
+                const auto keyResult = ::dsp::KeyDetector::detect(
+                    raw.data(), static_cast<int>(raw.size()), sr);
 
                 if (shutdownFlag_.load(std::memory_order_acquire)) return;
 
@@ -1034,17 +1057,37 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
 
                 if (!doStretch && !doShift)
                 {
+                    static constexpr bool kSSL[9] = { true, true, false, false, false, true, true, false, true };
                     if (srNormalized)
                         juce::MessageManager::callAsync(
                             [this, slot, fix = std::move(raw),
-                             bpm  = bpmResult.bpm,
-                             conf = bpmResult.confidence,
+                             bpm       = bpmResult.bpm,
+                             conf      = bpmResult.confidence,
+                             masterBpm, keyResult,
                              capturedGen]() mutable {
                                 if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
                                 auto env = computeEnvelope(fix);
                                 dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
+                                dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
+                                dspPipeline_.getSampler().setSlotLoop(slot, kSSL[slot]);
+                                dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
+                                dspPipeline_.getSampler().schedulePhaseReset(slot);
                                 stepSeqPanel_.setSlotBpm(slot, bpm, conf);
                                 stepSeqPanel_.setSlotWaveform(slot, std::move(env));
+                                updateSlotKeyBadge(slot, keyResult);
+                                applyKeyMatchIfNeeded(slot, keyResult);
+                            });
+                    else
+                        // Aucun rechargement nécessaire — raw PCM déjà actif — mais loop doit être armé
+                        juce::MessageManager::callAsync(
+                            [this, slot, masterBpm, keyResult, capturedGen]() {
+                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
+                                static constexpr bool kSSL2[9] = { true, true, false, false, false, true, true, false, true };
+                                dspPipeline_.getSampler().setSlotLoop(slot, kSSL2[slot]);
+                                dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
+                                dspPipeline_.getSampler().schedulePhaseReset(slot);
+                                updateSlotKeyBadge(slot, keyResult);
+                                applyKeyMatchIfNeeded(slot, keyResult);
                             });
                     return;
                 }
@@ -1093,12 +1136,20 @@ void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, doubl
                      processed  = std::move(processed),
                      bpm        = bpmResult.bpm,
                      confidence = bpmResult.confidence,
+                     masterBpm, keyResult,
                      capturedGen]() mutable {
                         if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
                         auto envelope = computeEnvelope(processed);
                         dspPipeline_.getSampler().reloadSlotData(slot, std::move(processed));
+                        dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
+                        static constexpr bool kSSL[9] = { true, true, false, false, false, true, true, false, true };
+                        dspPipeline_.getSampler().setSlotLoop(slot, kSSL[slot]);
+                        dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
+                        dspPipeline_.getSampler().schedulePhaseReset(slot);
                         stepSeqPanel_.setSlotBpm(slot, bpm, confidence);
                         stepSeqPanel_.setSlotWaveform(slot, std::move(envelope));
+                        updateSlotKeyBadge(slot, keyResult);
+                        applyKeyMatchIfNeeded(slot, keyResult);
                     });
             }));
 }
@@ -1185,8 +1236,68 @@ void MainComponent::applyMasterKey()
     ctx.isMajor  = masterKeyMajor_;
     samplerEngine_.setMusicContext(ctx);
 
-    const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
-    scaleStaff_.setKey(masterKeyRoot_, t);
+    if (masterKeyRoot_ >= 0)
+    {
+        const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
+        scaleStaff_.setKey(masterKeyRoot_, t);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C2 helpers — called on the GUI thread after key detection worker completes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+static juce::String keyResultName(const ::dsp::KeyResult& kr)
+{
+    if (kr.key < 0) return {};
+    static constexpr const char* kNames[12] =
+        { "C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B" };
+    juce::String name = kNames[kr.key % 12];
+    if (kr.mode == 1) name += "m";
+    return name;
+}
+
+// True if detectedKey is enharmonically identical to projKey, OR if the two
+// keys are relative major/minor (share the same set of scale degrees).
+static bool keysConform(int detKey, int /*detMode*/, int projKey, bool projIsMajor)
+{
+    if (detKey < 0 || projKey < 0) return false;
+    // Same root (mode ignored — C major and C minor are "same key area" for matching).
+    if (detKey == projKey) return true;
+    // Relative: relative minor of C major = Am (root+9); relative major of Am = C (root+3).
+    const int relKey = projIsMajor ? (projKey + 9) % 12 : (projKey + 3) % 12;
+    return detKey == relKey;
+}
+
+void MainComponent::updateSlotKeyBadge(int slot, const ::dsp::KeyResult& kr)
+{
+    if (kr.key < 0 || slot < 0 || slot >= 9) return;
+    slotKeyResults_[static_cast<std::size_t>(slot)] = kr;
+    const bool matches = keysConform(kr.key, kr.mode, masterKeyRoot_, masterKeyMajor_);
+    stepSeqPanel_.setSlotKey(slot, keyResultName(kr), kr.confidence, matches);
+}
+
+void MainComponent::applyKeyMatchIfNeeded(int slot, const ::dsp::KeyResult& kr) noexcept
+{
+    // Condition 1: user has manually set the project key.
+    if (!masterKeySetByUser_ || masterKeyRoot_ < 0) return;
+    // Condition 2: detection confidence sufficient.
+    if (kr.key < 0 || kr.confidence < 0.7f) return;
+    // Condition 3: detected key does NOT conform to project key.
+    if (keysConform(kr.key, kr.mode, masterKeyRoot_, masterKeyMajor_)) return;
+    // Condition 4: global key-match toggle is ON.
+    if (!keyMatchEnabled_) return;
+    // Condition 5: slot role must be melodic/bass/pad (not percussive).
+    // Slots 2=KCK, 3=SNR, 4=HAT, 7=PRC are always percussive — never key-match.
+    static constexpr bool kCanKeyMatch[9] = { false, true, false, false, false, true, true, false, true };
+    if (!kCanKeyMatch[static_cast<std::size_t>(slot)]) return;
+
+    // Shortest semitone path from detectedKey → projectKey.
+    int delta = ((masterKeyRoot_ - kr.key) + 12) % 12;
+    if (delta > 6) delta -= 12;  // prefer ±6 max
+
+    // Apply via transposeRatio (real-time repitch; user can always reset to 0).
+    dspPipeline_.getSampler().setSlotTransposeSemitones(slot, static_cast<float>(delta));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1557,7 +1668,19 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 
         if (!sc.filePath.empty())
         {
-            loadSampleIntoSlot(i, sc.filePath);
+            // Slots loop non-MST : BPM-matching async pour aligner la longueur
+            // du sample sur la grille avant d'activer loopEnabled.
+            static constexpr bool kNeedsMatch[9] =
+                { false, true, false, false, false, true, true, false, true };
+            double fileSr = currentSampleRate_;
+            loadSampleIntoSlot(i, sc.filePath, 0, -1,
+                               kNeedsMatch[i] ? &fileSr : nullptr);
+            if (i > 0 && kNeedsMatch[i])
+            {
+                auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
+                autoMatchSampleAsync(i, std::move(pcm), fileSr);
+            }
+
             stepSeqPanel_.setSlotFilePath(i, sc.filePath);   // updates LCD name
             samplerEngine_.setSlotFilePath(i, sc.filePath);
 
@@ -1600,8 +1723,9 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     // ── v5 — master key ───────────────────────────────────────────────────────
     if (data.version >= 5)
     {
-        masterKeyRoot_  = data.masterKeyRoot;
-        masterKeyMajor_ = data.masterKeyMajor;
+        masterKeyRoot_      = data.masterKeyRoot;
+        masterKeyMajor_     = data.masterKeyMajor;
+        masterKeySetByUser_ = (data.masterKeyRoot >= 0);  // explicitly set in saved project
         masterKeyCombo_    .setSelectedId(masterKeyRoot_ + 1,          juce::dontSendNotification);
         masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2,     juce::dontSendNotification);
         applyMasterKey();
@@ -2479,6 +2603,10 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    // A2: debounced BPM re-stretch
+    if (bpmRestrechCountdown_ > 0 && --bpmRestrechCountdown_ == 0)
+        scheduleRestrechAllSlots();
+
     // ── MIDI Learn : consommer le dernier CC reçu ─────────────────────────────
     if (learningTarget_ >= 0)
     {
@@ -2544,8 +2672,10 @@ void MainComponent::timerCallback()
         const int target = sceneManager_.consumePendingScene();
         if (target >= 0)
         {
+            // NE PAS appeler captureCurrentScene() ici : le step buffer est déjà flippé
+            // vers la nouvelle scène par l'audio thread. La capture correcte a été faite
+            // dans navigateScene() avant prepareStepBuffer().
             const int oldIdx = sceneManager_.currentIdx();
-            captureCurrentScene();
             sceneManager_.setCurrentIdx(target);
             applyScene(target, oldIdx);
             updateSceneLabel();
@@ -2912,15 +3042,30 @@ void MainComponent::applyScene(int idx, int fromIdx)
             auto& cache = preloadCache_[static_cast<std::size_t>(i)];
             if (cache.ready.load(std::memory_order_acquire) && cache.path == newPath)
             {
-                // Cache hit : PCM déjà décodé hors message thread → seul loadSample() ici
-                auto& sampler = dspPipeline_.getSampler();
-                sampler.loadSample(i, cache.pcm.data(),
-                                   static_cast<int>(cache.pcm.size()), cache.sampleRate);
-                sampler.setSlotOneShot(i, true);
-                stepSeqPanel_.setSlotLoaded(i, true);
+                // Cache hit : PCM déjà décodé hors message thread.
+                // Slots loop non-MST → BPM-matching async (aligne longueur sur grille).
+                // MST et perc → chargement direct sans matching.
+                static constexpr bool kCacheNeedsMatch[9] =
+                    { false, true, false, false, false, true, true, false, true };
+                if (i > 0 && kCacheNeedsMatch[i])
                 {
-                    auto pcm = sampler.getSlotPcmSnapshot(i);
-                    stepSeqPanel_.setSlotWaveform(i, computeEnvelope(pcm));
+                    // autoMatchSampleAsync fait loadSample() + setSlotOneShot()
+                    // + setSlotWaveform() immédiatement, puis BPM-match async.
+                    std::vector<float> pcmCopy = cache.pcm;
+                    autoMatchSampleAsync(i, std::move(pcmCopy), cache.sampleRate);
+                }
+                else
+                {
+                    auto& sampler = dspPipeline_.getSampler();
+                    sampler.loadSample(i, cache.pcm.data(),
+                                       static_cast<int>(cache.pcm.size()), cache.sampleRate);
+                    sampler.setSlotOneShot(i, true);
+                    sampler.setSlotLoop(i, i == 0); // MST=true, perc=false
+                    stepSeqPanel_.setSlotLoaded(i, true);
+                    {
+                        auto pcm = sampler.getSlotPcmSnapshot(i);
+                        stepSeqPanel_.setSlotWaveform(i, computeEnvelope(pcm));
+                    }
                 }
                 cache.ready.store(false, std::memory_order_relaxed);
             }
@@ -2973,19 +3118,25 @@ void MainComponent::applyScene(int idx, int fromIdx)
             const int te = sc.trimEnd  [sidx];
             if (ts > 0 || te >= 0)
             {
-                auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
-                const int total = static_cast<int>(snap.size());
-                if (total > 0)
+                // Ne recharger que si le trim a changé depuis la dernière application.
+                // Le snapshot peut être déjà tronqué : appliquer des coordonnées fichier
+                // dessus produit un double-trim (le sample rétrécit à chaque navigation).
+                // On relit depuis le fichier d'origine pour garantir l'exactitude.
+                if (ts != appliedTrimStart_[static_cast<std::size_t>(i)]
+                    || te != appliedTrimEnd_[static_cast<std::size_t>(i)])
                 {
-                    const int s2 = juce::jlimit(0, total - 1, ts);
-                    const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
-                    if (e2 - s2 >= 100)  // guard: ignore degenerate trims (< ~2 ms at 44100 Hz)
-                    {
-                        std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
-                        dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
-                    }
+                    if (!newPath.empty())
+                        loadSampleIntoSlot(i, newPath, ts, te);
+                    appliedTrimStart_[static_cast<std::size_t>(i)] = ts;
+                    appliedTrimEnd_  [static_cast<std::size_t>(i)] = te;
                 }
             }
+        }
+        else
+        {
+            // Nouveau fichier chargé : trim intégré dans loadSampleIntoSlot / cache.
+            appliedTrimStart_[static_cast<std::size_t>(i)] = sc.trimStart[sidx];
+            appliedTrimEnd_  [static_cast<std::size_t>(i)] = sc.trimEnd  [sidx];
         }
     }
 
@@ -3150,6 +3301,11 @@ void MainComponent::navigateScene(int delta)
     }
 
     // Séquenceur en lecture : on met la cible en attente.
+    // Capturer la scène courante MAINTENANT, pendant que activeBuf_ contient encore
+    // l'ancien step buffer. Après prepareStepBuffer()/flipIfPrepared(), getStep()
+    // retournera les données de la nouvelle scène, corrompant la capture.
+    captureCurrentScene();
+
     // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
     // pour que la détection de fin de cycle soit stable dans le thread audio.
     int sceneLen = 1;
@@ -3354,6 +3510,18 @@ void MainComponent::applyDubDelayMorph(float t)
     delay.setDrive   (lerp(from.dubDelayDrive,    to.dubDelayDrive,    t));
 }
 
+void MainComponent::scheduleRestrechAllSlots()
+{
+    auto& sampler = dspPipeline_.getSampler();
+    for (int i = 0; i < ::dsp::Sampler::kMaxSlots; ++i)
+    {
+        std::vector<float> orig;
+        double origSr = 44100.0;
+        if (sampler.getOriginalPcm(i, orig, origSr) && !orig.empty())
+            autoMatchSampleAsync(i, std::move(orig), origSr);
+    }
+}
+
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 {
     // 1. Persist in current scene
@@ -3363,7 +3531,24 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
     // 2. Update panel checkmark
     stepSeqPanel_.setSlotPitchOffset(slot, semitones);
 
-    // 3. Re-process from original file (apply new pitch via autoMatchSampleAsync)
+    // 3. Instant repitch via transposeRatio (C1)
+    dspPipeline_.getSampler().setSlotTransposeSemitones(slot, semitones);
+
+    // 4. Offline WSOLA from originalPcm (no disk I/O — A3)
+    //    After reload: transposeRatio reset to 1.0 (pitch baked into PCM).
+    //    Falls back to disk if originalPcm not yet available.
+    {
+        auto& sampler = dspPipeline_.getSampler();
+        std::vector<float> orig;
+        double origSr = 44100.0;
+        if (sampler.getOriginalPcm(slot, orig, origSr) && !orig.empty())
+        {
+            autoMatchSampleAsync(slot, std::move(orig), origSr);
+            return;
+        }
+    }
+
+    // Fallback: re-read from disk (legacy path — no originalPcm yet)
     const std::string path = sc.filePaths[static_cast<std::size_t>(slot)];
     if (path.empty()) return;
 

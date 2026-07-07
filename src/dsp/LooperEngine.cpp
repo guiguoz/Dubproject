@@ -2,6 +2,24 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+
+// Hermite 4-point (Catmull-Rom) read from a looping buffer of length len.
+inline float looperHermite(const float* buf, int len, double pos) noexcept
+{
+    const int    i1   = static_cast<int>(pos) % len;
+    const double frac = pos - static_cast<double>(static_cast<int>(pos));
+    const int im1 = (i1 - 1 + len) % len;
+    const int ip1 = (i1 + 1) % len;
+    const int ip2 = (i1 + 2) % len;
+    const double c3 = 0.5*(buf[ip2]-buf[im1]) + 1.5*(buf[i1]-buf[ip1]);
+    const double c2 = buf[im1] - 2.5*buf[i1] + 2.0*buf[ip1] - 0.5*buf[ip2];
+    const double c1 = 0.5*(buf[ip1]-buf[im1]);
+    return static_cast<float>(buf[i1] + frac*(c1 + frac*(c2 + frac*c3)));
+}
+
+} // anonymous namespace
+
 namespace dsp {
 
 void LooperEngine::prepare(double sampleRate, int maxBars) noexcept
@@ -43,8 +61,9 @@ void LooperEngine::process(const float* inL, const float* inR,
     {
         state_.store(State::Idle, std::memory_order_relaxed);
         recPos_ = 0;
-        playPos_ = 0;
+        playPos_ = 0.0;
         loopLenSamples_ = 0;
+        recordBpm_.store(0.f, std::memory_order_relaxed);
         buf_.clear();
         displayBars_.store(0.f, std::memory_order_relaxed);
         for (int i = 0; i < numSamples; ++i) { outL[i] = inL[i]; outR[i] = inR[i]; }
@@ -110,6 +129,9 @@ void LooperEngine::process(const float* inL, const float* inR,
             {
                 recPos_ = 0;
                 loopLenSamples_ = 0;
+                // E: capture project BPM at record start for later rate computation.
+                recordBpm_.store(bpm_.load(std::memory_order_relaxed),
+                                 std::memory_order_relaxed);
                 st = State::Recording;
                 state_.store(st, std::memory_order_relaxed);
                 // Fall through to Recording handling below
@@ -146,7 +168,7 @@ void LooperEngine::process(const float* inL, const float* inR,
         // Check arm-stop: transition to PLAYING when target length reached
         if (loopLenSamples_ > 0 && recPos_ >= loopLenSamples_)
         {
-            playPos_ = 0;
+            playPos_ = 0.0;
             state_.store(State::Playing, std::memory_order_relaxed);
         }
 
@@ -169,12 +191,18 @@ void LooperEngine::process(const float* inL, const float* inR,
     float* bL = buf_.getWritePointer(0);
     float* bR = buf_.getWritePointer(1);
 
+    // E: rate = projBpm / recordBpm — repitch assumé (no real-time stretch).
+    const float recBpm  = recordBpm_.load(std::memory_order_relaxed);
+    const float projBpm = bpm_.load(std::memory_order_relaxed);
+    const double rate = (recBpm > 0.f && projBpm > 0.f)
+        ? static_cast<double>(projBpm / recBpm) : 1.0;
+
     for (int i = 0; i < numSamples; ++i)
     {
-        const int   pos   = playPos_;
-        const float loopL = bL[pos];
-        const float loopR = bR[pos];
-        const float srcL  = inL[i];   // save before possible outL overwrite
+        const int   ipos  = static_cast<int>(playPos_);
+        const float loopL = looperHermite(bL, loopLenSamples_, playPos_);
+        const float loopR = looperHermite(bR, loopLenSamples_, playPos_);
+        const float srcL  = inL[i];
         const float srcR  = inR[i];
 
         outL[i] = srcL + loopL;
@@ -184,17 +212,19 @@ void LooperEngine::process(const float* inL, const float* inR,
         {
             if (mode == OverdubMode::Tape)
             {
-                bL[pos] = loopL * kFeedback + srcL;
-                bR[pos] = loopR * kFeedback + srcR;
+                bL[ipos] = bL[ipos] * kFeedback + srcL;
+                bR[ipos] = bR[ipos] * kFeedback + srcR;
             }
             else  // Replace
             {
-                bL[pos] = loopL * kReplaceFade + srcL * (1.f - kReplaceFade);
-                bR[pos] = loopR * kReplaceFade + srcR * (1.f - kReplaceFade);
+                bL[ipos] = bL[ipos] * kReplaceFade + srcL * (1.f - kReplaceFade);
+                bR[ipos] = bR[ipos] * kReplaceFade + srcR * (1.f - kReplaceFade);
             }
         }
 
-        if (++playPos_ >= loopLenSamples_) playPos_ = 0;
+        playPos_ += rate;
+        while (playPos_ >= static_cast<double>(loopLenSamples_))
+            playPos_ -= static_cast<double>(loopLenSamples_);
     }
 
     const float bars = (barSizeSamples_ > 0)

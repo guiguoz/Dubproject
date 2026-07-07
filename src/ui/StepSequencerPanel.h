@@ -518,6 +518,40 @@ public:
             sampleNameLabels_[idx].getText() + tooltipSuffix);
     }
 
+    /// Show the detected key badge for a slot.
+    /// keyName: e.g. "Am", "C#". confidence: Pearson [0,1]. matchesProject: true=conform.
+    /// confidence < 0.7 → grey "?"; matches → green; doesn't match → amber.
+    void setSlotKey(int slot, const juce::String& keyName,
+                    float confidence, bool matchesProject) noexcept
+    {
+        if (slot < 0 || slot >= 9) return;
+        const auto idx = static_cast<std::size_t>(slot);
+
+        juce::String suffix;
+        if (keyName.isEmpty() || confidence < 0.01f)
+            return;
+        else if (confidence < 0.7f)
+            suffix = " | Key: " + keyName + " ?";
+        else if (matchesProject)
+            suffix = " | Key: " + keyName + " \xe2\x9c\x93";   // ✓
+        else
+            suffix = " | Key: " + keyName;
+
+        // Append to existing tooltip so BPM badge is preserved.
+        const auto cur = sampleNameLabels_[idx].getTooltip();
+        sampleNameLabels_[idx].setTooltip(cur + suffix);
+
+        // Tint the loaded indicator green when key matches (only if not already tinted by BPM).
+        if (matchesProject && confidence >= 0.7f)
+        {
+            const auto col = loadedIndicators_[slot].findColour(juce::Label::textColourId);
+            // Only override if still at the default track colour (not already BPM-coloured).
+            if (col == trackColour(slot))
+                loadedIndicators_[slot].setColour(juce::Label::textColourId,
+                                                  juce::Colour(0xFF4CDFA8)); // neon green
+        }
+    }
+
     void setSlotPitchOffset(int slot, float semitones) noexcept
     {
         if (slot < 0 || slot >= 9) return;

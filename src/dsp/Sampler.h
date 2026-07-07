@@ -42,6 +42,29 @@ struct SampleSlot
     std::atomic<bool>  loaded      { false }; // set after data is ready
     std::atomic<bool>  muted       { false }; // silenced but keeps playing
     std::atomic<float> delaySend   { 0.0f };  // 0=dry-only, 1=full send to delay bus
+
+    // A2: BPM at which the active PCM buffer was stretched (0 = no info → rate=1.0).
+    // stretchedBpm updated atomically at step 0 via pendingStretchedBpm.
+    std::atomic<float> stretchedBpm        { 0.f };
+    std::atomic<float> pendingStretchedBpm { 0.f };
+
+    // A3: original PCM (pre-stretch, post-trim) — message thread only, never read by audio thread.
+    std::vector<float> originalPcm {};
+    double             originalSr  { 44100.0 };
+
+
+    // C1: real-time pitch transpose — 2^(semitones/12). Set by GUI; read by audio.
+    std::atomic<float> transposeRatio  { 1.0f };
+    // B3: half/double-time factor {0.5, 1.0, 2.0} — quantized to step 0.
+    std::atomic<float> halttimeFactor  { 1.0f };
+    std::atomic<float> pendingHaltime  { 0.f };  // 0 = nothing pending
+
+    // D: Performance FX commands (GUI→audio, consumed by audio thread each block).
+    std::atomic<int>   perfCmd       { 0 };     // encodes PerfCmd; exchange(0) consumes it
+    std::atomic<float> tapeDurMs     { 500.f }; // D1: stop/start ramp duration in ms
+    std::atomic<float> glideStartSt  { 12.f };  // D2: glide start pitch offset in semitones
+    std::atomic<float> glideTimeMs   { 800.f }; // D2: glide 99%-convergence time in ms
+    std::atomic<bool>  pendingReverse{ false };  // D3: toggle reverse at next step 0
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +92,7 @@ public:
     void clearSlot(int slot) noexcept;
 
     // Trigger / stop — safe to call from any thread (audio or MIDI).
-    void trigger(int slot) noexcept;
+    void trigger(int slot, int offset = 0) noexcept;
 
     // StopMode controls the fade-out duration applied when stopping a slot.
     // Encoded as int so it fits in a single atomic<int> (stopPending).
@@ -84,6 +107,22 @@ public:
 
     void stop(int slot, StopMode mode = StopMode::Normal) noexcept;
     void stopAllSlots(StopMode mode = StopMode::Normal) noexcept;
+
+    // D: Performance FX — rate modulations applied in real-time by the audio thread.
+    // Commands are consumed at the next audio block (not quantized, except toggleReverse).
+    enum class PerfCmd : int {
+        TapeStop  = 1,  // ramp rate 1→0 quadratically over tapeDurMs
+        TapeStart = 2,  // ramp rate 0→1 quadratically over tapeDurMs
+        Glide     = 3,  // pitch from +glideStartSt semitones, exp. convergence over glideTimeMs
+        Cancel    = 4   // cancel active perf FX, restore ratio=1
+    };
+    void triggerTapeStop (int slot, float durationMs = 500.f) noexcept;
+    void triggerTapeStart(int slot, float durationMs = 500.f) noexcept;
+    void triggerGlide    (int slot, float startSemitones = 12.f, float timeMs = 800.f) noexcept;
+    void cancelPerfFx    (int slot) noexcept;
+    // D3: toggle reverse playback, quantized to next step 0.
+    void toggleReverse(int slot) noexcept;
+    bool isReversed   (int slot) const noexcept;
 
     // Sidechain: sourceSlot (e.g. KICK) ducks targetSlot (e.g. BASS) in real-time.
     // Call from GUI thread after magic mix. Max kMaxSidechainPairs pairs.
@@ -108,7 +147,7 @@ public:
     void setSlotLoop(int slot, bool loop) noexcept;
     void setSlotOneShot(int slot, bool oneShot) noexcept;
     void setSlotMuted(int slot, bool muted, bool quantized = false) noexcept;
-    void onTrackStep0(int slot) noexcept;
+    void onTrackStep0(int slot, int offsetInBlock = 0) noexcept;
     void setSlotDelaySend(int slot, float send) noexcept;
     float getSlotDelaySend(int slot) const noexcept;
 
@@ -181,17 +220,47 @@ public:
 
     void reset() noexcept;
 
+    // Arm a phase-aligned restart at the next trackStep=0 for this slot.
+    // Called from the GUI thread after reloadSlotData() (BPM-matched buffer ready).
+    // onTrackStep0() consumes the flag and fires triggerPending → path C restarts
+    // the voice from readPos=0 with the new buffer, aligned to the step grid.
+    void schedulePhaseReset(int slot) noexcept;
+
+    // A2: store the BPM the new buffer was stretched to; consumed at next step 0.
+    void setSlotStretchedBpm(int slot, float bpm) noexcept;
+
+    // C1: set real-time transpose (2^(st/12)), applied immediately to all active voices.
+    void setSlotTransposeSemitones(int slot, float semitones) noexcept;
+    // C1: read current transpose ratio (GUI thread).
+    float getSlotTransposeRatio(int slot) const noexcept
+    {
+        if (slot < 0 || slot >= kMaxSlots) return 1.f;
+        return slots_[static_cast<std::size_t>(slot)]
+            .transposeRatio.load(std::memory_order_relaxed);
+    }
+    // B3: queue half/double-time factor change (applied at next step 0).
+    void setPendingHaltime(int slot, float factor) noexcept;
+    // B3: read current haltime factor.
+    float getHalttimeFactor(int slot) const noexcept;
+
+    // A3: save/retrieve the pre-stretch PCM for re-stretch (A2) and transpose (C1).
+    // Call saveOriginalPcm from the message thread before launching the async stretch worker.
+    void saveOriginalPcm(int slot, const float* data, int numSamples, double sr) noexcept;
+    bool getOriginalPcm (int slot, std::vector<float>& out, double& outSr) const noexcept;
+
 private:
     struct VoiceState
     {
-        bool playing{ false };
-        int  dataIdx{ 0 };
-        int  readPos{ 0 };
-        int  fadeIn{ 0 };
+        bool   playing{ false };
+        int    dataIdx{ 0 };
+        double readPos{ 0.0 };
+        double rate   { 1.0 };  // tempo × transpose × perf ratio (futurs A2/C1/D)
+        int    fadeIn{ 0 };
         int  fadeOut{ 0 };
         int  fadeOutTotal{ 256 };
         bool retriggering{ false };
         bool stopAfterFadeOut{ false };
+        int  startOffset{ 0 };   // intra-block sample offset (P0.3)
     };
 
     struct PlayState
@@ -200,7 +269,21 @@ private:
         std::atomic<int>  stopPending     { 0 };  // 0=none, encodes StopMode
         std::atomic<bool> quantTrigPending{ false };
         std::atomic<int>  quantDiv        { static_cast<int>(GridDiv::Quarter) };
-        std::atomic<bool> unmutePending   { false };
+        std::atomic<bool> unmutePending     { false };
+        std::atomic<bool> pendingPhaseReset { false };
+        std::atomic<int>  triggerOffset     { 0 };   // intra-block offset for triggerPending (P0.3)
+
+        // D: per-slot performance FX state (audio-thread-only, no atomics needed).
+        struct PerfFxState {
+            enum class Mode : uint8_t { None, TapeStop, TapeStart, Glide };
+            Mode  mode      { Mode::None };
+            float ratio     { 1.f };    // current rate multiplier (0=stopped, 1=normal)
+            float elapsed   { 0.f };    // samples elapsed since FX start
+            float total     { 1.f };    // total samples for tape ramp
+            float glideFrom { 1.f };    // glide: starting ratio (2^(startSt/12))
+            float glideK    { 0.f };    // glide: precomputed k = 4.6052 / totalSamp
+            bool  reverse   { false };  // rate sign: true → rate × -1
+        } perfFx;
 
         VoiceState voices[2];
         int currentVoice{ 0 };
