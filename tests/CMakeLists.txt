@@ -96,12 +96,17 @@ add_executable(EngineTests
     engine/test_scheduler.cpp
     engine/test_slotplayer.cpp
     engine/test_stretchconform.cpp
+    engine/test_import.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
+    ../src/engine/Analysis/BpmDetector.cpp
+    ../src/engine/Analysis/AiContentClassifier.cpp
+    ../src/engine/ImportPipeline.cpp
 )
 
 target_include_directories(EngineTests PRIVATE
     ../src                                   # #include "engine/Transport.h"
+    ../src/engine/Analysis                   # #include "engine/Analysis/BpmDetector.h"
     ../third_party/signalsmith-stretch       # signalsmith-stretch.h (root)
     .
 )
