@@ -91,6 +91,8 @@ catch_discover_tests(SaxFXTests)
 add_executable(EngineTests
     engine/test_transport.cpp
     engine/test_scheduler.cpp
+    engine/test_slotplayer.cpp
+    ../src/engine/SlotPlayer.cpp
 )
 
 target_include_directories(EngineTests PRIVATE
