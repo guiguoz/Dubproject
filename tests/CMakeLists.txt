@@ -84,3 +84,27 @@ endif()
 include(CTest)
 include(Catch)
 catch_discover_tests(SaxFXTests)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EngineTests — moteur V2, sans JUCE ni ONNX
+# ─────────────────────────────────────────────────────────────────────────────
+add_executable(EngineTests
+    engine/test_transport.cpp
+)
+
+target_include_directories(EngineTests PRIVATE
+    ../src                                   # #include "engine/Transport.h"
+    ../third_party/signalsmith-stretch       # signalsmith-stretch.h
+    .
+)
+
+target_link_libraries(EngineTests PRIVATE Catch2::Catch2WithMain)
+target_compile_features(EngineTests PRIVATE cxx_std_17)
+
+if(MSVC)
+    target_compile_options(EngineTests PRIVATE /W4 /WX-)
+else()
+    target_compile_options(EngineTests PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+catch_discover_tests(EngineTests)
