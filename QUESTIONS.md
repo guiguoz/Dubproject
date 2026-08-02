@@ -1,41 +1,22 @@
 # QUESTIONS.md — Questions et déviations ouvertes
 
-## Q1 — DUB throw pré-frontière (fin M6, complété en M7)
-
-**État** : stub (boucle vide).
-
-**Raison** : Le `SendRamp` vers `PingPongDelay` avant la frontière de transition de type
-`Dub` nécessite que le `PingPongDelay` soit porté dans `engine/fx/`. Ce portage est
-planifié en M7. Le `TransitionEngine` émet déjà le `SendRamp` de release à la frontière ;
-le pré-throw sera complété quand le delay sera disponible.
-
-**Action** : en M7, après le portage de `PingPongDelay`, compléter
-`TransitionEngine::compilePlan()` pour le type `Dub`.
+Toutes les questions M6 sont closes. Aucune question ouverte.
 
 ---
 
-## Q2 — SlotRole::Unknown non défini dans SlotPlayer.h (fin M6)
+## [CLOSE] Q1 — DUB throw pré-frontière
 
-**État** : `SlotConfig.role` initialisé à `SlotRole::Loop` faute de valeur `Unknown`.
+**Décision** : stub M6 validé. En M7 : SendRamp AVANT le mute du slot sortant
+(délai se remplit pendant que le son est encore là). Test T-TX DUB à écrire :
+vérifier qu'il reste de l'énergie dans le delay après le mute.
 
-**Question** : faut-il ajouter `Unknown = 9` à l'enum `SlotRole` dans `SlotPlayer.h` ?
+## [CLOSE] Q2 — SlotRole::Unknown
 
-**Suggestion** : oui, ajouter `Unknown = 255` (uint8_t) comme valeur sentinelle.
-L'utilisateur valide avant que M7 ne commence.
+**Décision** : `Unknown = 255` (uint8_t). AutoMix traite Unknown : gain 0 dB,
+aucun send, pas de sidechain. Appliqué dans SlotPlayer.h.
 
-**Decision attendue** : Guillaume
+## [CLOSE] Q3 — Durée de l'état Settling
 
----
-
-## Q3 — Durée de l'état Settling (fin M6)
-
-**État** : Settling dure 1 bloc (transitoire immédiat).
-
-**Raison** : la spec §6 mentionne SETTLING sans définir sa durée. En V2.0, la
-convergence du mix auto en 150–300 ms (§11.5) remplace un vrai état SETTLING
-dans le TransitionEngine. Implémenté comme 1 bloc pour satisfaire les tests.
-
-**Decision** : si une durée spécifique est souhaitée (ex. 300 ms = durée du send DUB),
-indiquer la valeur. Sinon, la version à 1 bloc est suffisante.
-
-**Decision attendue** : Guillaume
+**Décision** : IDLE à 1 bloc (permet d'enchaîner les transitions en live).
+Libération par slot : conditionnée à "fade terminé ET plus aucune voix active",
+vérifiée indépendamment par chaque slot — jamais par l'état de transition.

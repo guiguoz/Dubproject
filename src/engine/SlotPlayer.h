@@ -11,7 +11,9 @@ namespace engine {
 // ─── Types de base ───────────────────────────────────────────────────────────
 
 enum class PlayMode : uint8_t { OneShot = 0, Free = 1, LoopSync = 2 };
-enum class SlotRole  : uint8_t { Kick=0, Bass=1, Snare=2, Pad=3, Melodic=4, Perc=5, Fx=6, Loop=7, Drum=8 };
+enum class SlotRole  : uint8_t { Kick=0, Bass=1, Snare=2, Pad=3, Melodic=4, Perc=5, Fx=6, Loop=7, Drum=8,
+                                  Unknown=255 // sentinelle : classifieur indisponible ou confiance nulle
+                                };
 
 // PCM immuable après chargement (message thread uniquement).
 struct SlotPcm {
