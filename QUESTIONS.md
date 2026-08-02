@@ -1,22 +1,28 @@
-# QUESTIONS.md — Questions et déviations ouvertes
+# QUESTIONS.md
 
-Toutes les questions M6 sont closes. Aucune question ouverte.
+Toutes les questions M1-M7 sont closes.
 
 ---
 
-## [CLOSE] Q1 — DUB throw pré-frontière
+## M8a — Surface UI inventoriée (299 appels DSP)
 
-**Décision** : stub M6 validé. En M7 : SendRamp AVANT le mute du slot sortant
-(délai se remplit pendant que le son est encore là). Test T-TX DUB à écrire :
-vérifier qu'il reste de l'énergie dans le delay après le mute.
+Objets à remplacer via EngineFacade :
 
-## [CLOSE] Q2 — SlotRole::Unknown
+| Ancien objet | V2 équivalent |
+|---|---|
+| `dspPipeline_.getSampler()` | `EngineFacade::slot*()` → SlotPlayer |
+| `dspPipeline_.processStereo/process()` | `EngineFacade::processBlock()` → AudioGraph |
+| `dspPipeline_.getDubDelay()` | `EngineFacade::delay()` → engine::fx::PingPongDelay |
+| `dspPipeline_.getMasterLimiter()` | interne AudioGraph |
+| `stepSequencer_.*` | `EngineFacade::sequencer*()` → Sequencer |
+| `sceneManager_.*` | `EngineFacade::scene*()` → SceneStore + TransitionEngine |
+| `samplerEngine_.*` | `EngineFacade::import*()` → ImportPipeline + AutoMixDub |
+| `looperEngine_.*` | **DÉSACTIVÉ** (§10.4) — UI masquée |
+| `serumHost_.*` | bridgé tel quel (JUCE deps — reste dans src/dsp/) |
 
-**Décision** : `Unknown = 255` (uint8_t). AutoMix traite Unknown : gain 0 dB,
-aucun send, pas de sidechain. Appliqué dans SlotPlayer.h.
-
-## [CLOSE] Q3 — Durée de l'état Settling
-
-**Décision** : IDLE à 1 bloc (permet d'enchaîner les transitions en live).
-Libération par slot : conditionnée à "fade terminé ET plus aucune voix active",
-vérifiée indépendamment par chaque slot — jamais par l'état de transition.
+Décisions M8b :
+- `DUB_ENGINE_V2` flag dans CMakeLists.txt + MainComponent
+- LooperEngine : tous les appels masqués sous `#ifndef DUB_ENGINE_V2`
+- SmartSamplerEngine : importAsync() → ImportPipeline, mix → AutoMixDub
+- SerumHost : reste src/dsp/, `EngineFacade` garde un pointeur injecté
+- `autoMatchSampleAsync` : remplacé par `EngineFacade::importSampleAsync()`
