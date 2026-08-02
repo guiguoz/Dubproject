@@ -97,11 +97,13 @@ add_executable(EngineTests
     engine/test_slotplayer.cpp
     engine/test_stretchconform.cpp
     engine/test_import.cpp
+    engine/test_transition.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp
     ../src/engine/Analysis/AiContentClassifier.cpp
     ../src/engine/ImportPipeline.cpp
+    ../src/engine/TransitionEngine.cpp
 )
 
 target_include_directories(EngineTests PRIVATE
