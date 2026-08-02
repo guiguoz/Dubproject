@@ -4,6 +4,7 @@
 #include <vector>
 #include "engine/Transport.h"
 #include "engine/EventScheduler.h"
+#include "engine/StretchConform.h"
 
 namespace engine {
 
@@ -22,10 +23,14 @@ struct SlotPcm {
 
 // Paramètres atomiques : lus depuis le thread audio, écrits depuis le message thread.
 struct SlotParams {
-    std::atomic<PlayMode> mode  {PlayMode::OneShot};
-    std::atomic<float>    gain  {1.0f};
-    std::atomic<bool>     muted {false};
-    // loopBeats et transpose ajoutés en M4
+    std::atomic<PlayMode>  mode      {PlayMode::OneShot};
+    std::atomic<float>     gain      {1.0f};
+    std::atomic<bool>      muted     {false};
+    // M4 :
+    std::atomic<float>     timeRatio {1.0f};   // bpmSample / bpmProjet
+    std::atomic<float>     semitones {0.0f};
+    std::atomic<int32_t>   loopBeats {0};      // longueur musicale en beats
+    std::atomic<int64_t>   anchor    {0};      // sample transport du trigger
 };
 
 // ─── Voix (2 par slot pour les chevauchements) ───────────────────────────────
@@ -55,23 +60,41 @@ public:
                       float* output, int32_t numFrames,
                       const EngineEvent* events, int numEvents) noexcept;
 
-private:
-    static constexpr int kSlots     = 9;
-    static constexpr int kFadeLen   = 16;
-    static constexpr float kFadeThreshold = 0.001f; // −60 dB
+    // Active/désactive le mode LOOP SYNC pour un slot (message thread).
+    // loopBeats : durée de la loop en beats (ex. 8 = 2 mesures 4/4).
+    // timeRatio : bpmSample / bpmProjet.
+    // semitones : transposition.
+    // anchorSample : sample transport absolu du trigger (frontière de step).
+    void armLoopSync(int slot, int loopBeats, float timeRatio, float semitones,
+                     int64_t anchorSample) noexcept;
 
-    SlotPcm    pcm_[kSlots];
-    Voice      voices_[kSlots][2];
-    SlotParams params_[kSlots];
+    // Appelé une fois au changement de device (prépare les stretchers).
+    void prepareStretchers(int channels, float sampleRate) noexcept;
+
+private:
+    static constexpr int   kSlots         = 9;
+    static constexpr int   kFadeLen       = 16;
+    static constexpr float kFadeThreshold = 0.001f; // −60 dB
+    static constexpr int   kCrossfadeLen  = 256;    // micro-crossfade recalage §10.2
+
+    SlotPcm         pcm_[kSlots];
+    Voice           voices_[kSlots][2];
+    SlotParams      params_[kSlots];
+    StretchConform  stretchers_[kSlots];
 
     // Indique si le slot a un PCM chargé (écrit message thread, lu audio thread).
     std::atomic<bool> loaded_[kSlots] {};
 
     // Déclenche une voix sur le slot (choisit voice[0] ou voice[1]).
-    void handleTrigger(int slot) noexcept;
+    void handleTrigger(int slot, int64_t transportAnchor) noexcept;
 
     // Rend une voix dans le buffer stéréo de sortie.
-    void renderVoice(int slot, int v, float* out, int numFrames) noexcept;
+    void renderVoice(int slot, int v, float* out, int numFrames,
+                     const TransportState& ts) noexcept;
+
+    // Rend le mode LOOP SYNC avec position dérivée (avec ou sans stretch).
+    void renderLoopSync(int slot, float* out, int numFrames,
+                        const TransportState& ts) noexcept;
 };
 
 } // namespace engine

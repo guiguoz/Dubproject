@@ -88,20 +88,28 @@ catch_discover_tests(SaxFXTests)
 # ─────────────────────────────────────────────────────────────────────────────
 # EngineTests — moteur V2, sans JUCE ni ONNX
 # ─────────────────────────────────────────────────────────────────────────────
+# signalsmith-stretch — charge aussi signalsmith-linear via FetchContent
+add_subdirectory(../third_party/signalsmith-stretch signalsmith-stretch-build)
+
 add_executable(EngineTests
     engine/test_transport.cpp
     engine/test_scheduler.cpp
     engine/test_slotplayer.cpp
+    engine/test_stretchconform.cpp
     ../src/engine/SlotPlayer.cpp
+    ../src/engine/StretchConform.cpp
 )
 
 target_include_directories(EngineTests PRIVATE
     ../src                                   # #include "engine/Transport.h"
-    ../third_party/signalsmith-stretch       # signalsmith-stretch.h
+    ../third_party/signalsmith-stretch       # signalsmith-stretch.h (root)
     .
 )
 
-target_link_libraries(EngineTests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(EngineTests PRIVATE
+    Catch2::Catch2WithMain
+    signalsmith-stretch
+)
 target_compile_features(EngineTests PRIVATE cxx_std_17)
 
 if(MSVC)
