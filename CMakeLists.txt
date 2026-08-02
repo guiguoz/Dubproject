@@ -74,6 +74,15 @@ set_target_properties(SaxFXLive PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/bin"
 )
 
+# ─── Option DUB_ENGINE_V2 ────────────────────────────────────────────────────
+# Compile le moteur V2 (engine/) et active EngineFacade dans MainComponent.
+# OFF par défaut : l'ancien pipeline DSP reste actif jusqu'à la migration M8c.
+option(DUB_ENGINE_V2 "Use V2 engine via EngineFacade (M8+)" OFF)
+
+# signalsmith-stretch — requis par engine/StretchConform
+# Ajouté ici (avant add_subdirectory(tests)) pour éviter la double configuration.
+add_subdirectory(third_party/signalsmith-stretch signalsmith-stretch-main-build)
+
 # Code source
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
@@ -94,9 +103,25 @@ target_sources(SaxFXLive PRIVATE
     src/ui/SaxOsLookAndFeel.cpp
     src/ui/RotaryKnob.cpp
     src/ui/ScaleStaffComponent.cpp
+    # ── Moteur V2 (engine/) ────────────────────────────────────────────────────
+    src/engine/SlotPlayer.cpp
+    src/engine/StretchConform.cpp
+    src/engine/Analysis/BpmDetector.cpp
+    src/engine/Analysis/AiContentClassifier.cpp
+    src/engine/ImportPipeline.cpp
+    src/engine/TransitionEngine.cpp
+    src/engine/AutoMixDub.cpp
+    src/engine/AudioGraph.cpp
+    src/engine/fx/PingPongDelay.cpp
+    src/engine/EngineFacade.cpp
 )
 
-target_include_directories(SaxFXLive PRIVATE src)
+target_include_directories(SaxFXLive PRIVATE
+    src
+    third_party/signalsmith-stretch
+)
+
+target_link_libraries(SaxFXLive PRIVATE signalsmith-stretch)
 
 # Modules JUCE requis
 target_link_libraries(SaxFXLive PRIVATE
@@ -122,6 +147,7 @@ target_compile_definitions(SaxFXLive PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_VERSION>"
     $<$<BOOL:${JUCE_ASIO}>:JUCE_ASIO=1>
     $<$<BOOL:${SAXFX_ENABLE_ONNX}>:SAXFX_HAS_ONNX=1>
+    $<$<BOOL:${DUB_ENGINE_V2}>:DUB_ENGINE_V2=1>
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
 )

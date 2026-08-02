@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef DUB_ENGINE_V2
+#include "engine/EngineFacade.h"
+#endif
+
 #include "dsp/DspPipeline.h"
 #include "dsp/FeatureExtractor.h"
 #include "dsp/KeyResult.h"
@@ -74,6 +78,13 @@ private:
     // Timer
     //==========================================================================
     void timerCallback() override;
+
+    //==========================================================================
+    // Moteur V2 (actif si DUB_ENGINE_V2 défini)
+    //==========================================================================
+#ifdef DUB_ENGINE_V2
+    engine::EngineFacade facade_;
+#endif
 
     //==========================================================================
     // DSP + MIDI

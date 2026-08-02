@@ -1,5 +1,7 @@
 #include "AiContentClassifier.h"
 
+#ifdef SAXFX_HAS_ONNX
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -260,3 +262,5 @@ AiContentClassifier::ContentType AiContentClassifier::classify(const std::vector
 }
 
 } // namespace dsp
+
+#endif // SAXFX_HAS_ONNX

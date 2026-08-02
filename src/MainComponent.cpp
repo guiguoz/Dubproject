@@ -283,6 +283,14 @@ MainComponent::MainComponent()
         const double fileSr = static_cast<double>(reader->sampleRate);
 
         samplerEngine_.setSlotFilePath(slot, path);
+#ifdef DUB_ENGINE_V2
+        facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
+            juce::MessageManager::callAsync([this, s] {
+                stepSeqPanel_.setSlotLoaded(s, true);
+            });
+        });
+        return;
+#endif
         autoMatchSampleAsync(slot, std::move(pcm), fileSr);
 
         // Auto-trigger IA — si le mix est déjà actif, revert d'abord (évite de mixer du PCM traité)
@@ -298,20 +306,31 @@ MainComponent::MainComponent()
     };
 
     // Step toggled: stop sample immediately if the track has no more active steps
-    stepSeqPanel_.onStepChanged = [this](int track, int /*step*/, bool active)
+    stepSeqPanel_.onStepChanged = [this](int track, int step, bool active)
     {
+#ifdef DUB_ENGINE_V2
+        facade_.setStep(track, step, active);
+        facade_.flipPatternBuffer();
+#else
+        (void)step;
         if (active) return;
         const int nSteps = stepSequencer_.getTrackStepCount(track);
         for (int s = 0; s < nSteps; ++s)
             if (stepSequencer_.getStep(track, s)) return;  // at least one step still on
         dspPipeline_.getSampler().stop(track, ::dsp::Sampler::StopMode::Retrigger);
+#endif
     };
 
     // Slot cleared: unload PCM and clear engine state
     stepSeqPanel_.onSlotCleared = [this](int slot)
     {
+#ifdef DUB_ENGINE_V2
+        facade_.clearSlot(slot);
+        stepSeqPanel_.setSlotLoaded(slot, false);
+#else
         dspPipeline_.getSampler().clearSlot(slot);
         samplerEngine_.clearSlot(slot);
+#endif
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
@@ -323,11 +342,17 @@ MainComponent::MainComponent()
         looperEngine_.setBpm(bpm);
         updateSidebarBpm(bpm);
         bpmRestrechCountdown_ = 12;  // A2: 12 × 33 ms ≈ 400 ms debounce
+#ifdef DUB_ENGINE_V2
+        facade_.setBpm(bpm);
+#endif
     };
 
     // Play/stop — StepSequencerPanel already calls seq_.setPlaying(); stop samples immediately
     stepSeqPanel_.onPlayChanged = [this](bool playing)
     {
+#ifdef DUB_ENGINE_V2
+        if (playing) facade_.play(); else facade_.stop();
+#endif
         serumHost_.setIsPlaying(playing);
         if (playing)
             serumHost_.resetPlaybackPosition();
@@ -1889,6 +1914,12 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     looperEngine_.prepare(sampleRate);
     samplerEngine_.setSampleRate(sampleRate);
     dspPipeline_.prepare(sampleRate, samplesPerBlockExpected);
+
+#ifdef DUB_ENGINE_V2
+    facade_.prepare(sampleRate, samplesPerBlockExpected);
+    facade_.setBpm(stepSeqPanel_.getBpm());
+    facade_.setSerumHost(&serumHost_);
+#endif
     serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
 
     juce::Logger::writeToLog(juce::String("Audio prepared: ") + juce::String(sampleRate) +
@@ -2006,7 +2037,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             dspPipeline_.setSerumInput(sL, sR, numSamples, g);
         }
 
+#ifdef DUB_ENGINE_V2
+        facade_.processBlock(left, right, numSamples);
+#else
         dspPipeline_.processStereo(left, right, numSamples);
+#endif
 
         // Apply master output gain to both channels
         const float outGain = outputGain_.load(std::memory_order_relaxed);
@@ -2038,7 +2073,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     else
     {
         // ── Mono fallback path ────────────────────────────────────────────────
+#ifdef DUB_ENGINE_V2
+        facade_.processBlock(left, left, numSamples);  // L+R fondus dans left
+#else
         dspPipeline_.process(left, numSamples);
+#endif
 
         // Mix Serum mono (gain rider déjà calculé sur chemin stéréo)
         if (serumHost_.isLoaded())
@@ -2076,6 +2115,9 @@ void MainComponent::releaseResources()
 {
     serumHost_.setProcessingEnabled(false);
     dspPipeline_.reset();
+#ifdef DUB_ENGINE_V2
+    facade_.releaseResources();
+#endif
     juce::Logger::writeToLog("Audio resources released.");
 }
 

@@ -92,7 +92,8 @@ public:
         }
     }
 
-    PatternBuffer& patterns() noexcept { return patterns_; }
+    PatternBuffer&       patterns()       noexcept { return patterns_; }
+    const PatternBuffer& patterns() const noexcept { return patterns_; }
 
 private:
     PatternBuffer patterns_;

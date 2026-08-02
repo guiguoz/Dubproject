@@ -36,8 +36,12 @@ public:
         scenes_[idx] = std::move(scene);
     }
 
+    SceneData& getScene(int idx) noexcept {
+        if (idx < 0 || idx >= kMaxScenes) return scenes_[0];
+        return scenes_[idx];
+    }
+
     const SceneData& getScene(int idx) const noexcept {
-        // idx hors-bornes → retourne scène 0 (fallback sûr)
         if (idx < 0 || idx >= kMaxScenes) return scenes_[0];
         return scenes_[idx];
     }

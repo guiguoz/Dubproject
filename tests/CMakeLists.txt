@@ -89,7 +89,10 @@ catch_discover_tests(SaxFXTests)
 # EngineTests — moteur V2, sans JUCE ni ONNX
 # ─────────────────────────────────────────────────────────────────────────────
 # signalsmith-stretch — charge aussi signalsmith-linear via FetchContent
-add_subdirectory(../third_party/signalsmith-stretch signalsmith-stretch-build)
+# Guard : si déjà ajouté depuis la racine (DUB_ENGINE_V2), on réutilise la cible.
+if(NOT TARGET signalsmith-stretch)
+    add_subdirectory(../third_party/signalsmith-stretch signalsmith-stretch-build)
+endif()
 
 add_executable(EngineTests
     engine/test_transport.cpp

@@ -28,12 +28,14 @@ public:
                       float* output, int numFrames) noexcept;
 
     // Accès aux sous-systèmes (pour configuration depuis le message thread).
-    SlotPlayer&       slotPlayer()        noexcept { return slotPlayer_; }
-    AutoMixDub&       autoMix()           noexcept { return autoMix_; }
-    Sequencer&        sequencer()         noexcept { return sequencer_; }
-    TransitionEngine& transitionEngine()  noexcept { return transition_; }
-    fx::PingPongDelay& delay()            noexcept { return delay_; }
-    fx::MasterLimiter& limiter()          noexcept { return limiter_; }
+    SlotPlayer&             slotPlayer()       noexcept { return slotPlayer_; }
+    const SlotPlayer&       slotPlayer() const noexcept { return slotPlayer_; }
+    AutoMixDub&             autoMix()          noexcept { return autoMix_; }
+    Sequencer&              sequencer()        noexcept { return sequencer_; }
+    const Sequencer&        sequencer()  const noexcept { return sequencer_; }
+    TransitionEngine&       transitionEngine() noexcept { return transition_; }
+    fx::PingPongDelay&      delay()            noexcept { return delay_; }
+    fx::MasterLimiter&      limiter()          noexcept { return limiter_; }
 
     // Rôle par slot (écrit depuis message thread, lu en audio thread).
     void setSlotRole(int slot, SlotRole role) noexcept {

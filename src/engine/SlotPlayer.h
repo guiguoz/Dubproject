@@ -73,6 +73,51 @@ public:
     // Appelé une fois au changement de device (prépare les stretchers).
     void prepareStretchers(int channels, float sampleRate) noexcept;
 
+    // ── Setters message thread (atomiques, RT-safe) ───────────────────────────
+    void setGain(int slot, float g) noexcept {
+        if (slot >= 0 && slot < kSlots)
+            params_[slot].gain.store(g, std::memory_order_relaxed);
+    }
+    void setMuted(int slot, bool m) noexcept {
+        if (slot >= 0 && slot < kSlots)
+            params_[slot].muted.store(m, std::memory_order_relaxed);
+    }
+    void setMode(int slot, PlayMode m) noexcept {
+        if (slot >= 0 && slot < kSlots)
+            params_[slot].mode.store(m, std::memory_order_relaxed);
+    }
+    void setSemitones(int slot, float s) noexcept {
+        if (slot >= 0 && slot < kSlots)
+            params_[slot].semitones.store(s, std::memory_order_relaxed);
+    }
+
+    // ── Getters thread-safe ────────────────────────────────────────────────────
+    bool isLoaded(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return false;
+        return loaded_[slot].load(std::memory_order_acquire);
+    }
+    float getGain(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 1.f;
+        return params_[slot].gain.load(std::memory_order_relaxed);
+    }
+    bool isMuted(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return false;
+        return params_[slot].muted.load(std::memory_order_relaxed);
+    }
+    bool isVoiceActive(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return false;
+        return voices_[slot][0].active || voices_[slot][1].active;
+    }
+    float playheadRatio(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots || pcm_[slot].numFrames == 0) return 0.f;
+        for (int v = 0; v < 2; ++v) {
+            if (voices_[slot][v].active)
+                return static_cast<float>(voices_[slot][v].readPos) /
+                       static_cast<float>(pcm_[slot].numFrames);
+        }
+        return 0.f;
+    }
+
 private:
     static constexpr int   kSlots         = 9;
     static constexpr int   kFadeLen       = 16;

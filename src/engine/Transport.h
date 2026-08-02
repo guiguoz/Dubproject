@@ -75,6 +75,14 @@ public:
         state_.playing = false;
     }
 
+    // Change le BPM sans reset de samplePos ni de playing.
+    void setBpm(double bpm) noexcept {
+        if (bpm <= 0.0) return;
+        state_.bpm            = bpm;
+        state_.samplesPerBeat = state_.sampleRate * 60.0 / bpm;
+        state_.samplesPerStep = state_.samplesPerBeat / 4.0;
+    }
+
     // Appelé UNE fois en tête de chaque callback audio.
     // Avance samplePos et retourne le snapshot const pour ce bloc.
     const TransportState& advance(int32_t numSamples) noexcept {
