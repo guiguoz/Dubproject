@@ -351,7 +351,20 @@ MainComponent::MainComponent()
     stepSeqPanel_.onPlayChanged = [this](bool playing)
     {
 #ifdef DUB_ENGINE_V2
-        if (playing) facade_.play(); else facade_.stop();
+        if (playing) {
+            // Sync patterns from UI sequencer before starting playback
+            for (int t = 0; t < engine::kMaxSlots; ++t) {
+                const int bars = stepSequencer_.getTrackBarCount(t);
+                facade_.setTrackBarCount(t, bars);
+                const int nSteps = bars * 16;
+                for (int s = 0; s < nSteps; ++s)
+                    facade_.setStep(t, s, stepSequencer_.getStep(t, s));
+            }
+            facade_.flipPatternBuffer();
+            facade_.play();
+        } else {
+            facade_.stop();
+        }
 #endif
         serumHost_.setIsPlaying(playing);
         if (playing)
@@ -1972,7 +1985,9 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         looperEngine_.process(sLw, sRw, sLw, sRw, numSamples, looperBeatPhase);
     }
 
-    // Step sequencer — triggers sampler slots at step boundaries (before DSP mix)
+    // Step sequencer — in V2 mode the facade's sequencer handles audio triggering,
+    // but we still process the V1 sequencer to advance getCurrentStep() for the UI.
+    // No sound from V1 sampler in V2 mode since onFileDropped does not load V1 PCM.
     stepSequencer_.process(numSamples, dspPipeline_.getSampler());
 
     if (numCh >= 2)
