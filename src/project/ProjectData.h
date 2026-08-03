@@ -101,7 +101,7 @@ struct ProjectData
     std::vector<MidiMapping>    midiMappings;
     MusicContextData            musicContext;
     // v5 — new fields
-    int                              masterKeyRoot  { 0 };     // 0=C … 11=B
+    int                              masterKeyRoot  { -1 };    // -1 = Aucune ; 0=C … 11=B
     bool                             masterKeyMajor { true };
     std::array<SlotMixData, 9>       slotMix        {};        // AI mix results
     std::array<SceneSaveData, 8>     scenes         {};        // up to 8 scenes

@@ -133,7 +133,7 @@ private:
     ui::SpatialVisualization   spatialViz_;
 
     // ── Master key ────────────────────────────────────────────────────────────
-    int              masterKeyRoot_      { 0 };
+    int              masterKeyRoot_      { -1 }; // -1 = "Aucune" (sentinelle — aucune tonalité définie)
     bool             masterKeyMajor_     { true };
     bool             masterKeySetByUser_ { false };  // true only after explicit UI selection
     bool             keyMatchEnabled_    { false };  // global auto-transpose toggle (off by default)

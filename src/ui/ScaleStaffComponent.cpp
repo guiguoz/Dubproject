@@ -103,6 +103,7 @@ void ScaleStaffComponent::setKey(int root, ScaleType type)
 void ScaleStaffComponent::rebuildNoteInfos()
 {
     noteInfos_.clear();
+    if (root_ < 0) return;  // sentinelle "Aucune" — portée vide
 
     // Anchor the scale starting at a comfortable octave (root around C4–B4).
     // MIDI 60 = C4. Find the root in octave 4/5 so notes sit on the staff.

@@ -785,12 +785,20 @@ MainComponent::MainComponent()
     static const char* kNoteNames[12] = {
         "C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"
     };
+    // ID 100 = sentinelle "Aucune" (pas de tonalité définie) ; IDs 1-12 = notes C-B.
+    masterKeyCombo_.addItem("Aucune", 100);
     for (int i = 0; i < 12; ++i)
         masterKeyCombo_.addItem(kNoteNames[i], i + 1);
-    masterKeyCombo_.setSelectedId(1, juce::dontSendNotification);
+    masterKeyCombo_.setSelectedId(100, juce::dontSendNotification);
     masterKeyCombo_.onChange = [this] {
-        masterKeyRoot_      = masterKeyCombo_.getSelectedId() - 1;
-        masterKeySetByUser_ = true;  // user explicitly chose a key → auto-transpose can fire
+        const int sid = masterKeyCombo_.getSelectedId();
+        if (sid == 100) {
+            masterKeyRoot_      = -1;
+            masterKeySetByUser_ = false;  // retour à l'état "non défini"
+        } else {
+            masterKeyRoot_      = sid - 1;
+            masterKeySetByUser_ = true;   // choix explicite → key-match peut s'armer
+        }
         applyMasterKey();
     };
     addAndMakeVisible(masterKeyCombo_);
@@ -1274,10 +1282,9 @@ void MainComponent::applyMasterKey()
     ctx.isMajor  = masterKeyMajor_;
     samplerEngine_.setMusicContext(ctx);
 
-    if (masterKeyRoot_ >= 0)
     {
         const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
-        scaleStaff_.setKey(masterKeyRoot_, t);
+        scaleStaff_.setKey(masterKeyRoot_, t);  // -1 = Aucune → rebuildNoteInfos() efface la portée
     }
 }
 
@@ -1764,8 +1771,9 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         masterKeyRoot_      = data.masterKeyRoot;
         masterKeyMajor_     = data.masterKeyMajor;
         masterKeySetByUser_ = (data.masterKeyRoot >= 0);  // explicitly set in saved project
-        masterKeyCombo_    .setSelectedId(masterKeyRoot_ + 1,          juce::dontSendNotification);
-        masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2,     juce::dontSendNotification);
+        masterKeyCombo_    .setSelectedId(masterKeyRoot_ >= 0 ? masterKeyRoot_ + 1 : 100,
+                                          juce::dontSendNotification);
+        masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2, juce::dontSendNotification);
         applyMasterKey();
     }
 
