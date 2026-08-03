@@ -249,3 +249,86 @@ TEST_CASE("T-SP1g: ONE-SHOT voice goes silent after last frame", "[slotplayer]")
             REQUIRE(out[static_cast<size_t>(i)] == 0.f);
     }
 }
+
+// ─── T-SP2 : correction sample rate 44.1 kHz → 48 kHz ───────────────────────
+//
+// VERROU DE RÉGRESSION — bug découvert lors de la migration V2 :
+// renderVoice faisait ++readPos (entier) par frame output, sans tenir compte
+// du SR du sample. Conséquence : sample 44100 Hz joué sur device 48000 Hz
+// = ×48000/44100 ≈ ×1.088 de vitesse → +1.47 demi-tons perceptibles.
+//
+// Invariant mathématique (441 × 160/147 = 480 exact) :
+//   441 PCM frames @44100 Hz doivent s'épuiser en exactement 480 output frames
+//   @48000 Hz — ni plus tôt (coupé trop tôt = ancienne régression), ni plus tard.
+//
+TEST_CASE("T-SP2: SR 44.1→48 kHz correction — pitch-correct duration", "[slotplayer][sr]") {
+    // PCM constant @44100 Hz, valeur == kFadeThreshold → micro-fade désactivé.
+    static constexpr int   kPcmFrames   = 441;   // ≡ 0.01 s @44100 Hz
+    static constexpr int   kOut48k      = 480;   // 441 × 48000/44100 = 480 (exact)
+    static constexpr float kVal         = 0.001f;
+
+    auto makePcm44 = [](float sr = 44100.f) {
+        SlotPcm p;
+        p.numChannels = 1;
+        p.numFrames   = kPcmFrames;
+        p.sampleRate  = sr;
+        p.data.assign(static_cast<size_t>(kPcmFrames), kVal);
+        return p;
+    };
+
+    const TransportState ts = makeTS();
+
+    // ── Section A : device 48 kHz — PCM épuisé en exactement 480 frames ──────
+    SECTION("device 48 kHz: PCM exhausted after 480 output frames") {
+        SlotPlayer sp;
+        sp.prepareStretchers(1, 48000.f);
+        sp.loadSlot(0, makePcm44(), PlayMode::OneShot);
+
+        std::vector<float> out(static_cast<size_t>(kOut48k) * 2u, 0.f);
+        const EngineEvent ev = makeTrigger(0);
+        sp.processBlock(ts, out.data(), kOut48k, &ev, 1);
+
+        // Le PCM doit être entièrement consommé : voix inactive.
+        REQUIRE_FALSE(sp.isVoiceActive(0));
+
+        // Les 440 premières frames doivent être non nulles
+        // (le PCM ne peut pas être épuisé avant la frame 479).
+        for (int f = 0; f < 440; ++f)
+            REQUIRE(out[static_cast<size_t>(f) * 2u] > 0.f);
+    }
+
+    // ── Section B : voix encore active à frame 441 (non coupée trop tôt) ─────
+    // C'est le verrou direct contre la régression :
+    // sans correction SR, renderVoice s'arrêtait à readPos==441 après 441 output
+    // frames. Avec correction, à frame 441 on n'a consommé que 441×(44100/48000)
+    // ≈ 405 PCM frames → voix toujours active.
+    SECTION("device 48 kHz: voice still active at output frame 441 (not cut early)") {
+        SlotPlayer sp;
+        sp.prepareStretchers(1, 48000.f);
+        sp.loadSlot(0, makePcm44(), PlayMode::OneShot);
+
+        std::vector<float> out(static_cast<size_t>(kPcmFrames) * 2u, 0.f);
+        const EngineEvent ev = makeTrigger(0);
+        sp.processBlock(ts, out.data(), kPcmFrames, &ev, 1);
+
+        // 441 output frames @48 kHz → 441 × 0.91875 ≈ 405 PCM frames consommées.
+        // La voix NE DOIT PAS être éteinte ici (ce serait la régression).
+        REQUIRE(sp.isVoiceActive(0));
+    }
+
+    // ── Section C : référence sans delta SR (device == sample SR) ────────────
+    // Garantit que le chemin bypass (needsSR=false) reste bit-identical.
+    SECTION("device 44.1 kHz (no SR delta): PCM exhausted after 441 output frames") {
+        SlotPlayer sp;
+        sp.prepareStretchers(1, 44100.f);
+        sp.loadSlot(0, makePcm44(44100.f), PlayMode::OneShot);
+
+        std::vector<float> out(static_cast<size_t>(kPcmFrames + 1) * 2u, 0.f);
+        const EngineEvent ev = makeTrigger(0);
+        sp.processBlock(ts, out.data(), kPcmFrames + 1, &ev, 1);
+
+        REQUIRE_FALSE(sp.isVoiceActive(0));
+        // Frame 441 (index kPcmFrames) = silence : PCM épuisé au bon moment.
+        REQUIRE(out[static_cast<size_t>(kPcmFrames) * 2u] == 0.f);
+    }
+}

@@ -336,6 +336,32 @@ void EngineFacade::flipPatternBuffer() noexcept
     graph_.sequencer().patterns().flip();
 }
 
+// ─── Diagnostics slot (temporaire — M8c) ─────────────────────────────────────
+
+float EngineFacade::getSlotSemitones(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    return graph_.slotPlayer().getSemitones(slot);
+}
+
+float EngineFacade::getSlotTimeRatio(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 1.f;
+    return graph_.slotPlayer().getTimeRatio(slot);
+}
+
+PlayMode EngineFacade::getSlotMode(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return PlayMode::Free;
+    return graph_.slotPlayer().getMode(slot);
+}
+
+int EngineFacade::getSlotLoopBeats(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0;
+    return graph_.slotPlayer().getLoopBeats(slot);
+}
+
 // ─── Scènes ───────────────────────────────────────────────────────────────────
 
 void EngineFacade::setCurrentScene(int idx) noexcept

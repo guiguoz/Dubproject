@@ -287,6 +287,20 @@ MainComponent::MainComponent()
         facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_.setSlotLoaded(s, true);
+                const float st    = facade_.getSlotSemitones(s);
+                const float ratio = facade_.getSlotTimeRatio(s);
+                const int   lbts  = facade_.getSlotLoopBeats(s);
+                const auto  mode  = facade_.getSlotMode(s);
+                const char* modeStr = (mode == engine::PlayMode::LoopSync) ? "SYNC"
+                                    : (mode == engine::PlayMode::Free)     ? "FREE" : "1SHT";
+                const juce::String info =
+                    "sl" + juce::String(s) +
+                    " st=" + juce::String(st, 2) +
+                    " ratio=" + juce::String(ratio, 3) +
+                    " beats=" + juce::String(lbts) +
+                    " " + modeStr;
+                if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
+                    dw->setName("SaxFX [V2] | " + info);
             });
         });
         return;
@@ -803,6 +817,8 @@ MainComponent::MainComponent()
                 masterKeySetByUser_ = true;
             masterKeyRoot_ = newRoot;
         }
+        // Mode combo n'a de sens que si une tonique réelle est définie.
+        masterKeyModeCombo_.setEnabled(masterKeyRoot_ >= 0);
         applyMasterKey();
     };
     addAndMakeVisible(masterKeyCombo_);
@@ -810,6 +826,7 @@ MainComponent::MainComponent()
     masterKeyModeCombo_.addItem("Major", 1);
     masterKeyModeCombo_.addItem("Minor", 2);
     masterKeyModeCombo_.setSelectedId(1, juce::dontSendNotification);
+    masterKeyModeCombo_.setEnabled(false);  // désactivé tant que la tonique est "Aucune"
     masterKeyModeCombo_.onChange = [this] {
         masterKeyMajor_ = (masterKeyModeCombo_.getSelectedId() == 1);
         applyMasterKey();
@@ -1228,11 +1245,15 @@ void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
             const auto idx = static_cast<std::size_t>(slot);
             if (result == 1)  // "Use detected BPM"
             {
-                auto  raw = rawPcmForRetry_[idx];
-                double sr = rawSrForRetry_ [idx];
+#ifndef DUB_ENGINE_V2
+                auto   raw = rawPcmForRetry_[idx];
+                double sr  = rawSrForRetry_ [idx];
                 rawPcmForRetry_[idx].clear();
                 overrideBpm_ = detectedBpm;
                 autoMatchSampleAsync(slot, std::move(raw), sr);
+#else
+                rawPcmForRetry_[idx].clear();
+#endif
             }
             else if (result == 2)  // "Enter Manually"
             {
@@ -1254,11 +1275,15 @@ void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
                                     aw->getTextEditorContents("bpm").getFloatValue();
                                 if (bpm >= 40.f && bpm <= 300.f)
                                 {
+#ifndef DUB_ENGINE_V2
                                     auto   raw = rawPcmForRetry_[i];
                                     double sr  = rawSrForRetry_ [i];
                                     rawPcmForRetry_[i].clear();
                                     overrideBpm_ = bpm;
                                     autoMatchSampleAsync(slot, std::move(raw), sr);
+#else
+                                    rawPcmForRetry_[i].clear();
+#endif
                                 }
                             }
                             else
@@ -1723,13 +1748,37 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             static constexpr bool kNeedsMatch[9] =
                 { false, true, false, false, false, true, true, false, true };
             double fileSr = currentSampleRate_;
+#ifndef DUB_ENGINE_V2
             loadSampleIntoSlot(i, sc.filePath, 0, -1,
                                kNeedsMatch[i] ? &fileSr : nullptr);
+#endif
+#ifdef DUB_ENGINE_V2
+            facade_.importSampleAsync(i, sc.filePath, [this](int s, const engine::AnalysisResult&) {
+                juce::MessageManager::callAsync([this, s] {
+                    stepSeqPanel_.setSlotLoaded(s, true);
+                    const float st    = facade_.getSlotSemitones(s);
+                    const float ratio = facade_.getSlotTimeRatio(s);
+                    const int   lbts  = facade_.getSlotLoopBeats(s);
+                    const auto  mode  = facade_.getSlotMode(s);
+                    const char* modeStr = (mode == engine::PlayMode::LoopSync) ? "SYNC"
+                                        : (mode == engine::PlayMode::Free)     ? "FREE" : "1SHT";
+                    const juce::String info =
+                        "sl" + juce::String(s) +
+                        " st=" + juce::String(st, 2) +
+                        " ratio=" + juce::String(ratio, 3) +
+                        " beats=" + juce::String(lbts) +
+                        " " + modeStr;
+                    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
+                        dw->setName("SaxFX [V2] | " + info);
+                });
+            });
+#else
             if (i > 0 && kNeedsMatch[i])
             {
                 auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
                 autoMatchSampleAsync(i, std::move(pcm), fileSr);
             }
+#endif
 
             stepSeqPanel_.setSlotFilePath(i, sc.filePath);   // updates LCD name
             samplerEngine_.setSlotFilePath(i, sc.filePath);
@@ -1779,6 +1828,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         masterKeyCombo_    .setSelectedId(masterKeyRoot_ >= 0 ? masterKeyRoot_ + 1 : 100,
                                           juce::dontSendNotification);
         masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2, juce::dontSendNotification);
+        masterKeyModeCombo_.setEnabled(masterKeyRoot_ >= 0);
         applyMasterKey();
     }
 
@@ -1942,6 +1992,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     dspPipeline_.prepare(sampleRate, samplesPerBlockExpected);
 
 #ifdef DUB_ENGINE_V2
+    juce::Logger::writeToLog("=== ENGINE V2 ACTIF ===");
     facade_.prepare(sampleRate, samplesPerBlockExpected);
     facade_.setBpm(stepSeqPanel_.getBpm());
     facade_.setSerumHost(&serumHost_);
@@ -3119,10 +3170,12 @@ void MainComponent::applyScene(int idx, int fromIdx)
                     { false, true, false, false, false, true, true, false, true };
                 if (i > 0 && kCacheNeedsMatch[i])
                 {
+#ifndef DUB_ENGINE_V2
                     // autoMatchSampleAsync fait loadSample() + setSlotOneShot()
                     // + setSlotWaveform() immédiatement, puis BPM-match async.
                     std::vector<float> pcmCopy = cache.pcm;
                     autoMatchSampleAsync(i, std::move(pcmCopy), cache.sampleRate);
+#endif
                 }
                 else
                 {
@@ -3582,6 +3635,7 @@ void MainComponent::applyDubDelayMorph(float t)
 
 void MainComponent::scheduleRestrechAllSlots()
 {
+#ifndef DUB_ENGINE_V2
     auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < ::dsp::Sampler::kMaxSlots; ++i)
     {
@@ -3590,6 +3644,7 @@ void MainComponent::scheduleRestrechAllSlots()
         if (sampler.getOriginalPcm(i, orig, origSr) && !orig.empty())
             autoMatchSampleAsync(i, std::move(orig), origSr);
     }
+#endif
 }
 
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
@@ -3601,6 +3656,10 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
     // 2. Update panel checkmark
     stepSeqPanel_.setSlotPitchOffset(slot, semitones);
 
+    // 3. Instant repitch
+#ifdef DUB_ENGINE_V2
+    facade_.setSlotTransposeSemitones(slot, semitones);
+#else
     // 3. Instant repitch via transposeRatio (C1)
     dspPipeline_.getSampler().setSlotTransposeSemitones(slot, semitones);
 
@@ -3642,4 +3701,5 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
     std::vector<float> raw(buf.getReadPointer(0) + start,
                            buf.getReadPointer(0) + end);
     autoMatchSampleAsync(slot, std::move(raw), reader->sampleRate);
+#endif
 }

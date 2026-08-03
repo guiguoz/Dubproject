@@ -8,6 +8,7 @@ namespace engine {
 // ─── prepareStretchers ───────────────────────────────────────────────────────
 
 void SlotPlayer::prepareStretchers(int channels, float sampleRate) noexcept {
+    sampleRate_ = sampleRate;
     for (int s = 0; s < kSlots; ++s)
         stretchers_[s].prepare(channels, sampleRate);
 }
@@ -64,8 +65,9 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
         vIdx = 1;
 
     Voice& voice = voices_[slot][vIdx];
-    voice.active  = true;
-    voice.readPos = 0;
+    voice.active   = true;
+    voice.readPos  = 0;
+    voice.readFrac = 0.f;
 
     // Pour LOOP SYNC : mémoriser l'anchor dans les params.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
@@ -221,48 +223,79 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
     if (!voice.active || pcm.numFrames <= 0 || pcm.data.empty())
         return;
 
-    const float gain     = params_[slot].gain.load(std::memory_order_relaxed);
-    const PlayMode mode  = params_[slot].mode.load(std::memory_order_relaxed);
-    const bool loop      = (mode == PlayMode::Free);
+    const float gain    = params_[slot].gain.load(std::memory_order_relaxed);
+    const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
+    const bool loop     = (mode == PlayMode::Free);
+
+    // Correction sample rate : si device SR ≠ sample SR, interpolation linéaire.
+    // Exemple : sample 44100 Hz, device 48000 Hz → srRatio = 44100/48000 = 0.91875
+    // → readPos avance de 0.91875 par frame output → pitch correct.
+    const float srRatio = (sampleRate_ > 0.f) ? pcm.sampleRate / sampleRate_ : 1.f;
+    const bool  needsSR = (std::abs(srRatio - 1.f) > 0.0005f);
 
     for (int f = 0; f < numFrames; ++f) {
-        // Boucle (FREE) : reprendre au début si fin de PCM
         if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
-            if (loop)
-                voice.readPos = 0;
-            else {
-                voice.active = false;
-                return;
-            }
+            if (loop) { voice.readPos = 0; voice.readFrac = 0.f; }
+            else       { voice.active = false; return; }
         }
 
-        // Calcul du gain courant (micro-fade)
         float vGain = voice.fadeGain;
         if (voice.fadeLeft > 0) {
-            // Fade linéaire de 0 → 1 sur kFadeLen frames
             voice.fadeGain += 1.0f / static_cast<float>(kFadeLen);
             if (voice.fadeGain > 1.0f) voice.fadeGain = 1.0f;
             --voice.fadeLeft;
         }
 
-        // Lecture du PCM
         float left, right;
-        if (pcm.numChannels == 1) {
-            const float s = pcm.data[static_cast<size_t>(voice.readPos)];
-            left  = s;
-            right = s;
+
+        if (needsSR) {
+            // Interpolation linéaire entre frame p0 et p1
+            const int64_t p0   = voice.readPos;
+            const int64_t p1   = p0 + 1;
+            const float   frac = voice.readFrac;
+
+            if (pcm.numChannels == 1) {
+                const float s0 = pcm.data[static_cast<size_t>(p0)];
+                const float s1 = (p1 < static_cast<int64_t>(pcm.numFrames))
+                                  ? pcm.data[static_cast<size_t>(p1)] : s0;
+                left = right = s0 + frac * (s1 - s0);
+            } else {
+                const size_t i0 = static_cast<size_t>(p0) * 2u;
+                const float  l0 = pcm.data[i0],         r0 = pcm.data[i0 + 1u];
+                const float  l1 = (p1 < static_cast<int64_t>(pcm.numFrames))
+                                   ? pcm.data[static_cast<size_t>(p1) * 2u]       : l0;
+                const float  r1 = (p1 < static_cast<int64_t>(pcm.numFrames))
+                                   ? pcm.data[static_cast<size_t>(p1) * 2u + 1u]  : r0;
+                left  = l0 + frac * (l1 - l0);
+                right = r0 + frac * (r1 - r0);
+            }
+
+            voice.readFrac += srRatio;
+            while (voice.readFrac >= 1.f) {
+                voice.readFrac -= 1.f;
+                ++voice.readPos;
+                if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
+                    if (loop) { voice.readPos = 0; voice.readFrac = 0.f; }
+                    else       { voice.active = false; return; }
+                    break;
+                }
+            }
         } else {
-            // stéréo interleaved : frame i → indices [2i, 2i+1]
-            const size_t idx = static_cast<size_t>(voice.readPos) * 2u;
-            left  = pcm.data[idx];
-            right = pcm.data[idx + 1u];
+            if (pcm.numChannels == 1) {
+                const float s = pcm.data[static_cast<size_t>(voice.readPos)];
+                left  = s;
+                right = s;
+            } else {
+                const size_t idx = static_cast<size_t>(voice.readPos) * 2u;
+                left  = pcm.data[idx];
+                right = pcm.data[idx + 1u];
+            }
+            ++voice.readPos;
         }
 
         const float g = vGain * gain;
         out[static_cast<size_t>(f) * 2u]      += left  * g;
         out[static_cast<size_t>(f) * 2u + 1u] += right * g;
-
-        ++voice.readPos;
     }
 }
 

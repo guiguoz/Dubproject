@@ -40,6 +40,7 @@ struct SlotParams {
 struct Voice {
     bool    active   = false;
     int64_t readPos  = 0;       // en frames (pas en samples entrelacés)
+    float   readFrac = 0.f;     // partie fractionnaire pour correction SR
     float   fadeGain = 1.0f;    // micro-fade linéaire 16 samples
     int     fadeLeft = 0;       // samples de fade restants
 };
@@ -104,6 +105,22 @@ public:
         if (slot < 0 || slot >= kSlots) return false;
         return params_[slot].muted.load(std::memory_order_relaxed);
     }
+    float getSemitones(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 0.f;
+        return params_[static_cast<std::size_t>(slot)].semitones.load(std::memory_order_relaxed);
+    }
+    float getTimeRatio(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 1.f;
+        return params_[static_cast<std::size_t>(slot)].timeRatio.load(std::memory_order_relaxed);
+    }
+    PlayMode getMode(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return PlayMode::Free;
+        return params_[static_cast<std::size_t>(slot)].mode.load(std::memory_order_relaxed);
+    }
+    int getLoopBeats(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 0;
+        return params_[static_cast<std::size_t>(slot)].loopBeats.load(std::memory_order_relaxed);
+    }
     bool isVoiceActive(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots) return false;
         return voices_[slot][0].active || voices_[slot][1].active;
@@ -131,6 +148,8 @@ private:
 
     // Indique si le slot a un PCM chargé (écrit message thread, lu audio thread).
     std::atomic<bool> loaded_[kSlots] {};
+
+    float sampleRate_ = 44100.f;
 
     // Déclenche une voix sur le slot (choisit voice[0] ou voice[1]).
     void handleTrigger(int slot, int64_t transportAnchor) noexcept;

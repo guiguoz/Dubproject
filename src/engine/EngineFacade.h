@@ -75,6 +75,12 @@ public:
     bool  isSlotPlaying(int slot)        const noexcept;
     bool  isSlotLoaded(int slot)         const noexcept;
 
+    // Diagnostic temporaire (à retirer en M8c)
+    float    getSlotSemitones(int slot)  const noexcept;
+    float    getSlotTimeRatio(int slot)  const noexcept;
+    PlayMode getSlotMode(int slot)       const noexcept;
+    int      getSlotLoopBeats(int slot)  const noexcept;
+
     // ── Séquenceur (patterns) ──────────────────────────────────────────────────
     void setStep(int track, int step, bool active) noexcept;
     bool getStep(int track, int step) const noexcept;
