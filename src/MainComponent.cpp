@@ -794,10 +794,14 @@ MainComponent::MainComponent()
         const int sid = masterKeyCombo_.getSelectedId();
         if (sid == 100) {
             masterKeyRoot_      = -1;
-            masterKeySetByUser_ = false;  // retour à l'état "non défini"
+            masterKeySetByUser_ = false;  // retour à "Aucune" → désarme key-match
         } else {
-            masterKeyRoot_      = sid - 1;
-            masterKeySetByUser_ = true;   // choix explicite → key-match peut s'armer
+            const int newRoot = sid - 1;
+            // Arme uniquement sur un vrai changement vers une tonalité réelle.
+            // Protège contre onChange fantôme (JUCE peut le déclencher sans vrai changement).
+            if (newRoot != masterKeyRoot_)
+                masterKeySetByUser_ = true;
+            masterKeyRoot_ = newRoot;
         }
         applyMasterKey();
     };
@@ -1503,8 +1507,9 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     }
 
     // ── Master key ────────────────────────────────────────────────────────
-    data.masterKeyRoot  = masterKeyRoot_;
-    data.masterKeyMajor = masterKeyMajor_;
+    data.masterKeyRoot      = masterKeyRoot_;
+    data.masterKeyMajor     = masterKeyMajor_;
+    data.masterKeySetByUser = masterKeySetByUser_;
 
     // ── Scenes ────────────────────────────────────────────────────────────
     captureCurrentScene();
@@ -1770,7 +1775,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     {
         masterKeyRoot_      = data.masterKeyRoot;
         masterKeyMajor_     = data.masterKeyMajor;
-        masterKeySetByUser_ = (data.masterKeyRoot >= 0);  // explicitly set in saved project
+        masterKeySetByUser_ = data.masterKeySetByUser;  // lu directement, pas déduit
         masterKeyCombo_    .setSelectedId(masterKeyRoot_ >= 0 ? masterKeyRoot_ + 1 : 100,
                                           juce::dontSendNotification);
         masterKeyModeCombo_.setSelectedId(masterKeyMajor_ ? 1 : 2, juce::dontSendNotification);

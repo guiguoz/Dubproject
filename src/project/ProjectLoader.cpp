@@ -101,8 +101,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     // ── v5 — master key, AI mix states, scenes ───────────────────────────────
     if (data.version >= 5)
     {
-        data.masterKeyRoot  = static_cast<int>(root.getProperty("masterKeyRoot",  0));
+        data.masterKeyRoot  = static_cast<int>(root.getProperty("masterKeyRoot", -1));
         data.masterKeyMajor = getBool(root, "masterKeyMajor", true);
+        // v22 : booléen explicite — migration v5-v21 → false (ne pas armer key-match sur anciens projets)
+        data.masterKeySetByUser = (data.version >= 22)
+                                  ? getBool(root, "masterKeySetByUser", false)
+                                  : false;
         data.currentScene   = static_cast<int>(root.getProperty("currentScene",   0));
 
         if (const auto* mixArr = root["slotMix"].getArray())
@@ -333,8 +337,9 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
         root->setProperty("musicContext", juce::var(mc.get()));
     }
 
-    root->setProperty("masterKeyRoot",  data.masterKeyRoot);
-    root->setProperty("masterKeyMajor", data.masterKeyMajor);
+    root->setProperty("masterKeyRoot",      data.masterKeyRoot);
+    root->setProperty("masterKeyMajor",     data.masterKeyMajor);
+    root->setProperty("masterKeySetByUser", data.masterKeySetByUser);
     root->setProperty("currentScene",   data.currentScene);
 
     // ── Slot mix states ───────────────────────────────────────────────────────
