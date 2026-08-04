@@ -101,6 +101,8 @@ void AudioGraph::processBlock(const TransportState& ts,
     }
 
     // ─ 4. Bus delay (sends statiques par rôle) ───────────────────────────────
+    // Architecture M7 : pas de buffers per-slot → chaque slot contribue mixTotal × send.
+    // Approximation acceptable tant que computeTargets() n'est pas câblé (sends = 0).
     for (int s = 0; s < kMaxSlots; ++s) {
         const float send = autoMix_.advanceDelayRamp(s, numFrames);
         if (send > 0.001f) {

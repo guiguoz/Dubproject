@@ -9,7 +9,7 @@ static constexpr int kMaxScenes = 8;
 
 struct SlotConfig {
     std::string filePath;
-    PlayMode    mode       = PlayMode::Free;
+    PlayMode    mode       = PlayMode::OneShot;  // défaut sûr — pas de boucle involontaire
     float       gain       = 1.0f;
     float       timeRatio  = 1.0f;
     float       semitones  = 0.0f;

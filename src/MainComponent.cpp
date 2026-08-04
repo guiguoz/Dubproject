@@ -323,6 +323,7 @@ MainComponent::MainComponent()
     stepSeqPanel_.onStepChanged = [this](int track, int step, bool active)
     {
 #ifdef DUB_ENGINE_V2
+        stepSequencer_.setStep(track, step, active);  // V1 en sync pour le project save
         facade_.setStep(track, step, active);
         facade_.flipPatternBuffer();
 #else
@@ -366,14 +367,6 @@ MainComponent::MainComponent()
     {
 #ifdef DUB_ENGINE_V2
         if (playing) {
-            // Sync patterns from UI sequencer before starting playback
-            for (int t = 0; t < engine::kMaxSlots; ++t) {
-                const int bars = stepSequencer_.getTrackBarCount(t);
-                facade_.setTrackBarCount(t, bars);
-                const int nSteps = bars * 16;
-                for (int s = 0; s < nSteps; ++s)
-                    facade_.setStep(t, s, stepSequencer_.getStep(t, s));
-            }
             facade_.flipPatternBuffer();
             facade_.play();
         } else {
@@ -667,6 +660,12 @@ MainComponent::MainComponent()
             stepSequencer_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
             stepSeqPanel_.setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
         }
+#ifdef DUB_ENGINE_V2
+        facade_.setTrackBarCount(slot, cb.barCount);
+        for (int s = 0; s < numSteps; ++s)
+            facade_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
+        facade_.flipPatternBuffer();
+#endif
 
         // Gain + mute
         dspPipeline_.getSampler().setSlotGain(slot, cb.gain);
@@ -702,6 +701,21 @@ MainComponent::MainComponent()
     stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
     {
         stepSequencer_.setTrackBarCount(track, bars);
+#ifdef DUB_ENGINE_V2
+        facade_.setTrackBarCount(track, bars);
+        facade_.flipPatternBuffer();
+#endif
+    };
+
+    // Override manuel du mode de lecture (clic droit → "Mode de lecture...")
+    stepSeqPanel_.onSlotModeChanged = [this](int slot, int mode)
+    {
+#ifdef DUB_ENGINE_V2
+        const engine::PlayMode pm = (mode == 1) ? engine::PlayMode::Free
+                                  : (mode == 2) ? engine::PlayMode::LoopSync
+                                  :               engine::PlayMode::OneShot;
+        facade_.setSlotMode(slot, pm);
+#endif
     };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
@@ -1802,7 +1816,13 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             const bool active = sc.stepPattern[s];
             stepSequencer_.setStep(i, s, active);
             stepSeqPanel_.setStepState(i, s, active);
+#ifdef DUB_ENGINE_V2
+            facade_.setStep(i, s, active);
+#endif
         }
+#ifdef DUB_ENGINE_V2
+        facade_.setTrackBarCount(i, stepSequencer_.getTrackBarCount(i));
+#endif
 
         dspPipeline_.getSampler().setSlotMuted(i, sc.muted);
         stepSeqPanel_.setSlotMuted(i, sc.muted);
@@ -2763,6 +2783,33 @@ void MainComponent::timerCallback()
             triggerPanic();
     }
 
+#ifdef DUB_ENGINE_V2
+    // ── Diagnostic complet kick — titre fenêtre (M8c à retirer) ────────────────
+    {
+        const auto voice = facade_.getVoiceDiag(2);
+        const auto trig  = facade_.getTriggerDiag(2);
+        const auto tdg   = facade_.getTransportDiag();
+
+        // Longueur de scène V1 (max toutes pistes) vs longueur pattern V2 kick
+        int v1SceneLen = 1;
+        for (int i = 0; i < 9; ++i)
+            v1SceneLen = std::max(v1SceneLen, stepSequencer_.getTrackStepCount(i));
+        const int v1KckN  = stepSequencer_.getTrackStepCount(2);
+        const int v2KckN  = facade_.getTrackStepCount(2);
+
+        const juce::String title =
+            "KCK " + juce::String(voice)
+            + " | " + juce::String(trig)
+            + " | " + juce::String(tdg)
+            + " V1kck=" + juce::String(v1KckN)
+            + " V2kck=" + juce::String(v2KckN)
+            + " sc=" + juce::String(v1SceneLen);
+
+        if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
+            dw->setName(title);
+    }
+#endif
+
     // ── Preset Serum : mise à jour 1×/s (~30 ticks) ──────────────────────────
     if (++presetNameTick_ >= 30)
     {
@@ -3561,8 +3608,14 @@ void MainComponent::resetCurrentScene()
         {
             stepSequencer_.setStep(i, s, false);
             stepSeqPanel_.setStepState(i, s, false);
+#ifdef DUB_ENGINE_V2
+            facade_.setStep(i, s, false);
+#endif
         }
     }
+#ifdef DUB_ENGINE_V2
+    facade_.flipPatternBuffer();
+#endif
     sceneManager_.scene(sceneManager_.currentIdx()).used = false;
 }
 
@@ -3576,8 +3629,14 @@ void MainComponent::resetCurrentSceneFull()
         {
             stepSequencer_.setStep(i, s, false);
             stepSeqPanel_.setStepState(i, s, false);
+#ifdef DUB_ENGINE_V2
+            facade_.setStep(i, s, false);
+#endif
         }
     }
+#ifdef DUB_ENGINE_V2
+    facade_.flipPatternBuffer();
+#endif
     // Unload all samples
     auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 9; ++i)

@@ -38,11 +38,12 @@ struct SlotParams {
 // ─── Voix (2 par slot pour les chevauchements) ───────────────────────────────
 
 struct Voice {
-    bool    active   = false;
-    int64_t readPos  = 0;       // en frames (pas en samples entrelacés)
-    float   readFrac = 0.f;     // partie fractionnaire pour correction SR
-    float   fadeGain = 1.0f;    // micro-fade linéaire 16 samples
-    int     fadeLeft = 0;       // samples de fade restants
+    bool    active    = false;
+    bool    fadingOut = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
+    int64_t readPos   = 0;      // en frames (pas en samples entrelacés)
+    float   readFrac  = 0.f;    // partie fractionnaire pour correction SR
+    float   fadeGain  = 1.0f;   // gain courant du fade (in ou out)
+    int     fadeLeft  = 0;      // samples restants dans le fade
 };
 
 // ─── SlotPlayer ──────────────────────────────────────────────────────────────
@@ -135,6 +136,17 @@ public:
         return 0.f;
     }
 
+    // ── Diagnostic voix (appelé depuis message thread — légère data race OK) ──
+    struct VoiceDiagInfo {
+        bool    active[2]    = {};
+        bool    fadingOut[2] = {};
+        int64_t readPos[2]   = {};
+        float   fadeGain[2]  = {};
+        int     numFrames    = 0;
+    };
+    VoiceDiagInfo getVoiceDiagInfo(int slot) const noexcept;
+    float         diagSrRatio(int slot) const noexcept;
+
 private:
     static constexpr int   kSlots         = 9;
     static constexpr int   kFadeLen       = 16;
@@ -159,8 +171,9 @@ private:
                      const TransportState& ts) noexcept;
 
     // Rend le mode LOOP SYNC avec position dérivée (avec ou sans stretch).
+    // fadeScale : multiplicateur appliqué au gain de sortie (1.0 = normal, 0.0 = silence).
     void renderLoopSync(int slot, float* out, int numFrames,
-                        const TransportState& ts) noexcept;
+                        const TransportState& ts, float fadeScale = 1.0f) noexcept;
 };
 
 } // namespace engine

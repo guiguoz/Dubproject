@@ -59,6 +59,8 @@ void AutoMixDub::prepare(float sampleRate) noexcept
         rmsSamples_[s]        = 0;
     }
     targets_ = {};
+    for (int s = 0; s < kMaxSlots; ++s)
+        targets_.delayDb[s] = -120.f;   // silence par défaut (0 dB = unity ≠ no send)
 }
 
 // ─── updateFeatures ──────────────────────────────────────────────────────────

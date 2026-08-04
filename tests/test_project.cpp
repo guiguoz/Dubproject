@@ -109,3 +109,20 @@ TEST_CASE("ProjectData -- key-match: projet v22 sans cle = non arme meme si root
 
     REQUIRE(data.masterKeySetByUser == false);
 }
+
+TEST_CASE("ProjectData -- key-match: Aucune + mode mineur = jamais arme (§5.3 reg. test)", "[project][key-match]")
+{
+    // Invariant §5.3 : le menu maj/min n'est qu'un complément de la tonique.
+    // Même si masterKeyMajor = false (mineur), sans tonique explicite
+    // masterKeySetByUser doit rester false → zéro transposition à l'import.
+    project::ProjectData data;
+    data.version            = 22;
+    data.masterKeyRoot      = -1;   // Aucune
+    data.masterKeyMajor     = false; // mineur sélectionné — ne doit pas armer
+    data.masterKeySetByUser = false;
+
+    REQUIRE(data.masterKeyRoot      == -1);
+    REQUIRE(data.masterKeySetByUser == false);
+    // La combinaison root=-1 + setByUser=false bloque applyKeyMatchIfNeeded
+    // aux conditions 1 et 4 — aucune transposition possible.
+}

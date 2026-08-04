@@ -50,6 +50,8 @@ public:
     std::function<void(int slot, float semitones)>        onPitchOffsetChanged;
     std::function<void(int slot)>                         onTrackCopyRequest;
     std::function<void(int slot)>                         onTrackPasteRequest;
+    /// mode : 0=OneShot  1=Free  2=LoopSync
+    std::function<void(int slot, int mode)>               onSlotModeChanged;
     bool                                                  hasPasteData { false };
     /// Called when user clicks the [ED] edit button for a slot.
     std::function<void(int slot)>                         onEditPressed;
@@ -556,6 +558,13 @@ public:
     {
         if (slot < 0 || slot >= 9) return;
         slotPitchOffsets_[slot] = semitones;
+    }
+
+    /// Met à jour le mode affiché dans le menu contextuel (0=1Shot 1=Free 2=Sync).
+    void setSlotMode(int slot, int mode) noexcept
+    {
+        if (slot < 0 || slot >= 9) return;
+        slotModes_[static_cast<std::size_t>(slot)] = mode;
     }
 
     void setSlotSampleName(int slot, const std::string& path)
@@ -1225,6 +1234,17 @@ private:
         }
         menu.addSubMenu("Transposition...", pitchSub);
 
+        // Mode de lecture sub-menu — IDs 300-302
+        {
+            const int curMode = slotModes_[static_cast<std::size_t>(slot)];
+            juce::PopupMenu modeSub;
+            modeSub.addSectionHeader("Mode de lecture — S" + juce::String(slot + 1));
+            modeSub.addItem(300, "OneShot  (percussif)",  true, curMode == 0);
+            modeSub.addItem(301, "Free  (boucle libre)",  true, curMode == 1);
+            modeSub.addItem(302, "LoopSync  (transport)", true, curMode == 2);
+            menu.addSubMenu("Mode de lecture...", modeSub);
+        }
+
         menu.showMenuAsync(juce::PopupMenu::Options{},
             [this, slot](int result)
             {
@@ -1242,6 +1262,11 @@ private:
                         -12.f,-7.f,-5.f,-3.f,-2.f,-1.f,0.f,1.f,2.f,3.f,5.f,7.f,12.f
                     };
                     onPitchOffsetChanged(slot, kSt[static_cast<std::size_t>(result - 200)]);
+                }
+                else if (result >= 300 && result <= 302 && onSlotModeChanged)
+                {
+                    slotModes_[static_cast<std::size_t>(slot)] = result - 300;
+                    onSlotModeChanged(slot, result - 300);
                 }
             });
     }
@@ -1472,6 +1497,7 @@ private:
     juce::Label  swingLabel_;
 
     float slotPitchOffsets_[9] = {};  // semitones, displayed in context menu
+    int   slotModes_[9]        = {};  // 0=OneShot 1=Free 2=LoopSync, displayed in context menu
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StepSequencerPanel)
 };

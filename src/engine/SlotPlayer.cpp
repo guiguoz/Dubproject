@@ -64,10 +64,11 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     if (voices_[slot][0].active)
         vIdx = 1;
 
+    // Reset complet : aucun état résiduel (fadingOut, fadeLeft, readFrac…) ne survit.
+    // pcm_[slot] et params_[slot] sont dans des tableaux séparés — non affectés.
     Voice& voice = voices_[slot][vIdx];
-    voice.active   = true;
-    voice.readPos  = 0;
-    voice.readFrac = 0.f;
+    voice = Voice{};
+    voice.active = true;
 
     // Pour LOOP SYNC : mémoriser l'anchor dans les params.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
@@ -101,7 +102,7 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
 // Cela rend la dérive impossible par construction.
 
 void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
-                                const TransportState& ts) noexcept {
+                                const TransportState& ts, float fadeScale) noexcept {
     // Vérifier qu'il y a une voix active en mode LoopSync
     bool anyActive = false;
     for (int v = 0; v < 2; ++v)
@@ -111,7 +112,7 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
     const SlotPcm& pcm = pcm_[slot];
     if (pcm.numFrames <= 0 || pcm.data.empty()) return;
 
-    const float gain      = params_[slot].gain.load(std::memory_order_relaxed);
+    const float gain      = params_[slot].gain.load(std::memory_order_relaxed) * fadeScale;
     const int32_t loopBts = params_[slot].loopBeats.load(std::memory_order_relaxed);
     const int64_t anchor  = params_[slot].anchor.load(std::memory_order_relaxed);
 
@@ -239,8 +240,23 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             else       { voice.active = false; return; }
         }
 
+        // Fade-out (stop transport) ou fade-in (attaque initiale)
         float vGain = voice.fadeGain;
-        if (voice.fadeLeft > 0) {
+        bool  deactivateAfter = false;
+
+        if (voice.fadingOut) {
+            if (voice.fadeLeft > 0) {
+                // Rampe linéaire vers 0 : décrement proportionnel à la durée restante
+                voice.fadeGain -= voice.fadeGain / static_cast<float>(voice.fadeLeft);
+                --voice.fadeLeft;
+                if (voice.fadeLeft == 0)
+                    deactivateAfter = true;  // sortir après ce frame
+            } else {
+                voice.active = false;
+                return;
+            }
+        } else if (voice.fadeLeft > 0) {
+            // Fade-in initial (0 → 1 sur kFadeLen frames)
             voice.fadeGain += 1.0f / static_cast<float>(kFadeLen);
             if (voice.fadeGain > 1.0f) voice.fadeGain = 1.0f;
             --voice.fadeLeft;
@@ -296,6 +312,8 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
         const float g = vGain * gain;
         out[static_cast<size_t>(f) * 2u]      += left  * g;
         out[static_cast<size_t>(f) * 2u + 1u] += right * g;
+
+        if (deactivateAfter) { voice.active = false; return; }
     }
 }
 
@@ -315,6 +333,19 @@ void SlotPlayer::processBlock(const TransportState& ts,
                 if (loaded_[slot].load(std::memory_order_acquire))
                     handleTrigger(slot, ts.samplePos);
                 break;
+            case EventType::Release: {
+                // Fade-out court (~10 ms) pour éviter les clics au stop transport.
+                // Ne ré-arme pas si déjà en cours de fade-out.
+                const int fadeLen = std::max(1, static_cast<int>(sampleRate_ * 0.01f));
+                for (int vi = 0; vi < 2; ++vi) {
+                    Voice& vc = voices_[slot][vi];
+                    if (!vc.active || vc.fadingOut) continue;
+                    vc.fadingOut = true;
+                    vc.fadeLeft  = fadeLen;
+                    // fadeGain conserve sa valeur courante (1.0 en régime, <1 si attaque)
+                }
+                break;
+            }
             case EventType::Mute:
                 params_[slot].muted.store(true, std::memory_order_relaxed);
                 break;
@@ -338,8 +369,30 @@ void SlotPlayer::processBlock(const TransportState& ts,
             bool anyActive = false;
             for (int v = 0; v < 2; ++v)
                 if (voices_[slot][v].active) { anyActive = true; break; }
-            if (anyActive)
-                renderLoopSync(slot, output, numFrames, ts);
+            if (!anyActive) continue;
+
+            // Fade-out bloc par bloc pour LoopSync
+            float fadeScale = 1.0f;
+            Voice& vc0 = voices_[slot][0];
+            if (vc0.fadingOut) {
+                if (vc0.fadeLeft <= 0) {
+                    // Fade terminé — désactiver sans rien rendre
+                    voices_[slot][0] = Voice{};
+                    voices_[slot][1] = Voice{};
+                    continue;
+                }
+                fadeScale = vc0.fadeGain;
+                const int consumed = std::min(vc0.fadeLeft, static_cast<int>(numFrames));
+                // Avance le fade proportionnellement aux frames consommées
+                vc0.fadeGain -= vc0.fadeGain * static_cast<float>(consumed)
+                                             / static_cast<float>(vc0.fadeLeft);
+                vc0.fadeLeft -= consumed;
+                if (vc0.fadeLeft <= 0) {
+                    vc0.active       = false;
+                    voices_[slot][1] = Voice{};
+                }
+            }
+            renderLoopSync(slot, output, numFrames, ts, fadeScale);
         } else {
             for (int v = 0; v < 2; ++v) {
                 if (voices_[slot][v].active)
@@ -347,6 +400,27 @@ void SlotPlayer::processBlock(const TransportState& ts,
             }
         }
     }
+}
+
+// ─── Diagnostic voix (message thread) ────────────────────────────────────────
+
+SlotPlayer::VoiceDiagInfo SlotPlayer::getVoiceDiagInfo(int slot) const noexcept {
+    VoiceDiagInfo d{};
+    if (slot < 0 || slot >= kSlots) return d;
+    for (int v = 0; v < 2; ++v) {
+        d.active[v]    = voices_[slot][v].active;
+        d.fadingOut[v] = voices_[slot][v].fadingOut;
+        d.readPos[v]   = voices_[slot][v].readPos;
+        d.fadeGain[v]  = voices_[slot][v].fadeGain;
+    }
+    d.numFrames = pcm_[slot].numFrames;
+    return d;
+}
+
+float SlotPlayer::diagSrRatio(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots || sampleRate_ <= 0.f) return 1.f;
+    const float sr = pcm_[slot].sampleRate;
+    return (sr > 0.f) ? sr / sampleRate_ : 1.f;
 }
 
 } // namespace engine
