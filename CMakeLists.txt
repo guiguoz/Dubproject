@@ -76,8 +76,9 @@ set_target_properties(SaxFXLive PROPERTIES
 
 # ─── Option DUB_ENGINE_V2 ────────────────────────────────────────────────────
 # Compile le moteur V2 (engine/) et active EngineFacade dans MainComponent.
-# OFF par défaut : l'ancien pipeline DSP reste actif jusqu'à la migration M8c.
-option(DUB_ENGINE_V2 "Use V2 engine via EngineFacade (M8+)" OFF)
+# ON par défaut depuis M8b (l'app tourne sur la façade) ; le flag sera
+# supprimé à M8c (§12.4.3 du plan).
+option(DUB_ENGINE_V2 "Use V2 engine via EngineFacade (M8+)" ON)
 
 # signalsmith-stretch — requis par engine/StretchConform
 # Ajouté ici (avant add_subdirectory(tests)) pour éviter la double configuration.
