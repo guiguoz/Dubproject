@@ -143,6 +143,10 @@ cmake --build build --config Release --target SaxFXTests --parallel
 
 Exécuter l'exe de tests généré sous `build/tests/Release/` (ou équivalent). **204/204 tests passent** (Catch2, état courant).
 
+**Moteur V2** (`EngineTests`, sous `tests/engine/`) : sans JUCE ni ONNX, exécutable `bin/EngineTests.exe`.
+
+**Null-test (§11.2)** : `renderOffline()` (`src/engine/OfflineRender.*`) rend une session déterministe complète (séquenceur + transitions + AutoMix v2.0 simulé toutes les 50 ms) sans device. Le test `[nulltest]` (NULL1) compare le rendu de la fixture (4 scènes, 6 samples, 2 transitions) bit à bit à une référence committée (hash FNV-1a + RMS par fenêtre). TOUT commit doit le passer ; un changement de rendu INTENTIONNEL régénère la référence (test caché NULL0) dans le même commit, avec justification.
+
 ## Conventions Git
 
 Voir section **Git Conventions** dans [README.md](README.md) (`type(scope): description`).
