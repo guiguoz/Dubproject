@@ -42,6 +42,10 @@ public:
         if (slot >= 0 && slot < kMaxSlots) roles_[slot] = role;
     }
 
+    // Thread de mix : recalcule les cibles AutoMix à partir des rôles courants.
+    // Appelé toutes les 50 ms (thread de mix réel ou simulation offline §11.2).
+    void updateAutoMixTargets() noexcept { autoMix_.computeTargets(roles_); }
+
 private:
     SlotPlayer        slotPlayer_;
     AutoMixDub        autoMix_;

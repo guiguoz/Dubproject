@@ -102,6 +102,7 @@ add_executable(EngineTests
     engine/test_import.cpp
     engine/test_transition.cpp
     engine/test_automix.cpp
+    engine/test_nulltest.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp
@@ -110,6 +111,7 @@ add_executable(EngineTests
     ../src/engine/TransitionEngine.cpp
     ../src/engine/AutoMixDub.cpp
     ../src/engine/AudioGraph.cpp
+    ../src/engine/OfflineRender.cpp
     ../src/engine/fx/PingPongDelay.cpp
 )
 

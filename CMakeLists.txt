@@ -115,6 +115,7 @@ target_sources(SaxFXLive PRIVATE
     src/engine/AudioGraph.cpp
     src/engine/fx/PingPongDelay.cpp
     src/engine/EngineFacade.cpp
+    src/engine/OfflineRender.cpp
 )
 
 target_include_directories(SaxFXLive PRIVATE
