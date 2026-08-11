@@ -29,6 +29,33 @@ TEST_CASE("T-TR1b: samplePos frozen when stopped", "[transport]") {
     REQUIRE(t.state().samplePos == pos);
 }
 
+// ─── T-TR1c : blockStart = début du bloc courant ─────────────────────────────
+// Verrou de non-régression : le snapshot du transport doit exposer le premier
+// sample du bloc courant, pour que les lectures (loop sync, triggers) soient
+// ancrées au DÉBUT du bloc et non à sa fin (samplePos est avancé en tête de bloc).
+TEST_CASE("T-TR1c: blockStart tracks start of the current block", "[transport]") {
+    Transport t;
+    t.prepare(44100.0, 120.0);
+    REQUIRE(t.state().blockStart == 0);
+
+    t.play();
+    t.advance(512);
+    // Après advance : samplePos = fin du bloc, blockStart = début du bloc
+    REQUIRE(t.state().samplePos  == 512);
+    REQUIRE(t.state().blockStart == 0);
+
+    t.advance(128);
+    REQUIRE(t.state().samplePos  == 640);
+    REQUIRE(t.state().blockStart == 512);
+
+    // En stop, blockStart reste figé (comme samplePos)
+    t.stop();
+    const int64_t bs = t.state().blockStart;
+    t.advance(256);
+    REQUIRE(t.state().blockStart == bs);
+    REQUIRE(t.state().samplePos   == 640);
+}
+
 // ─── T-TR2 : stepIndexAt exact sur 10^9 samples ─────────────────────────────
 TEST_CASE("T-TR2: stepIndexAt exact at 1e9 samples (double precision, no float rounding)", "[transport]") {
     // 120 BPM, 44100 Hz

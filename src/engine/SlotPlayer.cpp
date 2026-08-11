@@ -140,7 +140,7 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
     if (bypass) {
         // ── Chemin bypass : lecture directe depuis srcPos ─────────────────
         for (int f = 0; f < N; ++f) {
-            const int64_t tPos = ts.samplePos + static_cast<int64_t>(f);
+            const int64_t tPos = ts.blockStart + static_cast<int64_t>(f);
             const double  elapsed = static_cast<double>(tPos - anchor);
 
             // modulo positif
@@ -175,7 +175,7 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
         const int inputFrames = static_cast<int>(std::round(static_cast<float>(N) * timeRatio));
 
         // Calculer la position source au début du bloc.
-        const double elapsed0 = static_cast<double>(ts.samplePos - anchor);
+        const double elapsed0 = static_cast<double>(ts.blockStart - anchor);
         double phaseRaw0 = elapsed0 / loopLenProject;
         phaseRaw0 -= std::floor(phaseRaw0);
         int64_t srcPos0 = static_cast<int64_t>(phaseRaw0 * durOrig);
@@ -331,7 +331,7 @@ void SlotPlayer::processBlock(const TransportState& ts,
         switch (ev.type) {
             case EventType::Trigger:
                 if (loaded_[slot].load(std::memory_order_acquire))
-                    handleTrigger(slot, ts.samplePos);
+                    handleTrigger(slot, ts.blockStart);
                 break;
             case EventType::Release: {
                 // Fade-out court (~10 ms) pour éviter les clics au stop transport.

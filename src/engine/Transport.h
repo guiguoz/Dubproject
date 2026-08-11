@@ -7,7 +7,8 @@ namespace engine {
 // Snapshot POD distribué à tout le moteur, une fois par bloc.
 // Tous les champs sont calculés à partir de samplePos + bpm + sampleRate.
 struct TransportState {
-    int64_t samplePos      = 0;
+    int64_t samplePos      = 0;   // fin du bloc courant == premier sample du bloc suivant
+    int64_t blockStart     = 0;   // premier sample du bloc courant
     double  sampleRate     = 44100.0;
     double  bpm            = 120.0;
     double  samplesPerBeat = 22050.0;   // sampleRate * 60 / bpm
@@ -61,13 +62,15 @@ public:
         state_.samplesPerBeat = sampleRate * 60.0 / bpm;
         state_.samplesPerStep = state_.samplesPerBeat / 4.0;
         state_.samplePos      = 0;
+        state_.blockStart     = 0;
         state_.playing        = false;
     }
 
     // Démarre la lecture depuis 0 (départ propre).
     void play() noexcept {
-        state_.samplePos = 0;
-        state_.playing   = true;
+        state_.samplePos  = 0;
+        state_.blockStart = 0;
+        state_.playing    = true;
     }
 
     // Stop — l'arrêt audio (fades) est géré par le scheduler, pas ici.
@@ -85,9 +88,13 @@ public:
 
     // Appelé UNE fois en tête de chaque callback audio.
     // Avance samplePos et retourne le snapshot const pour ce bloc.
+    // blockStart est figé au DÉBUT du bloc courant (avant l'avancement) :
+    // le snapshot décrit donc le bloc [blockStart, samplePos).
     const TransportState& advance(int32_t numSamples) noexcept {
-        if (state_.playing)
+        if (state_.playing) {
+            state_.blockStart = state_.samplePos;
             state_.samplePos += static_cast<int64_t>(numSamples);
+        }
         return state_;
     }
 

@@ -45,7 +45,9 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples) noexc
     audioBlockCounter_.fetch_add(1, std::memory_order_release);
 
     const auto& ts = transport_.advance(numSamples);
-    const int64_t blockStart = ts.samplePos - static_cast<int64_t>(numSamples);
+    // blockStart est fourni par le transport (début du bloc courant),
+    // l'invariant est ainsi centralisé et ne dépend plus de la taille du bloc.
+    const int64_t blockStart = ts.blockStart;
 
     // ── Diagnostic régularité transport (M8c à retirer) ─────────────────────
     {
