@@ -259,31 +259,8 @@ MainComponent::MainComponent()
     // File loaded: read PCM, pitch-match if needed, push to Sampler
     stepSeqPanel_.onSlotFileLoaded = [this](int slot, std::string path)
     {
-        // Read PCM
-        juce::AudioFormatManager fmt;
-        fmt.registerBasicFormats();
-        const juce::File file { juce::String(path) };
-        std::unique_ptr<juce::AudioFormatReader> reader(fmt.createReaderFor(file));
-        if (!reader) return;
-
-        const int numSamples = static_cast<int>(reader->lengthInSamples);
-        if (numSamples <= 0) return;
-
-        const int numCh = std::max(1, static_cast<int>(reader->numChannels));
-        juce::AudioBuffer<float> buf(numCh, numSamples);
-        reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
-        std::vector<float> pcm(numSamples);
-        if (numCh > 1) {
-            const float* left = buf.getReadPointer(0);
-            const float* right = buf.getReadPointer(1);
-            for (int i = 0; i < numSamples; ++i) pcm[i] = (left[i] + right[i]) * 0.5f;
-        } else {
-            std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + numSamples, pcm.begin());
-        }
-        const double fileSr = static_cast<double>(reader->sampleRate);
-
-        samplerEngine_.setSlotFilePath(slot, path);
-#ifdef DUB_ENGINE_V2
+        // Moteur V2 : l'import lit/analyse le fichier (rôles, BPM, tonalité)
+        // et charge le PCM dans SlotPlayer. L'UI est notifiée une fois l'analyse prête.
         facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_.setSlotLoaded(s, true);
@@ -303,20 +280,6 @@ MainComponent::MainComponent()
                     dw->setName("SaxFX [V2] | " + info);
             });
         });
-        return;
-#endif
-        autoMatchSampleAsync(slot, std::move(pcm), fileSr);
-
-        // Auto-trigger IA — si le mix est déjà actif, revert d'abord (évite de mixer du PCM traité)
-        if (samplerEngine_.isMagicActive())
-        {
-            reloadPending_ = true;          // onDone relancera triggerAI()
-            samplerEngine_.toggleMagicMix(); // déclenche revertToOriginals()
-        }
-        else
-        {
-            triggerAI();
-        }
     };
 
     // Step toggled: stop sample immediately if the track has no more active steps
