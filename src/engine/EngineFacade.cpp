@@ -35,9 +35,38 @@ void EngineFacade::releaseResources() noexcept
     transport_.stop();
 }
 
+// ─── Thread de mix temps réel (50 ms) ────────────────────────────────────────
+// Recalcule les cibles AutoMix (gains + sends) depuis les rôles courants.
+// Équivalent temps réel de la simulation offline (§11.2).
+
+void EngineFacade::startMixThread() noexcept
+{
+    if (mixThreadStarted_.load(std::memory_order_acquire)) return;
+    mixThreadRun_.store(true, std::memory_order_release);
+    mixThreadStarted_.store(true, std::memory_order_release);
+    mixThread_ = std::thread([this] {
+        while (mixThreadRun_.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            graph_.updateAutoMixTargets();
+        }
+    });
+}
+
+void EngineFacade::stopMixThread() noexcept
+{
+    if (!mixThreadStarted_.load(std::memory_order_acquire)) return;
+    mixThreadRun_.store(false, std::memory_order_release);
+    if (mixThread_.joinable())
+        mixThread_.join();
+    mixThreadStarted_.store(false, std::memory_order_release);
+}
+
 // ─── Audio callback ───────────────────────────────────────────────────────────
 
-void EngineFacade::processBlock(float* left, float* right, int numSamples) noexcept
+void EngineFacade::processBlock(float* left, float* right, int numSamples,
+                                const float* extInL, const float* extInR,
+                                const float* serumL, const float* serumR,
+                                float serumGain) noexcept
 {
     using Clock = std::chrono::steady_clock;
     const auto t0 = Clock::now();
@@ -122,7 +151,8 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples) noexc
     // ── AudioGraph ────────────────────────────────────────────────────────────
     std::fill(interleavedOut_.begin(),
               interleavedOut_.begin() + numSamples * 2, 0.f);
-    graph_.processBlock(ts, evBuf, evCount, interleavedOut_.data(), numSamples);
+    graph_.processBlock(ts, evBuf, evCount, interleavedOut_.data(), numSamples,
+                        extInL, extInR, serumL, serumR, serumGain);
     scheduler_.clear();
 
     // ── Désentrelacement + RMS master ─────────────────────────────────────────
@@ -190,6 +220,24 @@ static PlayMode modeForResult(const AnalysisResult& r, int slot) noexcept
     return PlayMode::Free;  // Bass, Melodic, Pad, Fx, Loop, MST, SYN, DRM
 }
 
+// Mappe le rôle ONNX (SlotRoleV2) vers le rôle moteur (SlotRole) utilisé par
+// l'AutoMix (gain staging + sidechain) et la détection du slot kick.
+static SlotRole mapRole(SlotRoleV2 r) noexcept
+{
+    switch (r) {
+        case SlotRoleV2::Kick:    return SlotRole::Kick;
+        case SlotRoleV2::Snare:   return SlotRole::Snare;
+        case SlotRoleV2::HiHat:   return SlotRole::Perc;
+        case SlotRoleV2::Bass:    return SlotRole::Bass;
+        case SlotRoleV2::Melodic: return SlotRole::Melodic;
+        case SlotRoleV2::Pad:     return SlotRole::Pad;
+        case SlotRoleV2::Perc:    return SlotRole::Perc;
+        case SlotRoleV2::Fx:      return SlotRole::Fx;
+        case SlotRoleV2::Loop:    return SlotRole::Loop;
+        default:                  return SlotRole::Loop;   // Unknown → neutre
+    }
+}
+
 void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
                                      ImportCallback cb)
 {
@@ -238,6 +286,9 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
 
         diagLastRole_[slot].store(static_cast<int32_t>(result.role),
                                   std::memory_order_relaxed);
+
+        // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
+        graph_.setSlotRole(slot, mapRole(result.role));
 
         // Construction du SlotPcm (conserve la stéréo si disponible)
         SlotPcm pcm;
@@ -320,6 +371,14 @@ bool EngineFacade::isSlotMuted(int slot) const noexcept
     return graph_.slotPlayer().isMuted(slot);
 }
 
+void EngineFacade::setSlotSolo(int slot, bool soloed) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    soloSlot_.store(soloed ? slot : -1, std::memory_order_relaxed);
+    for (int i = 0; i < kMaxSlots; ++i)
+        graph_.slotPlayer().setMuted(i, soloed ? (i != slot) : false);
+}
+
 void EngineFacade::setSlotTransposeSemitones(int slot, float semitones) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
@@ -349,7 +408,7 @@ float EngineFacade::getSlotPlayheadRatio(int slot) const noexcept
 float EngineFacade::getSlotOutputPeak(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;
-    return slotPeak_[slot].load(std::memory_order_relaxed);
+    return graph_.slotPlayer().getSlotPeak(slot);
 }
 
 bool EngineFacade::isSlotPlaying(int slot) const noexcept

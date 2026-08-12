@@ -403,7 +403,11 @@ MainComponent::MainComponent()
         // Contrôle direct : le slider fixe le gain de sortie final.
         // Le gain IA (ms.gain) peut être très petit si l'ONNX sous-estime un slot —
         // le multiplier ici plafonnerait le slider (hihat inaudible malgré volume élevé).
+#ifdef DUB_ENGINE_V2
+        facade_.setSlotGain(slot, userGain);
+#else
         dspPipeline_.getSampler().setSlotGain(slot, userGain);
+#endif
     };
 
     // Mute per slot — relancer le magic mix ici causait une perte de gain sur les autres
@@ -413,7 +417,11 @@ MainComponent::MainComponent()
     stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
     {
         const bool quantize = !muted && stepSequencer_.isPlaying();
+#ifdef DUB_ENGINE_V2
+        facade_.setSlotMuted(slot, muted, quantize);
+#else
         dspPipeline_.getSampler().setSlotMuted(slot, muted, quantize);
+#endif
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -721,22 +729,34 @@ MainComponent::MainComponent()
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
     stepSeqPanel_.getSlotPlayhead = [this](int slot) -> float
     {
+#ifdef DUB_ENGINE_V2
+        return facade_.getSlotPlayheadRatio(slot);
+#else
         return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
+#endif
     };
 
     // VU meter — real per-slot output peak from audio thread (reflects gain/mute)
     stepSeqPanel_.getSlotLevel = [this](int slot) -> float
     {
+#ifdef DUB_ENGINE_V2
+        return facade_.getSlotOutputPeak(slot);
+#else
         return dspPipeline_.getSampler().getSlotOutputPeak(slot);
+#endif
     };
 
     // Solo per slot
     stepSeqPanel_.onSoloChanged = [this](int slot, bool soloed)
     {
+#ifdef DUB_ENGINE_V2
+        facade_.setSlotSolo(slot, soloed);
+#else
         if (soloed)
             dspPipeline_.getSampler().setSoloSlot(slot);
         else
             dspPipeline_.getSampler().clearSolo();
+#endif
     };
 
     // Provide the ducking gain to the UI (1.0 = normal, 0.5 = -6dB)
@@ -1913,6 +1933,11 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         // Restore bar counts, step patterns and sample paths for the current scene
         applyScene(sceneManager_.currentIdx());
         updateSceneLabel();
+
+#ifdef DUB_ENGINE_V2
+        // Seed toutes les scènes V1 → SceneStore moteur (pour transitions/scènes).
+        syncV2Scenes();
+#endif
     }
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
@@ -2016,6 +2041,10 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     facade_.prepare(sampleRate, samplesPerBlockExpected);
     facade_.setBpm(stepSeqPanel_.getBpm());
     facade_.setSerumHost(&serumHost_);
+    facade_.setInputGain(v2InputGain_.load(std::memory_order_relaxed));
+    facade_.startMixThread();
+    v2InputScratchL_.assign(static_cast<size_t>(samplesPerBlockExpected), 0.f);
+    v2InputScratchR_.assign(static_cast<size_t>(samplesPerBlockExpected), 0.f);
 #endif
     serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
 
@@ -2055,6 +2084,23 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     ewiMidiBuffer_.clear();
     midiManager_.consumeEwiMidi(ewiMidiBuffer_, numSamples);
 
+    // Capture l'entrée dry (EWI/sax) avant que le rendu V2 n'écrase le buffer.
+    // Utilisée par facade_.processBlock comme bus d'entrée externe.
+#ifdef DUB_ENGINE_V2
+    if (static_cast<int>(v2InputScratchL_.size()) < numSamples)
+    {
+        v2InputScratchL_.assign(static_cast<size_t>(numSamples), 0.f);
+        v2InputScratchR_.assign(static_cast<size_t>(numSamples), 0.f);
+    }
+    std::copy(left, left + numSamples, v2InputScratchL_.begin());
+    if (numCh >= 2)
+        std::copy(bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample),
+                  bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample) + numSamples,
+                  v2InputScratchR_.begin());
+    else
+        std::copy(left, left + numSamples, v2InputScratchR_.begin());
+#endif
+
     // Capture beat phase BEFORE step sequencer advances it (used by looper for bar detection)
     const double looperBeatPhase = stepSequencer_.getCurrentPhase();
 
@@ -2080,6 +2126,9 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
 
         // ── Serum gain rider (avant processStereo — Serum injecté dans la chaîne FX)
+        const float* serumMixL = nullptr;
+        const float* serumMixR = nullptr;
+        float        serumMixGain = 0.f;
         if (serumHost_.isLoaded())
         {
             const auto& sb = serumHost_.getOutputBuffer();
@@ -2132,12 +2181,21 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             serumGainSmooth_.store(newG, std::memory_order_relaxed);
             const float g = newG * serumUserGain_.load(std::memory_order_relaxed);
 
+            // Garder les pointeurs pour le bus Serum du moteur V2.
+            serumMixL = sL;
+            serumMixR = sR;
+            serumMixGain = g;
+
+#ifndef DUB_ENGINE_V2
             // Passer les buffers Serum dans la pipeline — FX, sidechain, limiter inclus
             dspPipeline_.setSerumInput(sL, sR, numSamples, g);
+#endif
         }
 
 #ifdef DUB_ENGINE_V2
-        facade_.processBlock(left, right, numSamples);
+        facade_.processBlock(left, right, numSamples,
+                             v2InputScratchL_.data(), v2InputScratchR_.data(),
+                             serumMixL, serumMixR, serumMixGain);
 #else
         dspPipeline_.processStereo(left, right, numSamples);
 #endif
@@ -2173,7 +2231,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     {
         // ── Mono fallback path ────────────────────────────────────────────────
 #ifdef DUB_ENGINE_V2
-        facade_.processBlock(left, left, numSamples);  // L+R fondus dans left
+        facade_.processBlock(left, left, numSamples,
+                             v2InputScratchL_.data(), v2InputScratchR_.data());
 #else
         dspPipeline_.process(left, numSamples);
 #endif
@@ -2215,6 +2274,7 @@ void MainComponent::releaseResources()
     serumHost_.setProcessingEnabled(false);
     dspPipeline_.reset();
 #ifdef DUB_ENGINE_V2
+    facade_.stopMixThread();
     facade_.releaseResources();
 #endif
     juce::Logger::writeToLog("Audio resources released.");
@@ -3151,6 +3211,72 @@ void MainComponent::captureCurrentScene()
     sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
 }
 
+// ═══ Moteur V2 : sync des scènes (V1 SceneManager → engine::SceneStore) ═══════
+
+#ifdef DUB_ENGINE_V2
+engine::SlotRole MainComponent::v2RoleForSlot(int slot) const noexcept
+{
+    using CT = ::dsp::SmartSamplerEngine::ContentType;
+    static constexpr CT kDefaultTypes[9] = {
+        CT::LOOP, CT::BASS, CT::KICK, CT::SNARE, CT::HIHAT,
+        CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
+    };
+    const auto detected = (slot >= 0 && slot < 9)
+        ? samplerEngine_.getDetectedType(slot) : CT::OTHER;
+    const auto ct = (detected != CT::OTHER) ? detected : kDefaultTypes[slot];
+
+    switch (ct) {
+        case CT::KICK:  return engine::SlotRole::Kick;
+        case CT::BASS:  return engine::SlotRole::Bass;
+        case CT::SNARE: return engine::SlotRole::Snare;
+        case CT::PAD:   return engine::SlotRole::Pad;
+        case CT::SYNTH: return engine::SlotRole::Melodic;
+        case CT::PERC:
+        case CT::HIHAT: return engine::SlotRole::Perc;
+        case CT::LOOP:  return engine::SlotRole::Loop;
+        case CT::OTHER:
+        default:        return engine::SlotRole::Loop;
+    }
+}
+
+void MainComponent::syncV2Scene(int idx) noexcept
+{
+    if (idx < 0 || idx >= kMaxScenes) return;
+    const auto& sc  = sceneManager_.scene(idx);
+    auto&       es  = facade_.scene(idx);
+
+    for (int i = 0; i < 9; ++i)
+    {
+        auto& cfg = es.slots[i];
+
+        cfg.filePath = sc.filePaths[static_cast<std::size_t>(i)];
+
+        // userGains est le seul contrôle de volume en V1 ; repli sur sc.gains.
+        const float ug = sc.userGains   [static_cast<std::size_t>(i)];
+        const float sg = sc.gains       [static_cast<std::size_t>(i)];
+        cfg.gain = (ug > 0.001f) ? ug : (sg > 0.001f ? sg : 1.0f);
+
+        cfg.semitones  = sc.pitchOffsets[static_cast<std::size_t>(i)];
+        cfg.role       = v2RoleForSlot(i);
+
+        // Actif si fichier + au moins un step dans le pattern.
+        bool hasSteps = false;
+        const int nSteps = std::min(512, sc.trackBarCounts[static_cast<std::size_t>(i)] * 16);
+        for (int s = 0; s < nSteps && !hasSteps; ++s)
+            hasSteps = sc.steps[static_cast<std::size_t>(i)][static_cast<std::size_t>(s)];
+        cfg.active = !cfg.filePath.empty() && hasSteps;
+    }
+}
+
+void MainComponent::syncV2Scenes() noexcept
+{
+    for (int i = 0; i < kMaxScenes; ++i)
+        syncV2Scene(i);
+}
+#endif
+
+// ═══ applyScene ══════════════════════════════════════════════════════════════
+
 void MainComponent::applyScene(int idx, int fromIdx)
 {
     // Capturer les gains cibles courants avant changement — point de départ du crossfade.
@@ -3161,6 +3287,14 @@ void MainComponent::applyScene(int idx, int fromIdx)
     const float serumGainBefore = serumUserGain_.load(std::memory_order_relaxed);
 
     const auto& sc = sceneManager_.scene(idx);
+
+#ifdef DUB_ENGINE_V2
+    // Config V2 : sync SceneData V1 → SceneStore moteur puis application au graphe
+    // (gains, modes, semitones, rôles). setCurrentScene sert aussi de point
+    // de départ pour requestTransition() lors des navigations en lecture.
+    syncV2Scene(idx);
+    facade_.setCurrentScene(idx);
+#endif
 
     if (!sc.used)
     {
@@ -3475,6 +3609,12 @@ void MainComponent::navigateScene(int delta)
     // l'ancien step buffer. Après prepareStepBuffer()/flipIfPrepared(), getStep()
     // retournera les données de la nouvelle scène, corrompant la capture.
     captureCurrentScene();
+
+    // Moteur V2 : armer la transition vers la cible. Le diff est calculé depuis
+    // la scène courante du moteur (mise à jour par applyScene / setCurrentScene).
+#ifdef DUB_ENGINE_V2
+    facade_.requestTransition(target);
+#endif
 
     // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
     // pour que la détection de fin de cycle soit stable dans le thread audio.

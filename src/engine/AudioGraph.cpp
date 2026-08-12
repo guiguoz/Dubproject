@@ -14,6 +14,8 @@ void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
 
     mixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     mixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    slotMixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    slotMixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     delayInL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     delayInR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
 
@@ -33,7 +35,10 @@ void AudioGraph::findKickSlot() noexcept
 
 void AudioGraph::processBlock(const TransportState& ts,
                                const EngineEvent* events, int numEvents,
-                               float* output, int numFrames) noexcept
+                               float* output, int numFrames,
+                               const float* extInL, const float* extInR,
+                               const float* serumL, const float* serumR,
+                               float serumGain) noexcept
 {
     if (numFrames <= 0 || numFrames > maxBlock_) {
         // Sortie silencieuse si le bloc est invalide
@@ -63,10 +68,14 @@ void AudioGraph::processBlock(const TransportState& ts,
     slotPlayer_.processBlock(ts, interleavedScratch.data(), numFrames,
                              events, numEvents);
 
+    // SlotMix : contribution des slots (utilisée pour le bus send delay).
+    // Le mix final (mixL_/R_) reçoit aussi les entrées externes plus bas.
     for (int i = 0; i < numFrames; ++i) {
         mixL_[i] = interleavedScratch[static_cast<size_t>(i * 2)];
         mixR_[i] = interleavedScratch[static_cast<size_t>(i * 2 + 1)];
     }
+    slotMixL_.assign(mixL_.begin(), mixL_.begin() + numFrames);
+    slotMixR_.assign(mixR_.begin(), mixR_.begin() + numFrames);
 
     // ─ 3. AutoMix features + sidechain + gain ────────────────────────────────
     // Mise à jour features (approximation M7 : le sum total, pas par slot)
@@ -100,20 +109,46 @@ void AudioGraph::processBlock(const TransportState& ts,
         }
     }
 
-    // ─ 4. Bus delay (sends statiques par rôle) ───────────────────────────────
-    // Architecture M7 : pas de buffers per-slot → chaque slot contribue mixTotal × send.
-    // Approximation acceptable tant que computeTargets() n'est pas câblé (sends = 0).
-    for (int s = 0; s < kMaxSlots; ++s) {
-        const float send = autoMix_.advanceDelayRamp(s, numFrames);
-        if (send > 0.001f) {
+    // ─ 4. Entrées externes (EWI/sax dry + Serum) → on mélange dans le bus,
+    //      sans envoyer en loop dans le délai (send 0 pour ces bus). ───────────
+    {
+        // Dry EWI : entrée stéréo centrée avec inputGain_.
+        const float ig = inputGain_;
+        if (extInL != nullptr && extInR != nullptr && ig > 0.001f) {
             for (int i = 0; i < numFrames; ++i) {
-                delayInL_[i] += mixL_[i] * send;
-                delayInR_[i] += mixR_[i] * send;
+                mixL_[static_cast<size_t>(i)] += extInL[i] * ig;
+                mixR_[static_cast<size_t>(i)] += extInR[i] * ig;
+            }
+        } else if (extInL != nullptr && ig > 0.001f) {
+            for (int i = 0; i < numFrames; ++i) {
+                const float v = extInL[i] * ig;
+                mixL_[static_cast<size_t>(i)] += v;
+                mixR_[static_cast<size_t>(i)] += v;
+            }
+        }
+
+        // Serum (déjà post-effets, gain rider aplicado par le message thread).
+        if (serumL != nullptr && serumR != nullptr && serumGain > 0.001f) {
+            for (int i = 0; i < numFrames; ++i) {
+                mixL_[static_cast<size_t>(i)] += serumL[i] * serumGain;
+                mixR_[static_cast<size_t>(i)] += serumR[i] * serumGain;
             }
         }
     }
 
     // ─ 5. PingPongDelay (additif dans le mix) ────────────────────────────────
+    // Bus send delay (sends par rôle, rampe 120 ms) — alimenté uniquement par
+    // la contribution des slots (pas par l'entrée dry EWI ni Serum).
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const float send = autoMix_.advanceDelayRamp(s, numFrames);
+        if (send > 0.001f) {
+            for (int i = 0; i < numFrames; ++i) {
+                delayInL_[i] += slotMixL_[i] * send;
+                delayInR_[i] += slotMixR_[i] * send;
+            }
+        }
+    }
+
     delay_.processAdd(delayInL_.data(), delayInR_.data(),
                       mixL_.data(), mixR_.data(), numFrames);
 

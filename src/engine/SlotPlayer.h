@@ -126,6 +126,12 @@ public:
         if (slot < 0 || slot >= kSlots) return false;
         return voices_[slot][0].active || voices_[slot][1].active;
     }
+
+    // Pic de sortie du slot pour le bloc courant (VU — lu depuis message thread).
+    float getSlotPeak(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 0.f;
+        return slotPeak_[slot];
+    }
     float playheadRatio(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots || pcm_[slot].numFrames == 0) return 0.f;
         for (int v = 0; v < 2; ++v) {
@@ -161,7 +167,20 @@ private:
     // Indique si le slot a un PCM chargé (écrit message thread, lu audio thread).
     std::atomic<bool> loaded_[kSlots] {};
 
+    // ── Rampe de gain de transition (EventType::GainRamp) ─────────────────────
+    // Multiplicateur appliqué au-dessus du gain du slot. 1.0 = neutre.
+    // Utilisé pour les fades Enter/Exit de TransitionEngine.
+    float rampValue_[kSlots] = {};
+    float rampTarget_[kSlots] = {};
+    int   rampLeft_[kSlots]  = {};   // samples restants (0 = pas de rampe active)
+
+    // Pic de sortie par slot (audio thread write, message thread read pour VU).
+    float slotPeak_[kSlots] = {};
+
     float sampleRate_ = 44100.f;
+
+    // Avance les rampes de transition de numFrames (appelé en tête de processBlock).
+    void advanceRamps(int numFrames) noexcept;
 
     // Déclenche une voix sur le slot (choisit voice[0] ou voice[1]).
     void handleTrigger(int slot, int64_t transportAnchor) noexcept;

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <thread>
 #include "engine/AudioGraph.h"
 #include "engine/Transport.h"
 #include "engine/ImportPipeline.h"
@@ -41,7 +42,12 @@ public:
     // ── Audio callback ─────────────────────────────────────────────────────────
     // Remplace dspPipeline_.processStereo() + stepSequencer_.process().
     // left/right : buffers float raw (de JUCE AudioBuffer::getWritePointer).
-    void processBlock(float* left, float* right, int numSamples) noexcept;
+    // extInL/extInR : entrée dry (EWI/sax) à mixer (nullptr = pas d'entrée).
+    // serumL/serumR : sortie Serum post-proc × serumGain (nullptr = pas de Serum).
+    void processBlock(float* left, float* right, int numSamples,
+                      const float* extInL = nullptr, const float* extInR = nullptr,
+                      const float* serumL = nullptr, const float* serumR = nullptr,
+                      float serumGain = 0.f) noexcept;
 
     // ── Transport ──────────────────────────────────────────────────────────────
     void play() noexcept;
@@ -65,6 +71,7 @@ public:
     float getSlotGain(int slot) const noexcept;
     void setSlotMuted(int slot, bool muted, bool quantized = false) noexcept;
     bool isSlotMuted(int slot) const noexcept;
+    void setSlotSolo(int slot, bool soloed) noexcept;
     void setSlotTransposeSemitones(int slot, float semitones) noexcept;
     void setSlotMode(int slot, PlayMode mode) noexcept;
     void setSlotRole(int slot, SlotRole role) noexcept;
@@ -111,8 +118,18 @@ public:
     // ── DubDelay (accès direct à l'objet porté) ───────────────────────────────
     fx::PingPongDelay& delay() noexcept { return graph_.delay(); }
 
+    // ── Entrée externe (EWI/sax dry) ──────────────────────────────────────────
+    // Gain du bus d'entrée dry. Rendu via graph_.processBlock(extInL/R).
+    void setInputGain(float g) noexcept { graph_.setInputGain(g); }
+    float getInputGain() const noexcept { return graph_.getInputGain(); }
+
     // ── AutoMix ────────────────────────────────────────────────────────────────
     float getMasterRms() const noexcept { return masterRms_.load(); }
+
+    // Lance le thread de mix temps réel : recomputeTargets() toutes les 50 ms
+    // depuis les rôles courants. Appelé depuis prepareToPlay // à arrêter dans releaseResources.
+    void startMixThread() noexcept;
+    void stopMixThread() noexcept;
 
     // ── Diagnostics / debug ────────────────────────────────────────────────────
     // CPU callback budget : p99 < 50 % (§11.4)
@@ -141,8 +158,10 @@ private:
     std::atomic<float> cpuLoad_   {0.f};
 
     // État par slot (metrics, lecture depuis UI thread)
-    std::atomic<float> slotPeak_[kMaxSlots] {};
     std::atomic<bool>  slotLoaded_[kMaxSlots] {};
+
+    // Solo par slot : si un slot est solo, les autres sont muets (audio thread).
+    std::atomic<int32_t> soloSlot_ {-1};
 
     // Patterns (write side, message thread)
     TrackPattern writePatterns_[kMaxSlots];
@@ -177,6 +196,11 @@ private:
 
     // Buffer entrelacé pré-alloué (évite toute allocation en audio callback)
     std::vector<float> interleavedOut_;
+
+    // Thread de mix temps réel (50 ms) — recalcule les cibles AutoMix.
+    std::thread             mixThread_;
+    std::atomic<bool>       mixThreadRun_ {false};
+    std::atomic<bool>       mixThreadStarted_ {false};
 
     void applySceneInternal(int idx) noexcept;
 };

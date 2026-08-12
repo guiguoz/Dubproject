@@ -35,6 +35,11 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
     for (int v = 0; v < 2; ++v)
         voices_[slot][v] = Voice{};
 
+    // Rampe de transition neutre (pas de fade résiduel sur un nouveau PCM)
+    rampValue_ [slot] = 1.0f;
+    rampTarget_[slot] = 1.0f;
+    rampLeft_  [slot] = 0;
+
     // Marquer comme non chargé avant le swap pour que le thread audio
     // ne lise pas un état intermédiaire.
     loaded_[slot].store(false, std::memory_order_release);
@@ -53,6 +58,23 @@ void SlotPlayer::clearSlot(int slot) noexcept {
     loaded_[slot].store(false, std::memory_order_release);
     for (int v = 0; v < 2; ++v)
         voices_[slot][v] = Voice{};
+    rampValue_ [slot] = 1.0f;
+    rampTarget_[slot] = 1.0f;
+    rampLeft_  [slot] = 0;
+}
+
+// ─── advanceRamps ────────────────────────────────────────────────────────────
+
+void SlotPlayer::advanceRamps(int numFrames) noexcept {
+    for (int s = 0; s < kSlots; ++s) {
+        if (rampLeft_[s] <= 0) continue;
+        const int consumed = std::min(rampLeft_[s], numFrames);
+        const float frac = static_cast<float>(consumed) / static_cast<float>(rampLeft_[s]);
+        rampValue_[s] += (rampTarget_[s] - rampValue_[s]) * frac;
+        rampLeft_[s] -= consumed;
+        if (rampLeft_[s] <= 0)
+            rampValue_[s] = rampTarget_[s];
+    }
 }
 
 // ─── handleTrigger ───────────────────────────────────────────────────────────
@@ -112,7 +134,8 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
     const SlotPcm& pcm = pcm_[slot];
     if (pcm.numFrames <= 0 || pcm.data.empty()) return;
 
-    const float gain      = params_[slot].gain.load(std::memory_order_relaxed) * fadeScale;
+    const float gain      = params_[slot].gain.load(std::memory_order_relaxed)
+                              * fadeScale * rampValue_[slot];
     const int32_t loopBts = params_[slot].loopBeats.load(std::memory_order_relaxed);
     const int64_t anchor  = params_[slot].anchor.load(std::memory_order_relaxed);
 
@@ -163,6 +186,9 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
             out[static_cast<size_t>(f) * 2u]      += left  * gain;
             out[static_cast<size_t>(f) * 2u + 1u] += right * gain;
+
+            const float p = std::max(std::abs(left * gain), std::abs(right * gain));
+            if (p > slotPeak_[slot]) slotPeak_[slot] = p;
         }
     } else {
         // ── Chemin stretch ────────────────────────────────────────────────
@@ -208,8 +234,14 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
         // Mixer dans la sortie stéréo entrelacée.
         for (int f = 0; f < N; ++f) {
-            out[static_cast<size_t>(f) * 2u]      += tmpL[static_cast<size_t>(f)] * gain;
-            out[static_cast<size_t>(f) * 2u + 1u] += tmpR[static_cast<size_t>(f)] * gain;
+            const float vL = tmpL[static_cast<size_t>(f)] * gain;
+            const float vR = tmpR[static_cast<size_t>(f)] * gain;
+            out[static_cast<size_t>(f) * 2u]      += vL;
+            out[static_cast<size_t>(f) * 2u + 1u] += vR;
+
+            float p = std::abs(vL);
+            if (std::abs(vR) > p) p = std::abs(vR);
+            if (p > slotPeak_[slot]) slotPeak_[slot] = p;
         }
     }
 }
@@ -224,7 +256,8 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
     if (!voice.active || pcm.numFrames <= 0 || pcm.data.empty())
         return;
 
-    const float gain    = params_[slot].gain.load(std::memory_order_relaxed);
+    const float gain    = params_[slot].gain.load(std::memory_order_relaxed)
+                        * rampValue_[slot];
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
     const bool loop     = (mode == PlayMode::Free);
 
@@ -313,6 +346,10 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
         out[static_cast<size_t>(f) * 2u]      += left  * g;
         out[static_cast<size_t>(f) * 2u + 1u] += right * g;
 
+        // Pic de sortie du slot (VU)
+        const float p = std::max(std::abs(left * g), std::abs(right * g));
+        if (p > slotPeak_[slot]) slotPeak_[slot] = p;
+
         if (deactivateAfter) { voice.active = false; return; }
     }
 }
@@ -352,10 +389,29 @@ void SlotPlayer::processBlock(const TransportState& ts,
             case EventType::Unmute:
                 params_[slot].muted.store(false, std::memory_order_relaxed);
                 break;
+            case EventType::GainRamp: {
+                // Fade de transition Enter/Exit : a = durée en samples, b = cible.
+                // La valeur courante (rampValue_) est conservée comme point de départ.
+                const int dur = static_cast<int>(ev.a);
+                if (dur <= 0) {
+                    rampValue_ [slot] = ev.b;
+                    rampTarget_[slot] = ev.b;
+                    rampLeft_  [slot] = 0;
+                } else {
+                    rampTarget_[slot] = ev.b;
+                    rampLeft_  [slot] = dur;
+                }
+                break;
+            }
             default:
                 break;
         }
     }
+
+    // Avancer les rampes de transition + reset des pics de sortie.
+    advanceRamps(numFrames);
+    for (int slot = 0; slot < kSlots; ++slot)
+        slotPeak_[slot] = 0.f;
 
     // Rendre tous les slots actifs
     for (int slot = 0; slot < kSlots; ++slot) {

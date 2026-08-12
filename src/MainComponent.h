@@ -84,6 +84,15 @@ private:
     //==========================================================================
 #ifdef DUB_ENGINE_V2
     engine::EngineFacade facade_;
+    // Buffers de capture de l'entrée dry (EWI/sax) — le rendu V2 écrase left/right.
+    std::vector<float>       v2InputScratchL_, v2InputScratchR_;
+    std::atomic<float>       v2InputGain_ { 0.8f };
+
+    // Sync des scènes V1 → SceneStore V2 (gains, semitones, rôles, actifs) puis
+    // application au graphe (setCurrentScene) pour les scènes/transitions.
+    engine::SlotRole v2RoleForSlot(int slot) const noexcept;
+    void             syncV2Scene(int idx) noexcept;
+    void             syncV2Scenes() noexcept;
 #endif
 
     //==========================================================================
