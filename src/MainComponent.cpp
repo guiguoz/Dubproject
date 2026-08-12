@@ -538,6 +538,8 @@ MainComponent::MainComponent()
         }
 
         // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
+        // En V2, l'AutoMix (thread de mix 50 ms) pilote le bus delay depuis les rôles.
+#ifndef DUB_ENGINE_V2
         auto& dd = dspPipeline_.getDubDelay();
         dd.setEnabled(true);
         dd.setSend   (0.25f);
@@ -546,6 +548,7 @@ MainComponent::MainComponent()
         dd.setTone   (0.55f);
         dd.setDrive  (0.15f);
         dd.setDiv    (1);   // Quarter note par défaut
+#endif
 
         // Sync visuel du bouton ON (pas obligatoire mais cohérent)
         juce::MessageManager::callAsync([this]
@@ -784,14 +787,22 @@ MainComponent::MainComponent()
     dubDelayEnableBtn_.setButtonText("ON");
     dubDelayEnableBtn_.setClickingTogglesState(true);
     dubDelayEnableBtn_.onStateChange = [this] {
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setEnabled(dubDelayEnableBtn_.getToggleState());
+#else
         dspPipeline_.getDubDelay().setEnabled(dubDelayEnableBtn_.getToggleState());
+#endif
     };
     addAndMakeVisible(dubDelayEnableBtn_);
 
     dubDelayFreezeBtn_.setButtonText("FREEZE");
     dubDelayFreezeBtn_.setClickingTogglesState(true);
     dubDelayFreezeBtn_.onStateChange = [this] {
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setFreeze(dubDelayFreezeBtn_.getToggleState());
+#else
         dspPipeline_.getDubDelay().setFreeze(dubDelayFreezeBtn_.getToggleState());
+#endif
     };
     addAndMakeVisible(dubDelayFreezeBtn_);
 
@@ -807,11 +818,46 @@ MainComponent::MainComponent()
     setupDubSlider(dubDelayToneSlider_,     0.0, 1.0,  0.55);
     setupDubSlider(dubDelayDriveSlider_,    0.0, 1.0,  0.15);
 
-    dubDelaySendSlider_    .onValueChange = [this] { dspPipeline_.getDubDelay().setSend    (static_cast<float>(dubDelaySendSlider_    .getValue())); };
-    dubDelayWetSlider_     .onValueChange = [this] { dspPipeline_.getDubDelay().setWet     (static_cast<float>(dubDelayWetSlider_     .getValue())); };
-    dubDelayFeedbackSlider_.onValueChange = [this] { dspPipeline_.getDubDelay().setFeedback(static_cast<float>(dubDelayFeedbackSlider_.getValue())); };
-    dubDelayToneSlider_    .onValueChange = [this] { dspPipeline_.getDubDelay().setTone    (static_cast<float>(dubDelayToneSlider_    .getValue())); };
-    dubDelayDriveSlider_   .onValueChange = [this] { dspPipeline_.getDubDelay().setDrive   (static_cast<float>(dubDelayDriveSlider_   .getValue())); };
+    dubDelaySendSlider_    .onValueChange = [this] {
+        const float v = static_cast<float>(dubDelaySendSlider_.getValue());
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setSend(v);
+#else
+        dspPipeline_.getDubDelay().setSend(v);
+#endif
+    };
+    dubDelayWetSlider_     .onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayWetSlider_.getValue());
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setWet(v);
+#else
+        dspPipeline_.getDubDelay().setWet(v);
+#endif
+    };
+    dubDelayFeedbackSlider_.onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayFeedbackSlider_.getValue());
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setFeedback(v);
+#else
+        dspPipeline_.getDubDelay().setFeedback(v);
+#endif
+    };
+    dubDelayToneSlider_    .onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayToneSlider_.getValue());
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setTone(v);
+#else
+        dspPipeline_.getDubDelay().setTone(v);
+#endif
+    };
+    dubDelayDriveSlider_   .onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayDriveSlider_.getValue());
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setDrive(v);
+#else
+        dspPipeline_.getDubDelay().setDrive(v);
+#endif
+    };
 
     addAndMakeVisible(dubDelaySendSlider_);
     addAndMakeVisible(dubDelayWetSlider_);
@@ -825,8 +871,12 @@ MainComponent::MainComponent()
     dubDelayDivCombo_.addItem("1 bar", 4);
     dubDelayDivCombo_.setSelectedId(2, juce::dontSendNotification);
     dubDelayDivCombo_.onChange = [this] {
-        const auto div = static_cast<::dsp::GridDiv>(dubDelayDivCombo_.getSelectedId() - 1);
-        dspPipeline_.getDubDelay().setDiv(static_cast<int>(div));
+        const int div = dubDelayDivCombo_.getSelectedId() - 1;
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setDiv(div);
+#else
+        dspPipeline_.getDubDelay().setDiv(div);
+#endif
     };
     addAndMakeVisible(dubDelayDivCombo_);
 
@@ -1951,6 +2001,15 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         dubDelayDriveSlider_.setValue      (static_cast<double>(data.dubDelayDrive),     juce::dontSendNotification);
         dubDelayDivCombo_   .setSelectedId (data.dubDelayDiv + 1,                        juce::dontSendNotification);
 
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setEnabled (data.dubDelayEnabled);
+        facade_.delay().setSend    (data.dubDelaySend);
+        facade_.delay().setWet     (data.dubDelayWet);
+        facade_.delay().setFeedback(data.dubDelayFeedback);
+        facade_.delay().setTone    (data.dubDelayTone);
+        facade_.delay().setDrive   (data.dubDelayDrive);
+        facade_.delay().setDiv     (data.dubDelayDiv);
+#else
         auto& dd = dspPipeline_.getDubDelay();
         dd.setEnabled (data.dubDelayEnabled);
         dd.setSend    (data.dubDelaySend);
@@ -1959,6 +2018,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         dd.setTone    (data.dubDelayTone);
         dd.setDrive   (data.dubDelayDrive);
         dd.setDiv     (data.dubDelayDiv);
+#endif
     }
 
     // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
@@ -3055,15 +3115,27 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
         break;
     case MT::DubDelaySend:
         dubDelaySendSlider_.setValue(v, juce::dontSendNotification);
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setSend(v);
+#else
         dspPipeline_.getDubDelay().setSend(v);
+#endif
         break;
     case MT::DubDelayWet:
         dubDelayWetSlider_.setValue(v, juce::dontSendNotification);
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setWet(v);
+#else
         dspPipeline_.getDubDelay().setWet(v);
+#endif
         break;
     case MT::DubDelayFeedback:
         dubDelayFeedbackSlider_.setValue(v * 0.95f, juce::dontSendNotification);
+#ifdef DUB_ENGINE_V2
+        facade_.delay().setFeedback(v * 0.95f);
+#else
         dspPipeline_.getDubDelay().setFeedback(v * 0.95f);
+#endif
         break;
     case MT::SerumGain:
         serumUserGain_.store(v, std::memory_order_relaxed);
@@ -3072,7 +3144,11 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
     case MT::Slot4Gain: case MT::Slot5Gain: case MT::Slot6Gain: case MT::Slot7Gain:
     {
         const int slot = static_cast<int>(t) - static_cast<int>(MT::Slot0Gain);
+#ifdef DUB_ENGINE_V2
+        facade_.setSlotGain(slot, v);
+#else
         dspPipeline_.getSampler().setSlotGain(slot, v);
+#endif
         break;
     }
     default: break;
@@ -3215,7 +3291,11 @@ void MainComponent::captureCurrentScene()
     sc.serumPresetName = currentPresetName_.toStdString();
 
     {
+#ifdef DUB_ENGINE_V2
+        auto& dd = facade_.delay();
+#else
         auto& dd = dspPipeline_.getDubDelay();
+#endif
         sc.dubDelayFeedback = dd.getFeedback();
         sc.dubDelayWet      = dd.getWet();
         sc.dubDelayTone     = dd.getTone();
@@ -3840,7 +3920,11 @@ void MainComponent::applyDubDelayMorph(float t)
 {
     const auto& from = sceneManager_.getScene(sceneManager_.getMorphFromScene());
     const auto& to   = sceneManager_.getScene(sceneManager_.getMorphToScene());
-    auto& delay      = dspPipeline_.getDubDelay();
+#ifdef DUB_ENGINE_V2
+    auto& delay = facade_.delay();
+#else
+    auto& delay = dspPipeline_.getDubDelay();
+#endif
     const auto lerp  = [](float a, float b, float x) { return a + (b - a) * x; };
     delay.setFeedback(lerp(from.dubDelayFeedback, to.dubDelayFeedback, t));
     delay.setWet     (lerp(from.dubDelayWet,      to.dubDelayWet,      t));
