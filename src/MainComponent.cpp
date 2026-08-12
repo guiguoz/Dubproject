@@ -2230,13 +2230,28 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     else
     {
         // ── Mono fallback path ────────────────────────────────────────────────
+        // Bus Serum (même gain rider que le chemin stéréo) → rendu par le graphe,
+        // qui applique aussi le MasterLimiter en interne. Aucun traitement V1 ici.
+        const float* serumL = nullptr;
+        const float* serumR = nullptr;
+        float        serumGain = 0.f;
+        if (serumHost_.isLoaded())
+        {
+            const auto& sb = serumHost_.getOutputBuffer();
+            serumL = sb.getReadPointer(0);
+            serumR = sb.getReadPointer(1);
+            serumGain = serumGainSmooth_.load(std::memory_order_relaxed)
+                       * serumUserGain_.load(std::memory_order_relaxed);
+        }
 #ifdef DUB_ENGINE_V2
         facade_.processBlock(left, left, numSamples,
-                             v2InputScratchL_.data(), v2InputScratchR_.data());
+                             v2InputScratchL_.data(), v2InputScratchR_.data(),
+                             serumL, serumR, serumGain);
 #else
         dspPipeline_.process(left, numSamples);
 #endif
 
+#ifndef DUB_ENGINE_V2
         // Mix Serum mono (gain rider déjà calculé sur chemin stéréo)
         if (serumHost_.isLoaded())
         {
@@ -2249,6 +2264,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                 left[i] += (sL[i] + sR[i]) * 0.5f * g;
         }
         dspPipeline_.getMasterLimiter().process(left, numSamples);
+#endif
 
         const float outGain = outputGain_.load(std::memory_order_relaxed);
         if (outGain != 1.0f)

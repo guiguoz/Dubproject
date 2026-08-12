@@ -103,6 +103,7 @@ add_executable(EngineTests
     engine/test_transition.cpp
     engine/test_automix.cpp
     engine/test_nulltest.cpp
+    engine/test_mono_downmix.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp

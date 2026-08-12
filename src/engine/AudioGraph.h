@@ -11,6 +11,16 @@
 
 namespace engine {
 
+// Downmix stéréo entrelacé → mono : mono[i] = (L[i] + R[i]) * 0.5.
+// Utilisé par EngineFacade::processBlock lorsque le device est mono
+// (left == right) — le graphe rend toujours en stéréo entrelacé.
+inline void downmixInterleavedToMono(const float* interleaved, float* monoOut,
+                                     int numFrames) noexcept
+{
+    for (int i = 0; i < numFrames; ++i)
+        monoOut[i] = (interleaved[i * 2] + interleaved[i * 2 + 1]) * 0.5f;
+}
+
 // Graphe audio fixe V2.0 (§7.4) :
 //   9 × SlotPlayer → [gain AutoMix] → [sidechain] →
 //   bus mix + bus sends (delay) → PingPongDelay → MasterLimiter → out

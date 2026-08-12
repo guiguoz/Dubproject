@@ -156,13 +156,20 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     scheduler_.clear();
 
     // ── Désentrelacement + RMS master ─────────────────────────────────────────
+    // left == right : sortie mono → downmix (L+R)·0.5 dans le seul buffer
+    // (le graphe rend toujours en stéréo entrelacé).
+    const bool monoOut = (left == right);
+    if (monoOut)
+        downmixInterleavedToMono(interleavedOut_.data(), left, numSamples);
     float sumSq = 0.f;
     for (int i = 0; i < numSamples; ++i) {
         const float l = interleavedOut_[i * 2    ];
         const float r = interleavedOut_[i * 2 + 1];
-        left [i] = l;
-        right[i] = r;
-        sumSq   += l * l + r * r;
+        if (!monoOut) {
+            left [i] = l;
+            right[i] = r;
+        }
+        sumSq += l * l + r * r;
     }
     if (numSamples > 0) {
         const float rms = std::sqrt(sumSq / static_cast<float>(numSamples * 2));
