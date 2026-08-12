@@ -196,11 +196,14 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Références committées (§11.2). Régénérer UNIQUEMENT sur changement
     // intentionnel du rendu, avec justification dans le commit.
     //
-    // Référence initiale (fixture §11.2, build Release MSVC 2022) :
-    //   hashAudio = 0xe146e2a2dc16068d
-    //   hashRms   = 0x8402d56abb1e0d3a
-    CHECK(hashAudio == 0xe146e2a2dc16068dull);
-    CHECK(hashRms   == 0x8402d56abb1e0d3aull);
+    // Référence v2 (M8c) — les GainRamp de TransitionEngine sont désormais
+    // appliqués par SlotPlayer (fades Enter/Exit). Changement intentionnel du
+    // rendu : les transitions produisent de vrais fades de gain au lieu d'un
+    // saut. Régénéré via NULL0 (Debug == Release bit-exact, vérifié).
+    //   hashAudio = 0xcaf8b973768f00cc
+    //   hashRms   = 0xfb07aa3caefb2d3c
+    CHECK(hashAudio == 0xcaf8b973768f00ccull);
+    CHECK(hashRms   == 0xfb07aa3caefb2d3cull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {
