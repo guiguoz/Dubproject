@@ -285,77 +285,41 @@ MainComponent::MainComponent()
     // Step toggled: stop sample immediately if the track has no more active steps
     stepSeqPanel_.onStepChanged = [this](int track, int step, bool active)
     {
-#ifdef DUB_ENGINE_V2
-        stepSequencer_.setStep(track, step, active);  // V1 en sync pour le project save
+        stepSequencer_.setStep(track, step, active);  // sync pour le project save
         facade_.setStep(track, step, active);
         facade_.flipPatternBuffer();
-#else
-        (void)step;
-        if (active) return;
-        const int nSteps = stepSequencer_.getTrackStepCount(track);
-        for (int s = 0; s < nSteps; ++s)
-            if (stepSequencer_.getStep(track, s)) return;  // at least one step still on
-        dspPipeline_.getSampler().stop(track, ::dsp::Sampler::StopMode::Retrigger);
-#endif
     };
 
     // Slot cleared: unload PCM and clear engine state
     stepSeqPanel_.onSlotCleared = [this](int slot)
     {
-#ifdef DUB_ENGINE_V2
         facade_.clearSlot(slot);
         stepSeqPanel_.setSlotLoaded(slot, false);
-#else
-        dspPipeline_.getSampler().clearSlot(slot);
-        samplerEngine_.clearSlot(slot);
-#endif
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
     stepSeqPanel_.onBpmChanged = [this](float bpm)
     {
         stepSequencer_.setBpm(bpm);
-        dspPipeline_.setBpm(bpm);
         serumHost_.setBpm(bpm);
-        looperEngine_.setBpm(bpm);
         updateSidebarBpm(bpm);
-        bpmRestrechCountdown_ = 12;  // A2: 12 × 33 ms ≈ 400 ms debounce
-#ifdef DUB_ENGINE_V2
         facade_.setBpm(bpm);
-#endif
     };
 
     // Play/stop — StepSequencerPanel already calls seq_.setPlaying(); stop samples immediately
     stepSeqPanel_.onPlayChanged = [this](bool playing)
     {
-#ifdef DUB_ENGINE_V2
         if (playing) {
             facade_.flipPatternBuffer();
             facade_.play();
         } else {
             facade_.stop();
         }
-#endif
         serumHost_.setIsPlaying(playing);
         if (playing)
             serumHost_.resetPlaybackPosition();
         else
             serumHost_.sendAllNotesOff();
-
-        if (!playing)
-        {
-            dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Normal);
-            // Appliquer toute transition en attente immédiatement au stop
-            const int pending = sceneManager_.consumePendingScene();
-            if (pending >= 0)
-            {
-                captureCurrentScene();
-                sceneManager_.setCurrentIdx(pending);
-                applyScene(sceneManager_.currentIdx());
-                updateSceneLabel();
-                stepSequencer_.setPendingTransitionLen(0);
-            }
-        }
     };
 
     // Volume per slot — user fader, multiplied on top of AI normalization gain
@@ -363,14 +327,7 @@ MainComponent::MainComponent()
     {
         auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
         sc.userGains[static_cast<std::size_t>(slot)] = userGain;
-        // Contrôle direct : le slider fixe le gain de sortie final.
-        // Le gain IA (ms.gain) peut être très petit si l'ONNX sous-estime un slot —
-        // le multiplier ici plafonnerait le slider (hihat inaudible malgré volume élevé).
-#ifdef DUB_ENGINE_V2
         facade_.setSlotGain(slot, userGain);
-#else
-        dspPipeline_.getSampler().setSlotGain(slot, userGain);
-#endif
     };
 
     // Mute per slot — relancer le magic mix ici causait une perte de gain sur les autres
@@ -380,11 +337,7 @@ MainComponent::MainComponent()
     stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
     {
         const bool quantize = !muted && stepSequencer_.isPlaying();
-#ifdef DUB_ENGINE_V2
         facade_.setSlotMuted(slot, muted, quantize);
-#else
-        dspPipeline_.getSampler().setSlotMuted(slot, muted, quantize);
-#endif
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -674,66 +627,49 @@ MainComponent::MainComponent()
     // Changement de longueur de pattern via le menu pageLabel_
     stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
     {
-        stepSequencer_.setTrackBarCount(track, bars);
-#ifdef DUB_ENGINE_V2
+        stepSequencer_.setTrackBarCount(track, bars);   // sync pour le project save
         facade_.setTrackBarCount(track, bars);
         facade_.flipPatternBuffer();
-#endif
     };
 
     // Override manuel du mode de lecture (clic droit → "Mode de lecture...")
     stepSeqPanel_.onSlotModeChanged = [this](int slot, int mode)
     {
-#ifdef DUB_ENGINE_V2
         const engine::PlayMode pm = (mode == 1) ? engine::PlayMode::Free
                                   : (mode == 2) ? engine::PlayMode::LoopSync
                                   :               engine::PlayMode::OneShot;
         facade_.setSlotMode(slot, pm);
-#endif
     };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
     stepSeqPanel_.getSlotPlayhead = [this](int slot) -> float
     {
-#ifdef DUB_ENGINE_V2
         return facade_.getSlotPlayheadRatio(slot);
-#else
-        return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
-#endif
     };
 
     // VU meter — real per-slot output peak from audio thread (reflects gain/mute)
     stepSeqPanel_.getSlotLevel = [this](int slot) -> float
     {
-#ifdef DUB_ENGINE_V2
         return facade_.getSlotOutputPeak(slot);
-#else
-        return dspPipeline_.getSampler().getSlotOutputPeak(slot);
-#endif
     };
 
     // Solo per slot
     stepSeqPanel_.onSoloChanged = [this](int slot, bool soloed)
     {
-#ifdef DUB_ENGINE_V2
         facade_.setSlotSolo(slot, soloed);
-#else
-        if (soloed)
-            dspPipeline_.getSampler().setSoloSlot(slot);
-        else
-            dspPipeline_.getSampler().clearSolo();
-#endif
     };
 
-    // Provide the ducking gain to the UI (1.0 = normal, 0.5 = -6dB)
+    // Ducking display — le ducking V2 est géré en interne par AutoMix (sidechain)
+    // et n'est pas exposé à l'UI ; on renvoie 1.0 (pas de duck externe visible).
     stepSeqPanel_.getDuckingGain = [this]() -> float
     {
-        return dspPipeline_.getCurrentDuckingGain();
+        return 1.0f;
     };
 
+    // Input RMS — RMS maître du graphe V2.
     stepSeqPanel_.getInputRms = [this]() -> float
     {
-        return dspPipeline_.getLastRms();
+        return facade_.getMasterRms();
     };
 
 
@@ -750,22 +686,14 @@ MainComponent::MainComponent()
     dubDelayEnableBtn_.setButtonText("ON");
     dubDelayEnableBtn_.setClickingTogglesState(true);
     dubDelayEnableBtn_.onStateChange = [this] {
-#ifdef DUB_ENGINE_V2
         facade_.delay().setEnabled(dubDelayEnableBtn_.getToggleState());
-#else
-        dspPipeline_.getDubDelay().setEnabled(dubDelayEnableBtn_.getToggleState());
-#endif
     };
     addAndMakeVisible(dubDelayEnableBtn_);
 
     dubDelayFreezeBtn_.setButtonText("FREEZE");
     dubDelayFreezeBtn_.setClickingTogglesState(true);
     dubDelayFreezeBtn_.onStateChange = [this] {
-#ifdef DUB_ENGINE_V2
         facade_.delay().setFreeze(dubDelayFreezeBtn_.getToggleState());
-#else
-        dspPipeline_.getDubDelay().setFreeze(dubDelayFreezeBtn_.getToggleState());
-#endif
     };
     addAndMakeVisible(dubDelayFreezeBtn_);
 
@@ -782,44 +710,19 @@ MainComponent::MainComponent()
     setupDubSlider(dubDelayDriveSlider_,    0.0, 1.0,  0.15);
 
     dubDelaySendSlider_    .onValueChange = [this] {
-        const float v = static_cast<float>(dubDelaySendSlider_.getValue());
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setSend(v);
-#else
-        dspPipeline_.getDubDelay().setSend(v);
-#endif
+        facade_.delay().setSend(static_cast<float>(dubDelaySendSlider_.getValue()));
     };
     dubDelayWetSlider_     .onValueChange = [this] {
-        const float v = static_cast<float>(dubDelayWetSlider_.getValue());
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setWet(v);
-#else
-        dspPipeline_.getDubDelay().setWet(v);
-#endif
+        facade_.delay().setWet(static_cast<float>(dubDelayWetSlider_.getValue()));
     };
     dubDelayFeedbackSlider_.onValueChange = [this] {
-        const float v = static_cast<float>(dubDelayFeedbackSlider_.getValue());
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setFeedback(v);
-#else
-        dspPipeline_.getDubDelay().setFeedback(v);
-#endif
+        facade_.delay().setFeedback(static_cast<float>(dubDelayFeedbackSlider_.getValue()));
     };
     dubDelayToneSlider_    .onValueChange = [this] {
-        const float v = static_cast<float>(dubDelayToneSlider_.getValue());
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setTone(v);
-#else
-        dspPipeline_.getDubDelay().setTone(v);
-#endif
+        facade_.delay().setTone(static_cast<float>(dubDelayToneSlider_.getValue()));
     };
     dubDelayDriveSlider_   .onValueChange = [this] {
-        const float v = static_cast<float>(dubDelayDriveSlider_.getValue());
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setDrive(v);
-#else
-        dspPipeline_.getDubDelay().setDrive(v);
-#endif
+        facade_.delay().setDrive(static_cast<float>(dubDelayDriveSlider_.getValue()));
     };
 
     addAndMakeVisible(dubDelaySendSlider_);
@@ -834,12 +737,7 @@ MainComponent::MainComponent()
     dubDelayDivCombo_.addItem("1 bar", 4);
     dubDelayDivCombo_.setSelectedId(2, juce::dontSendNotification);
     dubDelayDivCombo_.onChange = [this] {
-        const int div = dubDelayDivCombo_.getSelectedId() - 1;
-#ifdef DUB_ENGINE_V2
-        facade_.delay().setDiv(div);
-#else
-        dspPipeline_.getDubDelay().setDiv(div);
-#endif
+        facade_.delay().setDiv(dubDelayDivCombo_.getSelectedId() - 1);
     };
     addAndMakeVisible(dubDelayDivCombo_);
 
@@ -2071,11 +1969,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     currentBufferSize_ = samplesPerBlockExpected;
 
     stepSequencer_.prepare(sampleRate);
-    looperEngine_.prepare(sampleRate);
-    samplerEngine_.setSampleRate(sampleRate);
-    dspPipeline_.prepare(sampleRate, samplesPerBlockExpected);
 
-#ifdef DUB_ENGINE_V2
     juce::Logger::writeToLog("=== ENGINE V2 ACTIF ===");
     facade_.prepare(sampleRate, samplesPerBlockExpected);
     facade_.setBpm(stepSeqPanel_.getBpm());
@@ -2084,7 +1978,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     facade_.startMixThread();
     v2InputScratchL_.assign(static_cast<size_t>(samplesPerBlockExpected), 0.f);
     v2InputScratchR_.assign(static_cast<size_t>(samplesPerBlockExpected), 0.f);
-#endif
+
     serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
 
     juce::Logger::writeToLog(juce::String("Audio prepared: ") + juce::String(sampleRate) +
@@ -2125,7 +2019,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
     // Capture l'entrée dry (EWI/sax) avant que le rendu V2 n'écrase le buffer.
     // Utilisée par facade_.processBlock comme bus d'entrée externe.
-#ifdef DUB_ENGINE_V2
     if (static_cast<int>(v2InputScratchL_.size()) < numSamples)
     {
         v2InputScratchL_.assign(static_cast<size_t>(numSamples), 0.f);
@@ -2138,7 +2031,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                   v2InputScratchR_.begin());
     else
         std::copy(left, left + numSamples, v2InputScratchR_.begin());
-#endif
 
     // Capture beat phase BEFORE step sequencer advances it (used by looper for bar detection)
     const double looperBeatPhase = stepSequencer_.getCurrentPhase();
@@ -2154,9 +2046,9 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         looperEngine_.process(sLw, sRw, sLw, sRw, numSamples, looperBeatPhase);
     }
 
-    // Step sequencer — in V2 mode the facade's sequencer handles audio triggering,
-    // but we still process the V1 sequencer to advance getCurrentStep() for the UI.
-    // No sound from V1 sampler in V2 mode since onFileDropped does not load V1 PCM.
+    // Step sequencer — the V2 facade's sequencer handles audio triggering, but we
+    // still advance the V1 sequencer to keep getCurrentStep() alive for the UI.
+    // No sound comes from the V1 sampler in V2 mode (PCM chargé côté SlotPlayer).
     stepSequencer_.process(numSamples, dspPipeline_.getSampler());
 
     if (numCh >= 2)
@@ -2207,7 +2099,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
             // Gain rider: drive toward targetRms, duck when sampler is loud
             float targetGain = (serumRms > 0.001f) ? targetRms / serumRms : 1.f;
-            const float mixRms = dspPipeline_.getLastRms();
+            const float mixRms = facade_.getMasterRms();
             if (mixRms > 0.08f)
                 targetGain *= std::max(0.5f, 1.f - (mixRms - 0.08f) * 2.5f);
             // Clamp serré : pas de boost gratuit au-dessus de l'unité
@@ -2224,20 +2116,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             serumMixL = sL;
             serumMixR = sR;
             serumMixGain = g;
-
-#ifndef DUB_ENGINE_V2
-            // Passer les buffers Serum dans la pipeline — FX, sidechain, limiter inclus
-            dspPipeline_.setSerumInput(sL, sR, numSamples, g);
-#endif
         }
 
-#ifdef DUB_ENGINE_V2
         facade_.processBlock(left, right, numSamples,
                              v2InputScratchL_.data(), v2InputScratchR_.data(),
                              serumMixL, serumMixR, serumMixGain);
-#else
-        dspPipeline_.processStereo(left, right, numSamples);
-#endif
 
         // Apply master output gain to both channels
         const float outGain = outputGain_.load(std::memory_order_relaxed);
@@ -2270,7 +2153,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     {
         // ── Mono fallback path ────────────────────────────────────────────────
         // Bus Serum (même gain rider que le chemin stéréo) → rendu par le graphe,
-        // qui applique aussi le MasterLimiter en interne. Aucun traitement V1 ici.
+        // qui applique aussi le MasterLimiter en interne.
         const float* serumL = nullptr;
         const float* serumR = nullptr;
         float        serumGain = 0.f;
@@ -2282,28 +2165,9 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             serumGain = serumGainSmooth_.load(std::memory_order_relaxed)
                        * serumUserGain_.load(std::memory_order_relaxed);
         }
-#ifdef DUB_ENGINE_V2
         facade_.processBlock(left, left, numSamples,
                              v2InputScratchL_.data(), v2InputScratchR_.data(),
                              serumL, serumR, serumGain);
-#else
-        dspPipeline_.process(left, numSamples);
-#endif
-
-#ifndef DUB_ENGINE_V2
-        // Mix Serum mono (gain rider déjà calculé sur chemin stéréo)
-        if (serumHost_.isLoaded())
-        {
-            const auto& sb = serumHost_.getOutputBuffer();
-            const float* sL = sb.getReadPointer(0);
-            const float* sR = sb.getReadPointer(1);
-            const float g = serumGainSmooth_.load(std::memory_order_relaxed)
-                           * serumUserGain_.load(std::memory_order_relaxed);
-            for (int i = 0; i < numSamples; ++i)
-                left[i] += (sL[i] + sR[i]) * 0.5f * g;
-        }
-        dspPipeline_.getMasterLimiter().process(left, numSamples);
-#endif
 
         const float outGain = outputGain_.load(std::memory_order_relaxed);
         if (outGain != 1.0f)
@@ -2327,11 +2191,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 void MainComponent::releaseResources()
 {
     serumHost_.setProcessingEnabled(false);
-    dspPipeline_.reset();
-#ifdef DUB_ENGINE_V2
     facade_.stopMixThread();
     facade_.releaseResources();
-#endif
     juce::Logger::writeToLog("Audio resources released.");
 }
 
