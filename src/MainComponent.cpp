@@ -1543,22 +1543,38 @@ void MainComponent::openSampleEditor(int slot)
 
     editor->onPlayRequested = [this, slot]()
     {
+#ifdef DUB_ENGINE_V2
+        facade_.triggerSlot(slot);
+#else
         dspPipeline_.getSampler().trigger(slot);
+#endif
     };
 
     editor->onStopRequested = [this, slot]()
     {
+#ifdef DUB_ENGINE_V2
+        facade_.stopSlot(slot, true);
+#else
         dspPipeline_.getSampler().stop(slot);
+#endif
     };
 
     editor->getPlayheadRatio = [this, slot]() -> float
     {
+#ifdef DUB_ENGINE_V2
+        return facade_.getSlotPlayheadRatio(slot);
+#else
         return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
+#endif
     };
 
     editor->isSlotPlaying = [this, slot]() -> bool
     {
+#ifdef DUB_ENGINE_V2
+        return facade_.isSlotPlaying(slot);
+#else
         return dspPipeline_.getSampler().isPlaying(slot);
+#endif
     };
 
     editor->onClose = [this]() { sampleEditorWindow_.reset(); };
