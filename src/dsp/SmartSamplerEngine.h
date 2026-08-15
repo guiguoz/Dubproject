@@ -1,9 +1,7 @@
 #pragma once
 
-#include "BpmDetector.h"
 #include "MusicContext.h"
 #include "Sampler.h"
-#include "WsolaShifter.h"
 #include "AiContentClassifier.h"
 
 #ifdef SAXFX_HAS_ONNX
@@ -31,16 +29,11 @@ namespace dsp {
 //
 // Two entry points:
 //
-//   processSlotOnLoad(slot, path, ctx)  — called automatically when a slot
-//       file is loaded AND the master context is available.  Runs BPM+key
-//       detection, time-stretch and pitch correction in a per-slot background
-//       thread.
-//
 //   applyMagicMix()  — triggered by ⚡.  Applies gain staging + frequency
 //       balance (EQ by role) across all loaded slots.
 //
-// All heavy work runs in background threads.  Callbacks onSlotProgress /
-// onDone fire on the JUCE message thread.
+// All heavy work runs in background threads.  Callbacks onDone /
+// onTypesDetected fire on the JUCE message thread.
 // ─────────────────────────────────────────────────────────────────────────────
 class SmartSamplerEngine
 {
@@ -77,7 +70,6 @@ public:
     }
 
     // ── Callbacks (message thread) ────────────────────────────────────────────
-    std::function<void(int /*slot*/, float /*progress 0-1*/)> onSlotProgress;
     std::function<void()>                                     onDone;
     std::function<void()>                                     onTypesDetected;
 
@@ -141,36 +133,6 @@ public:
     ~SmartSamplerEngine()
     {
         cancelAndWait();
-        for (int i = 0; i < kSamplerSlots; ++i)
-            cancelOnLoadWorker(i);
-    }
-
-    void setSampleRate(double sr) noexcept { sampleRate_ = sr; }
-
-    /// Toggle AI mix engine on/off (requires SAXFX_HAS_ONNX; no-op otherwise).
-    void setUseAiMix(bool use) noexcept { useAiMix_ = use; }
-    bool getUseAiMix() const noexcept   { return useAiMix_; }
-
-    // ── Cache helpers (public so MainComponent can use them) ──────────────────
-
-    /// Returns the processed WAV cache path for a given original file path.
-    /// Format: {dir}/{name}_saxfx.wav
-    static std::string getCachePath(const std::string& originalPath)
-    {
-        if (originalPath.empty()) return {};
-        juce::File orig(originalPath);
-        return orig.getSiblingFile(orig.getFileNameWithoutExtension() + "_saxfx.wav")
-                   .getFullPathName().toStdString();
-    }
-
-    /// Returns true if a valid (newer than original) processed cache exists.
-    static bool cacheIsValid(const std::string& originalPath)
-    {
-        if (originalPath.empty()) return false;
-        juce::File orig(originalPath);
-        juce::File cache(getCachePath(originalPath));
-        return cache.existsAsFile()
-            && cache.getLastModificationTime() >= orig.getLastModificationTime();
     }
 
     void setMusicContext(MusicContext ctx) noexcept { musicCtx_ = ctx; }
@@ -182,21 +144,6 @@ public:
             originalPcmCache_[static_cast<std::size_t>(slot)] = {};
             filePaths_[static_cast<std::size_t>(slot)] = std::move(path);
         }
-    }
-
-    // ── On-load automatic processing ──────────────────────────────────────────
-
-    /// Called automatically when a slot is loaded and master context is known.
-    /// Cancels any previous on-load worker for this slot then starts a new one.
-    void processSlotOnLoad(int slot, std::string path, MusicContext ctx)
-    {
-        if (slot < 0 || slot >= kSamplerSlots) return;
-        cancelOnLoadWorker(slot);
-        originalPcmCache_[static_cast<std::size_t>(slot)] = {};
-        filePaths_[static_cast<std::size_t>(slot)] = path;
-        onLoadWorkers_[static_cast<std::size_t>(slot)] =
-            std::make_unique<OnLoadWorkerThread>(*this, slot, std::move(path), ctx);
-        onLoadWorkers_[static_cast<std::size_t>(slot)]->startThread();
     }
 
     // ── Magic button action ───────────────────────────────────────────────────
@@ -326,13 +273,6 @@ private:
     static constexpr int kSamplerSlots = 9;   // S1–S8 + Drum loop (slot 8)
 
     // ── Parameters for per-slot DSP ───────────────────────────────────────────
-
-    struct SlotProcessParams
-    {
-        int    targetKey;   // 0=C … 11=B, −1 = unknown
-        float  masterBpm;   // 0 = unknown
-        double sampleRate;
-    };
 
     // ── Spatial decision per slot ─────────────────────────────────────────────
 
@@ -1307,287 +1247,10 @@ private:
             sampler_.reloadSlotData(i, std::move(pcm));
             sampler_.setSlotGain(i, 1.0f);
         }
-        sampler_.clearSidechain();
         for (auto& ms : lastMixState_) ms = {};
     }
 
-    // ── Semitone shift helper ─────────────────────────────────────────────────
-
-    static int computeSemitoneShift(int sourceKey, int targetKey) noexcept
-    {
-        if (sourceKey < 0 || targetKey < 0) return 0;
-        int delta = targetKey - sourceKey;
-        if (delta >  6) delta -= 12;
-        if (delta < -6) delta += 12;
-        return delta;
-    }
-
-    // ── Pitch-shift on raw PCM ────────────────────────────────────────────────
-
-    static std::vector<float> pitchShiftRaw(const std::vector<float>& data,
-                                            float semitones,
-                                            double sampleRate)
-    {
-        if (data.empty() || std::abs(semitones) < 0.25f)
-            return {};
-
-        WsolaShifter shifter;
-        shifter.prepare(sampleRate, 4096);
-        shifter.setShiftSemitones(semitones);
-
-        std::vector<float> output(data.size(), 0.f);
-        constexpr int kBlock = 1024;
-        for (int i = 0; i < static_cast<int>(data.size()); i += kBlock)
-        {
-            const int n = std::min(kBlock, static_cast<int>(data.size()) - i);
-            shifter.process(data.data() + i, output.data() + i, n, 0.f);
-        }
-        return output;
-    }
-
-    // Legacy linear resampler — kept for rollback/traceability
-    static std::vector<float> resample(const std::vector<float>& input, float ratio)
-    {
-        const int inN  = static_cast<int>(input.size());
-        const int outN = static_cast<int>(std::round(static_cast<float>(inN) / ratio));
-        if (outN <= 0 || inN <= 0) return {};
-
-        std::vector<float> output(static_cast<std::size_t>(outN));
-        for (int i = 0; i < outN; ++i)
-        {
-            const float srcPos = static_cast<float>(i) * ratio;
-            const int   idx0   = static_cast<int>(srcPos);
-            const int   idx1   = idx0 + 1;
-            const float frac   = srcPos - static_cast<float>(idx0);
-            const float s0 = (idx0 < inN) ? input[static_cast<std::size_t>(idx0)] : 0.f;
-            const float s1 = (idx1 < inN) ? input[static_cast<std::size_t>(idx1)] : 0.f;
-            output[static_cast<std::size_t>(i)] = s0 + frac * (s1 - s0);
-        }
-        return output;
-    }
-
-    // ── Core per-slot processing (shared by WorkerThread and OnLoadWorkerThread)
-    //
-    // Reads the file at filePath, detects BPM + key, applies time-stretch and
-    // combined pitch correction, then reloads the slot.
-    // Returns true if the slot data was modified.
-    // thread may be nullptr (no early-exit check).
-    // ─────────────────────────────────────────────────────────────────────────
-
-    static bool processSlotData(::dsp::Sampler&       sampler,
-                                int                   slot,
-                                const std::string&    filePath,
-                                const SlotProcessParams& params,
-                                juce::Thread*         thread)
-    {
-        if (filePath.empty()) return false;
-
-        const juce::File file(filePath);
-        if (!file.existsAsFile()) return false;
-
-        juce::AudioFormatManager fmt;
-        fmt.registerBasicFormats();
-
-        std::unique_ptr<juce::AudioFormatReader> reader(fmt.createReaderFor(file));
-        if (!reader) return false;
-
-        const double sr       = reader->sampleRate;
-        const int    nSamples = static_cast<int>(reader->lengthInSamples);
-        if (nSamples <= 0) return false;
-
-        const int numCh = std::max(1, static_cast<int>(reader->numChannels));
-        juce::AudioBuffer<float> buf(numCh, nSamples);
-        reader->read(&buf, 0, nSamples, 0, true, numCh > 1);
-
-        std::vector<float> pcm(nSamples);
-        if (numCh > 1) {
-            const float* left = buf.getReadPointer(0);
-            const float* right = buf.getReadPointer(1);
-            for (int j = 0; j < nSamples; ++j) pcm[j] = (left[j] + right[j]) * 0.5f;
-        } else {
-            std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + nSamples, pcm.begin());
-        }
-
-        // ── Trim leading silence — align first transient to beat 1 ───────────
-        bool modified = (trimLeadingSilence(pcm, sr) > 0);
-
-        const int sourceKey = -1; // key detection removed (EWI replaces sax)
-
-        // ── BPM detection ─────────────────────────────────────────────────────
-        const float slotBpm = BpmDetector::detectOffline(pcm.data(), nSamples, sr);
-
-        // ── Stretch ratio ─────────────────────────────────────────────────────
-        const float masterBpm    = params.masterBpm;
-        const float stretchRatio = (masterBpm > 20.f && slotBpm > 20.f)
-                                   ? masterBpm / slotBpm : 1.f;
-        const bool  doStretch    = (std::abs(stretchRatio - 1.f) >= 0.05f)
-                                   && stretchRatio > 0.33f
-                                   && stretchRatio < 3.f;
-
-        // ── Combined pitch: key correction + resample artifact fix ───────────
-        const int   keyShift        = computeSemitoneShift(sourceKey, params.targetKey);
-        const float stretchPitchFix = doStretch ? -12.f * std::log2(stretchRatio) : 0.f;
-        const float totalSemitones  = static_cast<float>(keyShift) + stretchPitchFix;
-
-        // Pass 1: resample for BPM alignment
-        if (doStretch)
-        {
-            auto stretched = WsolaShifter::resampleHermite(pcm, stretchRatio);
-            if (!stretched.empty()) { pcm = std::move(stretched); modified = true; }
-        }
-        if (thread && thread->threadShouldExit()) return false;
-
-        // Pass 2: combined pitch correction (key + stretch pitch fix)
-        if (std::abs(totalSemitones) >= 0.25f)
-        {
-            auto shifted = pitchShiftRaw(pcm, totalSemitones, params.sampleRate);
-            if (!shifted.empty())
-            {
-                if (thread && thread->threadShouldExit()) return false;
-                pcm = std::move(shifted);
-                modified = true;
-            }
-        }
-
-        // Pass 3: crop / pad to bar boundary for clean looping
-        if (params.masterBpm > 0.f)
-        {
-            const auto sizeBefore = pcm.size();
-            cropToBarBoundary(pcm, params.masterBpm, params.sampleRate);
-            if (pcm.size() != sizeBefore) modified = true;
-        }
-
-        if (modified && !(thread && thread->threadShouldExit()))
-        {
-            // Persist the processed buffer as a WAV cache alongside the original
-            writeCacheWav(filePath, pcm, params.sampleRate);
-
-            sampler.reloadSlotData(slot, std::move(pcm));
-            return true;
-        }
-        return false;
-    }
-
-    // ── Trim leading silence to first transient ───────────────────────────────
-    //
-    // Scans forward in 10 ms frames; removes everything before the first frame
-    // whose RMS exceeds the threshold (~−40 dBFS).  Ensures the sample starts
-    // on its first audible beat rather than on silence or pre-roll noise.
-    //
-    // Returns the number of samples removed (0 = nothing trimmed).
-    // ─────────────────────────────────────────────────────────────────────────
-
-    static int trimLeadingSilence(std::vector<float>& pcm,
-                                  double sampleRate,
-                                  float threshold = 0.01f)
-    {
-        if (pcm.empty()) return 0;
-
-        const int frameSize = std::max(1, static_cast<int>(sampleRate * 0.01));  // 10 ms
-        const int nSamples  = static_cast<int>(pcm.size());
-
-        for (int start = 0; start < nSamples; start += frameSize)
-        {
-            const int end = std::min(start + frameSize, nSamples);
-            float sumSq = 0.f;
-            for (int i = start; i < end; ++i)
-                sumSq += pcm[static_cast<std::size_t>(i)] * pcm[static_cast<std::size_t>(i)];
-            const float rms = std::sqrt(sumSq / static_cast<float>(end - start));
-
-            if (rms >= threshold)
-            {
-                if (start == 0) return 0;  // already starts on a transient
-                pcm.erase(pcm.begin(), pcm.begin() + start);
-                return start;
-            }
-        }
-        return 0;  // all silence — leave unchanged
-    }
-
-    // ── Write processed PCM to WAV cache file ────────────────────────────────
-
-    static void writeCacheWav(const std::string& originalPath,
-                              const std::vector<float>& pcm,
-                              double sampleRate)
-    {
-        if (originalPath.empty() || pcm.empty()) return;
-
-        const std::string cachePath = getCachePath(originalPath);
-        if (cachePath.empty()) return;
-
-        juce::WavAudioFormat wavFmt;
-        juce::File cacheFile(cachePath);
-
-        auto os = cacheFile.createOutputStream();
-        if (!os) return;
-
-        auto writer = std::unique_ptr<juce::AudioFormatWriter>(
-            wavFmt.createWriterFor(os.get(), sampleRate, 1, 16, {}, 0));
-        if (!writer) return;
-        os.release();  // writer now owns the stream
-
-        juce::AudioBuffer<float> buf(1, static_cast<int>(pcm.size()));
-        std::copy(pcm.begin(), pcm.end(), buf.getWritePointer(0));
-        writer->writeFromAudioSampleBuffer(buf, 0, buf.getNumSamples());
-        // writer destructor flushes and closes the stream
-    }
-
-    // ── Crop / pad buffer to nearest bar boundary ────────────────────────────
-    //
-    // After BPM stretch, the buffer length may not be an exact multiple of a
-    // measure (rounding of the BPM or the resample ratio).  This trims or
-    // zero-pads the buffer to the nearest nBars × samplesPerBar length so
-    // that the slot loops cleanly on the beat grid.
-    //
-    //   - Crop  : apply a 20 ms linear fade-out before truncating.
-    //   - Pad   : zero-fill only when the gap is < 5 % of the target length.
-    //   - Guard : do nothing if the difference exceeds half a bar (anomalous BPM).
-    // ─────────────────────────────────────────────────────────────────────────
-
-    static void cropToBarBoundary(std::vector<float>& pcm,
-                                  float masterBpm,
-                                  double sampleRate)
-    {
-        if (masterBpm <= 0.f || pcm.empty()) return;
-
-        const double samplesPerBar =
-            sampleRate * 60.0 / static_cast<double>(masterBpm) * 4.0;  // 4/4
-
-        const int bufLen  = static_cast<int>(pcm.size());
-        const int nBars   = static_cast<int>(
-            std::round(static_cast<double>(bufLen) / samplesPerBar));
-        if (nBars <= 0) return;
-
-        const int targetLen = static_cast<int>(
-            std::round(static_cast<double>(nBars) * samplesPerBar));
-        const int delta     = std::abs(bufLen - targetLen);
-
-        // Skip if the mismatch is too large (BPM detection was likely wrong)
-        if (delta > static_cast<int>(samplesPerBar * 0.5)) return;
-
-        if (bufLen > targetLen)
-        {
-            // Fade out the last 20 ms before cropping
-            const int fadeLen = std::min(
-                static_cast<int>(sampleRate * 0.02),
-                std::min(targetLen / 4, delta + static_cast<int>(sampleRate * 0.02)));
-            const int fadeStart = targetLen - fadeLen;
-            for (int i = 0; i < fadeLen && (fadeStart + i) < bufLen; ++i)
-            {
-                const float t = 1.f - static_cast<float>(i) / static_cast<float>(fadeLen);
-                pcm[static_cast<std::size_t>(fadeStart + i)] *= t;
-            }
-            pcm.resize(static_cast<std::size_t>(targetLen));
-        }
-        else if (bufLen < targetLen)
-        {
-            // Zero-pad only for small gaps (< 5 % of target length)
-            if (static_cast<float>(delta) / static_cast<float>(targetLen) < 0.05f)
-                pcm.resize(static_cast<std::size_t>(targetLen), 0.f);
-        }
-    }
-
-    // ── Magic-button background worker (all slots) ────────────────────────────
+    // ── Thread management ─────────────────────────────────────────────────────
 
     class WorkerThread : public juce::Thread
     {
@@ -1631,32 +1294,6 @@ private:
         bool                revert_;
     };
 
-    // ── On-load background worker (single slot) ───────────────────────────────
-
-    class OnLoadWorkerThread : public juce::Thread
-    {
-    public:
-        OnLoadWorkerThread(SmartSamplerEngine& owner, int slot,
-                           std::string path, MusicContext ctx)
-            : juce::Thread("SmartSamplerOnLoad"),
-              owner_(owner), slot_(slot),
-              path_(std::move(path)), ctx_(ctx)
-        {}
-
-        void run() override
-        {
-            const SlotProcessParams params { ctx_.keyRoot, ctx_.bpm, owner_.sampleRate_ };
-            processSlotData(owner_.sampler_, slot_, path_, params, this);
-            // No progress callback — on-load processing is silent (no UI indicator)
-        }
-
-    private:
-        SmartSamplerEngine& owner_;
-        int                 slot_;
-        std::string         path_;
-        MusicContext        ctx_;
-    };
-
     // ── Thread management ─────────────────────────────────────────────────────
 
     void startWorker(bool revert)
@@ -1672,14 +1309,6 @@ private:
         if (workerThread_ && workerThread_->isThreadRunning())
             workerThread_->stopThread(3000);
         workerThread_.reset();
-    }
-
-    void cancelOnLoadWorker(int slot)
-    {
-        auto& w = onLoadWorkers_[static_cast<std::size_t>(slot)];
-        if (w && w->isThreadRunning())
-            w->stopThread(2000);
-        w.reset();
     }
 
     // ── Members ───────────────────────────────────────────────────────────────
@@ -1705,7 +1334,6 @@ private:
     // ── Serum context (set by GUI thread before startWorker) ──────────────────
     ::dsp::MixFeatures                       serumFeatures_ {};
     bool                                     serumActive_   { false };
-    std::array<std::unique_ptr<OnLoadWorkerThread>, kSamplerSlots> onLoadWorkers_;
 
 #ifdef SAXFX_HAS_ONNX
     std::unique_ptr<AiContentClassifier>     classifier_;

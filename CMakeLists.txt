@@ -82,7 +82,6 @@ add_subdirectory(third_party/signalsmith-stretch signalsmith-stretch-main-build)
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
-    src/dsp/WsolaShifter.cpp
     src/dsp/Sampler.cpp
     src/dsp/DspPipeline.cpp
     src/dsp/LooperEngine.cpp

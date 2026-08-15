@@ -34,7 +34,6 @@ add_executable(SaxFXTests
     test_scene_manager.cpp
     test_p0_load.cpp
     # DSP sources (pure C++, no JUCE)
-    ../src/dsp/WsolaShifter.cpp
     ../src/dsp/Sampler.cpp
     ../src/dsp/PingPongDelay.cpp
     ../src/dsp/DspPipeline.cpp
