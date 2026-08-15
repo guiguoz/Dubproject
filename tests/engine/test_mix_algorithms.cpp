@@ -3,6 +3,7 @@
 #include <cmath>
 #include <vector>
 #include "engine/mix/MixAlgorithms.h"
+#include "engine/mix/MixDecisions.h"
 
 using namespace engine::mix;
 using Catch::Approx;
@@ -169,4 +170,70 @@ TEST_CASE("MIX-7: spatialization rules", "[mix]") {
 
     const auto defaultSpatial = spatialForType(0, MixContentType::KICK);
     CHECK(defaultSpatial.pan == 0.f);
+}
+
+// ─── MIX-8 : densité de scène → scale de gain adaptatif ────────────────
+TEST_CASE("MIX-8: scene density drives gain scale", "[mix]") {
+    SceneSnapshot drop;
+    drop.slotActive.fill(true);
+    drop.activeCount = 8;
+    drop.isDrop      = true;
+    CHECK(densityScale(drop) == Approx(0.95f));
+
+    SceneSnapshot breakdown;
+    breakdown.slotActive.fill(false);
+    breakdown.slotActive[0] = true;
+    breakdown.slotActive[1] = true;
+    breakdown.activeCount = 2;
+    breakdown.isBreakdown = true;
+    CHECK(densityScale(breakdown) == Approx(1.15f));
+
+    SceneSnapshot buildUp;
+    buildUp.slotActive.fill(false);
+    for (int i = 0; i < 4; ++i) buildUp.slotActive[i] = true;
+    buildUp.activeCount = 4;
+    CHECK(densityScale(buildUp) == Approx(1.05f));
+
+    SceneSnapshot sparse;
+    sparse.slotActive.fill(false);
+    sparse.slotActive[0] = true;
+    sparse.activeCount   = 1;
+    CHECK(densityScale(sparse) == Approx(1.10f));
+
+    // Présence de bass : BASS actif → compensé ; absent → non
+    SceneSnapshot withBass;
+    withBass.slotTypes[0] = MixContentType::BASS;
+    withBass.slotActive[0] = true;
+    CHECK(hasActiveBass(withBass));
+    CHECK(!hasActiveBass(sparse));
+}
+
+// ─── MIX-9 : gain calibré + duck Serum ─────────────────────────────────
+TEST_CASE("MIX-9: calibrated gain and serum duck", "[mix]") {
+    // kick, density=1.1, clearance=1, truePeak=0.5 → 0.65*1.1/0.5 = 1.43
+    const float gKick = computeTargetGain(MixContentType::KICK, 1.10f, 1.00f, 0.50f);
+    CHECK(gKick == Approx(1.43f).epsilon(1e-2f));
+
+    // clamp 1.5 : truePeak très faible
+    const float gClamp = computeTargetGain(MixContentType::LOOP, 1.10f, 0.85f, 1e-6f);
+    CHECK(gClamp == Approx(1.5f));
+
+    // PAD co-localisé au spectre Serum + RMS fort → duck significatif
+    const float ducked = serumDuckGain(1.0f, MixContentType::PAD, 800.f, 1000.f, 0.2f);
+    CHECK(ducked < 1.0f);
+    CHECK(ducked >= 0.05f);
+
+    // Types « groove » jamais duckés
+    const float noDuck = serumDuckGain(1.0f, MixContentType::KICK, 800.f, 1000.f, 0.2f);
+    CHECK(noDuck == Approx(1.0f));
+
+    // RMS trop faible → no-op
+    const float quiet = serumDuckGain(1.0f, MixContentType::PAD, 800.f, 1000.f, 0.01f);
+    CHECK(quiet == Approx(1.0f));
+
+    // Type effectif : override prioritaire
+    CHECK(effectiveType(MixContentType::KICK, true, MixContentType::BASS)
+          == MixContentType::BASS);
+    CHECK(effectiveType(MixContentType::KICK, false, MixContentType::BASS)
+          == MixContentType::KICK);
 }
