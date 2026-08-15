@@ -21,8 +21,13 @@ Objets à remplacer via EngineFacade :
 | `serumHost_.*` | bridgé tel quel (JUCE deps — reste dans src/dsp/) |
 
 Décisions M8b :
-- `DUB_ENGINE_V2` flag dans CMakeLists.txt + MainComponent
-- LooperEngine : tous les appels masqués sous `#ifndef DUB_ENGINE_V2`
-- SmartSamplerEngine : importAsync() → ImportPipeline, mix → AutoMixDub
 - SerumHost : reste src/dsp/, `EngineFacade` garde un pointeur injecté
 - `autoMatchSampleAsync` : remplacé par `EngineFacade::importSampleAsync()`
+- LooperEngine : désactivé (§10.4) — UI masquée
+
+M8c :
+- ✔ FAIT (commit `ca7c577`) — flag `DUB_ENGINE_V2` supprimé ; le moteur V2 est
+  le seul chemin de compilation.
+- ⛔ Bloquant : magic mix V1 (`SmartSamplerEngine`) lit le PCM du sampler V1
+  (`getSlotPcmView`) pendant `applyMagicMix()` — portage M9 requis avant la
+  suppression de `src/dsp/`.

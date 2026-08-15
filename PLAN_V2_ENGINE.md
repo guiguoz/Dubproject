@@ -592,7 +592,8 @@ Une fois M8b recetté (l'app tourne intégralement sur la façade) :
 2. Supprimer de MainComponent.* toute la logique métier morte : import/
    autoMatch, transitions/crossfades, timers de mix, gestion des scènes hors
    binding UI. Cible indicative : MainComponent ≤ ~800 lignes de binding pur.
-3. Supprimer le flag `DUB_ENGINE_V2` (le moteur V2 devient le seul chemin).
+3. ✔ FAIT (commit `ca7c577`) — flag `DUB_ENGINE_V2` supprimé (le moteur V2
+   devient le seul chemin de compilation).
 4. Vérifier par grep qu'aucune référence aux classes supprimées ne subsiste
    (Sampler, StepSequencer, SceneManager, DspPipeline, WsolaShifter,
    SmartSamplerEngine, AiMixEngine, BeatClock).
@@ -600,3 +601,13 @@ Une fois M8b recetté (l'app tourne intégralement sur la façade) :
    suppression ne doit rien changer au rendu.
 6. Commit dédié « purge V1 » ; l'ancienne architecture reste consultable
    uniquement via la branche archive-v1.
+
+État M8c (session v2-engine) — purges déjà effectuées : diagnostics temporaires
+(`194a9c1`), preload V1 async (`b2c2ba5`), lectures `isLoaded` → facade
+(`54662b3`), rôle V2 fiable prioritaire (`8b7d6ee`), écritures delay-send /
+sidechain V1 mortes (`aa451df`), flag supprimé (`ca7c577`).
+⛔ BLOQUANT restant : le magic mix V1 (`SmartSamplerEngine`) lit toujours le
+PCM du sampler V1 (`getSlotPcmView`) pour analyser les 8 scènes pendant
+`applyMagicMix()` ; `MainComponent` consomme ses résultats (tags UI, spatial
+viz, `onDone` → `sc.userGains`, bouton ⚡, `aiCloud_`). Tant qu'il n'est pas
+porté dans le moteur V2 (recette M9), `src/dsp/` ne peut pas être supprimé.
