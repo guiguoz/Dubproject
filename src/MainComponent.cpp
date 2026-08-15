@@ -2335,23 +2335,19 @@ void MainComponent::timerCallback()
         }
     }
 
-    // Crossfade entre scènes : interpolation de gains sur ~150ms
-    float serumCrossfadeGain = -1.f;
-    if (sceneManager_.updateCrossfade(33, dspPipeline_.getSampler(), &serumCrossfadeGain))
-        if (serumCrossfadeGain >= 0.f)
-            serumUserGain_.store(serumCrossfadeGain, std::memory_order_relaxed);
-
-    // Appliquer les mutes différés une fois le crossfade terminé
-    if (!sceneManager_.isCrossfadeActive())
+    // Crossfade entre scènes : le moteur V2 gère les fades de slots (GainRamps) ;
+    // ici on n'a plus qu'une mini-rampe Serum (serumUserGain_ lue par le bus V2).
+    if (serumGainRamp_.active)
     {
-        for (int i = 0; i < 9; ++i)
-        {
-            if (pendingMutes_[static_cast<std::size_t>(i)])
-            {
-                dspPipeline_.getSampler().setSlotMuted(i, true);
-                pendingMutes_[static_cast<std::size_t>(i)] = false;
-            }
-        }
+        serumGainRamp_.elapsedMs += 33;
+        const float t = std::clamp(
+            static_cast<float>(serumGainRamp_.elapsedMs)
+            / static_cast<float>(serumGainRamp_.durationMs), 0.f, 1.f);
+        const float g = serumGainRamp_.from
+            + (serumGainRamp_.to - serumGainRamp_.from) * t;
+        serumUserGain_.store(g, std::memory_order_relaxed);
+        if (t >= 1.f)
+            serumGainRamp_.active = false;
     }
 
     // Morphing PingPongDelay entre scènes (4 secondes)
@@ -2384,14 +2380,10 @@ void MainComponent::timerCallback()
         vuDirty_ = true;
     }
 
-    // U3 — Crossfade dirty flag
-    if (sceneManager_.isCrossfadeActive())
-        crossfadeDirty_ = true;
-
-    // U3 — Repaint conditionnel
-    if (vuDirty_ || mixStateDirty_ || crossfadeDirty_)
+    // Repaint conditionnel
+    if (vuDirty_ || mixStateDirty_)
     {
-        vuDirty_ = mixStateDirty_ = crossfadeDirty_ = false;
+        vuDirty_ = mixStateDirty_ = false;
         repaint();
     }
 
@@ -2715,9 +2707,6 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     // BPM is global (master clock) — not overridden by scene data
 
-    // Vider les mutes en attente de la transition précédente
-    pendingMutes_.fill(false);
-
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
 
@@ -2785,9 +2774,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
             samplerEngine_.setSlotFilePath(i, newPath);
         }
 
-        if (!sc.mutes[i])
-            dspPipeline_.getSampler().setSlotMuted(i, false);  // unmute immédiat
-        pendingMutes_[static_cast<std::size_t>(i)] = sc.mutes[i];
+        facade_.setSlotMuted(i, sc.mutes[i]);
         // userGains est le seul contrôle de volume : sc.gains (calibration IA) y est déjà intégré
         // dès qu'onDone tourne (onDone écrit sc.userGains = ms.gain). On ne multiplie plus les deux
         // pour éviter que les gains IA très faibles (hihat 0.09, snare 0.22) n'écrasent le fader.
@@ -2853,66 +2840,21 @@ void MainComponent::applyScene(int idx, int fromIdx)
     if (!stepSequencer_.hasPendingTransition())
         stepSequencer_.prepareStepBuffer(nextStepBuf);
 
-    // Appliquer le gain Serum de la nouvelle scène (crossfade le ramènera depuis serumGainBefore)
+    // Appliquer le gain Serum de la nouvelle scène — petite rampe de 250 ms pour
+    // éviter un saut audible (le crossfade de gains des slots sampler est géré
+    // par le moteur V2 via TransitionEngine/GainRamps ; le bus Serum lui n'est
+    // pas rampe côté moteur, on garde ici une mini-rampe UI sur serumUserGain_).
     const float serumGainTarget = sc.serumGain > 0.f ? sc.serumGain : serumGainBefore;
-    serumUserGain_.store(serumGainTarget, std::memory_order_relaxed);
-
-    // Crossfade pur : ramper les gains depuis l'ancienne scène sans stopAllSlots.
     if (stepSequencer_.isPlaying())
     {
-        std::array<float, 9> targetGains_local {};
-        for (int i = 0; i < 9; ++i)
-            targetGains_local[i] = dspPipeline_.getSampler().getSlotGain(i);
-        // Slots qui vont être mutés : crossfader vers 0 d'abord, mute appliqué après
-        for (int i = 0; i < 9; ++i)
-            if (pendingMutes_[static_cast<std::size_t>(i)])
-                targetGains_local[i] = 0.f;
-        // Reset les slots existants à leur gain de départ pour que le crossfade parte
-        // de la bonne valeur. Slots rythmiques (KICK/SNARE/HAT) : cut net, jamais de fade.
-        // Nouveaux fichiers non-rythmiques : partir de 0 pour un fade-in propre.
-        static constexpr bool kIsRhythm[9] = { false, false, true, true, true, false, false, false, false };
-        for (int i = 0; i < 9; ++i)
-        {
-            if (loadedNewFile[static_cast<std::size_t>(i)] && !kIsRhythm[i])
-                dspPipeline_.getSampler().setSlotGain(i, 0.f);
-            else if (gainsBeforeScene[i] >= 0.001f || targetGains_local[i] < 0.001f)
-                dspPipeline_.getSampler().setSlotGain(i, gainsBeforeScene[i]);
-        }
-        // Remettre Serum au gain de départ pour que le crossfade le ramène au target
         serumUserGain_.store(serumGainBefore, std::memory_order_relaxed);
-        {
-            const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
-            const float fromEnergy = sceneManager_.getSceneEnergy(resolvedFrom);
-            const float toEnergy   = sceneManager_.getSceneEnergy(idx);
-
-            // Nouveaux fichiers non-rythmiques : fade-in depuis silence (startGains=0).
-            // Slots rythmiques (KICK/SNARE/HAT) et slots inchangés : comportement habituel.
-            // Floor –60 dB uniquement pour les profils lents sur slots existants.
-            auto startGains = gainsBeforeScene;
-            for (int i = 0; i < 9; ++i)
-            {
-                if (loadedNewFile[static_cast<std::size_t>(i)] && !kIsRhythm[i])
-                    startGains[i] = 0.f;
-                else if (startGains[i] < 0.001f && targetGains_local[i] > 0.001f)
-                    startGains[i] = targetGains_local[i];
-            }
-            const bool slowProfile = (fromEnergy >= 0.20f && toEnergy < 0.20f)
-                                  || (fromEnergy <  0.20f && toEnergy < 0.20f);
-            if (slowProfile)
-                for (int i = 0; i < 9; ++i)
-                    if (startGains[i] < 0.001f && targetGains_local[i] > 0.f)
-                        startGains[i] = 0.001f;
-
-            sceneManager_.armAdaptiveCrossfade(startGains, targetGains_local,
-                                               fromEnergy, toEnergy,
-                                               serumGainBefore, serumGainTarget);
-            DBG("crossfade: " + juce::String(resolvedFrom) + "->" + juce::String(idx)
-                + " fromE=" + juce::String(fromEnergy, 2)
-                + " toE="   + juce::String(toEnergy,   2)
-                + " serum:" + juce::String(serumGainBefore, 2)
-                + "->"      + juce::String(serumGainTarget, 2));
-            sceneManager_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
-        }
+        serumGainRamp_ = { true, serumGainBefore, serumGainTarget, 0, 250 };
+        const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
+        sceneManager_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
+    }
+    else
+    {
+        serumUserGain_.store(serumGainTarget, std::memory_order_relaxed);
     }
 
     // Restore Serum preset for this scene
@@ -2955,19 +2897,6 @@ void MainComponent::applyScene(int idx, int fromIdx)
             spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
         }
         spatialViz_.setSaxActive(true);
-    }
-
-    // Séquenceur arrêté : pas de crossfade armé → appliquer les mutes directement
-    if (!stepSequencer_.isPlaying())
-    {
-        for (int i = 0; i < 9; ++i)
-        {
-            if (pendingMutes_[static_cast<std::size_t>(i)])
-            {
-                dspPipeline_.getSampler().setSlotMuted(i, true);
-                pendingMutes_[static_cast<std::size_t>(i)] = false;
-            }
-        }
     }
 }
 

@@ -214,8 +214,15 @@ private:
     };
     std::array<PreloadCache, 9> preloadCache_;
     std::atomic<int>            preloadTargetScene_ { -1 };
-    // Mutes en attente d'application après la fin du crossfade de gain
-    std::array<bool, 9>         pendingMutes_ {};
+    // Mini-rampe Serum post-purge (remplace le crossfade V1 qui rampait les gains sampler).
+    struct SerumGainRamp {
+        bool  active     = false;
+        float from       = 1.f;
+        float to         = 1.f;
+        int   elapsedMs  = 0;
+        int   durationMs = 250;
+    };
+    SerumGainRamp serumGainRamp_;
     // Trim appliqué en coordonnées fichier par slot (évite le double-trim en scène identique)
     std::array<int,  9>         appliedTrimStart_ {};
     std::array<int,  9>         appliedTrimEnd_   {};
@@ -261,7 +268,6 @@ private:
     // ── Performance: dirty flags repaint (U3) ────────────────────────────────
     bool vuDirty_        = true;
     bool mixStateDirty_  = true;
-    bool crossfadeDirty_ = false;
 
     // ── Performance: grain noise pre-rendered image (U1) ─────────────────────
     juce::Image grainNoiseImage_;
