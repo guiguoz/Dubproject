@@ -84,6 +84,12 @@ public:
 
     // Snapshot PCM mono du slot (UI waveforms/éditeur) — message thread.
     std::vector<float> getSlotPcmSnapshot(int slot) const noexcept;
+    // SR du PCM chargé (0 si vide) — pour re-trim côté UI.
+    float getSlotPcmSampleRate(int slot) const noexcept;
+
+    // Recharge le PCM d'un slot à partir d'un buffer mono (re-trim éditeur).
+    // Conserve le mode courant ; arrête les voix. Message thread uniquement.
+    void reloadSlotPcm(int slot, std::vector<float> mono, float sampleRate) noexcept;
 
     // Diagnostic temporaire (à retirer en M8c)
     float    getSlotSemitones(int slot)  const noexcept;

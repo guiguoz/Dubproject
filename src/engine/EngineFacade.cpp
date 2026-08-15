@@ -484,6 +484,26 @@ std::vector<float> EngineFacade::getSlotPcmSnapshot(int slot) const noexcept
     return graph_.slotPlayer().getPcmSnapshot(slot);
 }
 
+float EngineFacade::getSlotPcmSampleRate(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0.f;
+    return graph_.slotPlayer().getPcmSampleRate(slot);
+}
+
+void EngineFacade::reloadSlotPcm(int slot, std::vector<float> mono, float sampleRate) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    if (mono.empty()) return;
+    const PlayMode mode = graph_.slotPlayer().getMode(slot);
+    SlotPcm pcm;
+    pcm.numChannels = 1;
+    pcm.numFrames   = static_cast<int>(mono.size());
+    pcm.sampleRate  = sampleRate;
+    pcm.data        = std::move(mono);
+    graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
+    slotLoaded_[slot].store(true, std::memory_order_release);
+}
+
 float EngineFacade::getSlotSemitones(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;

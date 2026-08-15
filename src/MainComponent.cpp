@@ -915,8 +915,10 @@ std::vector<float> MainComponent::computeEnvelope(const std::vector<float>& pcm,
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::openSampleEditor(int slot)
 {
-    auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
+    auto pcm = facade_.getSlotPcmSnapshot(slot);
     if (pcm.empty()) return;
+    const float slotSr = facade_.getSlotPcmSampleRate(slot);
+    const float sr     = (slotSr > 0.f) ? slotSr : static_cast<float>(currentSampleRate_);
 
     // Arrêter le morceau pour permettre d'écouter le sample en isolation
     if (stepSequencer_.isPlaying())
@@ -938,18 +940,19 @@ void MainComponent::openSampleEditor(int slot)
         sceneManager_.scene(sceneManager_.currentIdx())
                      .trimStart[static_cast<std::size_t>(slot)];
 
-    auto* editor = new ui::SampleEditorComponent(std::move(pcm), currentSampleRate_);
+    auto* editor = new ui::SampleEditorComponent(std::move(pcm), sr);
 
     editor->onApply = [this, slot, fileTrimOffset](int startSample, int endSample)
     {
-        auto snapshot = dspPipeline_.getSampler().getSlotPcmSnapshot(slot);
+        auto snapshot = facade_.getSlotPcmSnapshot(slot);
         const int total = static_cast<int>(snapshot.size());
         const int s = juce::jlimit(0, total - 1, startSample);
         const int e = juce::jlimit(s + 1, total,  endSample);
         std::vector<float> trimmed(snapshot.begin() + s, snapshot.begin() + e);
+        const float sr = facade_.getSlotPcmSampleRate(slot);
 
-        // Appliquer au slot courant
-        dspPipeline_.getSampler().reloadSlotData(slot, trimmed);
+        // Appliquer au slot courant (moteur V2 : reload PCM trimé)
+        facade_.reloadSlotPcm(slot, trimmed, sr);
 
         // Convertir en coordonnées fichier : ajouter l'offset du snapshot courant.
         // Sans cette correction, chaque réouverture de projet décale le trim du
@@ -966,10 +969,22 @@ void MainComponent::openSampleEditor(int slot)
                     sceneManager_.scene(si).trimEnd  [t] = fileE;
                 }
 
+        // Config V2 : re-sync la configuration scène (trim stocké dans SceneStore).
+#ifdef DUB_ENGINE_V2
+        for (int si = 0; si < kMaxScenes; ++si)
+            for (int t = 0; t < 9; ++t)
+                if (sceneManager_.scene(si).filePaths[t] == filePath)
+                {
+                    // Mettre à jour le SceneStore pour que les futures transitions
+                    // voient le bon trim (Replace) et le re-trigger cohérent.
+                    syncV2Scene(si);
+                }
+#endif
+
         // Appliquer aux autres slots actuellement chargés avec le même fichier
         for (int t = 0; t < 9; ++t)
             if (t != slot && stepSeqPanel_.getSlotFilePath(t) == filePath)
-                dspPipeline_.getSampler().reloadSlotData(t, trimmed);
+                facade_.reloadSlotPcm(t, trimmed, sr);
     };
 
     editor->onPlayRequested = [this, slot]()
@@ -2511,13 +2526,13 @@ void MainComponent::reApplyCurrentSceneTrims()
         const int ts = sc.trimStart[sidx];
         const int te = sc.trimEnd  [sidx];
         if (ts <= 0 && te < 0) continue;
-        auto snap = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
+        auto snap = facade_.getSlotPcmSnapshot(i);
         const int total = static_cast<int>(snap.size());
         if (total <= 0) continue;
         const int s2 = juce::jlimit(0, total - 1, ts);
         const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
         std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
-        dspPipeline_.getSampler().reloadSlotData(i, std::move(trimmed));
+        facade_.reloadSlotPcm(i, std::move(trimmed), facade_.getSlotPcmSampleRate(i));
     }
 }
 
@@ -2653,6 +2668,8 @@ void MainComponent::syncV2Scene(int idx) noexcept
         cfg.gain = (ug > 0.001f) ? ug : (sg > 0.001f ? sg : 1.0f);
 
         cfg.semitones  = sc.pitchOffsets[static_cast<std::size_t>(i)];
+        cfg.trimStart  = sc.trimStart   [static_cast<std::size_t>(i)];
+        cfg.trimEnd    = sc.trimEnd     [static_cast<std::size_t>(i)];
         cfg.role       = v2RoleForSlot(i);
 
         // Actif si fichier + au moins un step dans le pattern.

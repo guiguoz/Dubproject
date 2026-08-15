@@ -25,6 +25,11 @@ std::vector<float> SlotPlayer::getPcmSnapshot(int slot) const noexcept {
     return mono;
 }
 
+float SlotPlayer::getPcmSampleRate(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 0.f;
+    return pcm_[slot].sampleRate;
+}
+
 // ─── prepareStretchers ───────────────────────────────────────────────────────
 
 void SlotPlayer::prepareStretchers(int channels, float sampleRate) noexcept {

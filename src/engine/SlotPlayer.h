@@ -81,6 +81,9 @@ public:
     // Vide si le slot n'est pas chargé ou n'a aucun PCM.
     std::vector<float> getPcmSnapshot(int slot) const noexcept;
 
+    // SR du PCM chargé (0 si slot vide) — pour re-trim côté UI.
+    float getPcmSampleRate(int slot) const noexcept;
+
     // ── Setters message thread (atomiques, RT-safe) ───────────────────────────
     void setGain(int slot, float g) noexcept {
         if (slot >= 0 && slot < kSlots)
