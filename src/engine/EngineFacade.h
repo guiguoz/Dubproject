@@ -82,6 +82,9 @@ public:
     bool  isSlotPlaying(int slot)        const noexcept;
     bool  isSlotLoaded(int slot)         const noexcept;
 
+    // Snapshot PCM mono du slot (UI waveforms/éditeur) — message thread.
+    std::vector<float> getSlotPcmSnapshot(int slot) const noexcept;
+
     // Diagnostic temporaire (à retirer en M8c)
     float    getSlotSemitones(int slot)  const noexcept;
     float    getSlotTimeRatio(int slot)  const noexcept;

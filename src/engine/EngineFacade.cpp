@@ -478,6 +478,12 @@ void EngineFacade::flipPatternBuffer() noexcept
 
 // ─── Diagnostics slot (temporaire — M8c) ─────────────────────────────────────
 
+std::vector<float> EngineFacade::getSlotPcmSnapshot(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    return graph_.slotPlayer().getPcmSnapshot(slot);
+}
+
 float EngineFacade::getSlotSemitones(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;

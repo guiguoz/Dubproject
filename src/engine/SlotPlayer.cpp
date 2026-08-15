@@ -5,6 +5,26 @@
 
 namespace engine {
 
+// ─── getPcmSnapshot ──────────────────────────────────────────────────────────
+
+std::vector<float> SlotPlayer::getPcmSnapshot(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return {};
+    const auto& pcm = pcm_[static_cast<std::size_t>(slot)];
+    if (pcm.data.empty()) return {};
+
+    if (pcm.numChannels == 1)
+        return pcm.data;   // déjà mono — copie
+
+    // Downmix stéréo entrelacé → mono
+    std::vector<float> mono(static_cast<std::size_t>(pcm.numFrames));
+    for (int i = 0; i < pcm.numFrames; ++i) {
+        mono[static_cast<std::size_t>(i)] =
+            (pcm.data[static_cast<std::size_t>(i * 2)] +
+             pcm.data[static_cast<std::size_t>(i * 2 + 1)]) * 0.5f;
+    }
+    return mono;
+}
+
 // ─── prepareStretchers ───────────────────────────────────────────────────────
 
 void SlotPlayer::prepareStretchers(int channels, float sampleRate) noexcept {
