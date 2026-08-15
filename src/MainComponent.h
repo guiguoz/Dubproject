@@ -90,6 +90,8 @@ private:
     // Sync des scènes V1 → SceneStore V2 (gains, semitones, rôles, actifs) puis
     // application au graphe (setCurrentScene) pour les scènes/transitions.
     engine::SlotRole v2RoleForSlot(int slot) const noexcept;
+    // Rôle effectif d'un slot : analysé V2 si fiable, sinon détection V1.
+    engine::SlotRole activeRoleForSlot(int slot) const noexcept;
     void             syncV2Scene(int idx) noexcept;
     void             syncV2Scenes() noexcept;
 #endif
@@ -235,10 +237,6 @@ private:
     bool panicArmed_       { false };
     uint8_t panicCC_       { 64 };   // CC#64 (sustain) par défaut — FCB1010 footswitch
 
-    // ── Sidechain config cache (évite rebuilds répétés dans onTypesDetected) ───
-    int                lastSidechainKick_    { -1 };
-    std::array<int, 4> lastSidechainTargets_ {};
-    int                lastSidechainCount_   { 0 };
     std::atomic<float> currentRmsLevel_{0.0f};
     std::atomic<float> currentOutputRmsLevel_{0.0f};
     std::atomic<float> outputGain_     {1.0f};

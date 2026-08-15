@@ -62,6 +62,10 @@ public:
     float currentGainLinear(int slot)  const noexcept { return currentGainLin_[slot]; }
     float currentDelaySend(int slot)   const noexcept { return currentDelaySend_[slot]; }
 
+    // Règles statiques par rôle (pures — utilisées aussi pour la sérialisation V1).
+    static float roleTargetDb(SlotRole role) noexcept;
+    static float roleStaticDelaySend(SlotRole role) noexcept;
+
 private:
     float sampleRate_ = 44100.f;
 
@@ -90,9 +94,6 @@ private:
     // Accumulateur RMS (rolling)
     float rmsAccum_ [kMaxSlots] = {};
     int   rmsSamples_[kMaxSlots] = {};
-
-    static float roleTargetDb(SlotRole role) noexcept;
-    static float roleStaticDelaySend(SlotRole role) noexcept;
 
     // Coefficients d'un pole-1 LP
     static float tauToCoef(float tauMs, float sr) noexcept {

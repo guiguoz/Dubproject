@@ -379,64 +379,6 @@ MainComponent::MainComponent()
         spatialViz_.setSaxActive(true);
         stepSeqPanel_.setMagicActive(true);
 
-        // Delay send per slot — KICK et BASS exclus, le reste nourrit le bus delay
-        using CT = ::dsp::SmartSamplerEngine::ContentType;
-        auto& sampler = dspPipeline_.getSampler();
-        for (int i = 0; i < 9; ++i)
-        {
-            float send = 0.f;
-            if (!facade_.slotFilePath(i).empty())
-            {
-                switch (samplerEngine_.getDetectedType(i))
-                {
-                    case CT::KICK:  send = 0.00f; break;
-                    case CT::BASS:  send = 0.00f; break;
-                    case CT::SNARE: send = 0.15f; break;
-                    case CT::HIHAT: send = 0.25f; break;
-                    case CT::PERC:  send = 0.30f; break;
-                    case CT::LOOP:  send = 0.40f; break;
-                    case CT::SYNTH: send = 0.65f; break;
-                    case CT::PAD:   send = 0.80f; break;
-                    default:        send = 0.40f; break;
-                }
-            }
-            sampler.setSlotDelaySend(i, send);
-        }
-
-        // Sidechain automatique : kick → bass, pad, synth, loop (max 4 paires, priorité dub).
-        // Guard : ne rebuild que si le kick slot ou les cibles ont changé.
-        {
-            auto& sc2 = dspPipeline_.getSampler();
-            static constexpr CT kPriority[] = { CT::BASS, CT::PAD, CT::SYNTH, CT::LOOP };
-
-            int kickSlot = -1;
-            for (int i = 0; i < 9; ++i)
-                if (samplerEngine_.getDetectedType(i) == CT::KICK && !facade_.slotFilePath(i).empty())
-                    { kickSlot = i; break; }
-
-            std::array<int, 4> newTargets {};
-            int nTargets = 0;
-            if (kickSlot >= 0)
-                for (CT prio : kPriority)
-                    for (int i = 0; i < 9 && nTargets < 4; ++i)
-                        if (i != kickSlot
-                            && samplerEngine_.getDetectedType(i) == prio
-                            && !facade_.slotFilePath(i).empty())
-                            newTargets[nTargets++] = i;
-
-            if (kickSlot != lastSidechainKick_
-                || nTargets != lastSidechainCount_
-                || newTargets != lastSidechainTargets_)
-            {
-                sc2.clearSidechain();
-                for (int i = 0; i < nTargets; ++i)
-                    sc2.setSidechainPair(kickSlot, newTargets[i]);
-                lastSidechainKick_    = kickSlot;
-                lastSidechainTargets_ = newTargets;
-                lastSidechainCount_   = nTargets;
-            }
-        }
-
         // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
         // En V2, l'AutoMix (thread de mix 50 ms) pilote le bus delay depuis les rôles.
 
@@ -2548,7 +2490,10 @@ void MainComponent::captureCurrentScene()
             sc.gains    [idx]  = ms.active ? ms.gain : 1.0f;
         }
         // sc.userGains[idx] is maintained live by onVolumeChanged — do not overwrite here
-        sc.delaySends   [idx]  = sampler.getSlotDelaySend(i);
+        // delaySends (persisté .saxfx) : dérivé du rôle effectif V2 (les sends
+        // temps réel sont pilotés par l'AutoMix V2 depuis les rôles).
+        sc.delaySends[idx] =
+            engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(i));
         sc.trackBarCounts[idx] = stepSequencer_.getTrackBarCount(i);
         for (int s = 0; s < numSteps; ++s)
             sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
@@ -2581,6 +2526,14 @@ void MainComponent::captureCurrentScene()
 // ═══ Moteur V2 : sync des scènes (V1 SceneManager → engine::SceneStore) ═══════
 
 #ifdef DUB_ENGINE_V2
+engine::SlotRole MainComponent::activeRoleForSlot(int slot) const noexcept
+{
+    // Rôle analysé V2 (ImportPipeline, confiance ONNX ≥ 0.75) si fiable ;
+    // sinon détection V1 via samplerEngine_.getDetectedType.
+    return facade_.isSlotRoleReliable(slot) ? facade_.slotRole(slot)
+                                            : v2RoleForSlot(slot);
+}
+
 engine::SlotRole MainComponent::v2RoleForSlot(int slot) const noexcept
 {
     using CT = ::dsp::SmartSamplerEngine::ContentType;
@@ -2629,8 +2582,7 @@ void MainComponent::syncV2Scene(int idx) noexcept
         // Role : priorité au rôle analysé par le moteur V2 quand fiable
         // (ImportPipeline, confiance ONNX ≥ 0.75) ; sinon détection V1 via
         // samplerEngine_.getDetectedType (→ position par défaut en dernier ressort).
-        cfg.role = facade_.isSlotRoleReliable(i) ? facade_.slotRole(i)
-                                                 : v2RoleForSlot(i);
+        cfg.role       = activeRoleForSlot(i);
 
         // Actif si fichier + au moins un step dans le pattern.
         bool hasSteps = false;
@@ -2745,7 +2697,6 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 ? gainsBeforeScene[static_cast<std::size_t>(i)]
                 : 0.5f);
         dspPipeline_.getSampler().setSlotGain     (i, targetGain);
-        dspPipeline_.getSampler().setSlotDelaySend(i, sc.delaySends[sidx]);
         stepSeqPanel_.setSlotMuted (i, sc.mutes[i]);
         stepSeqPanel_.setSlotVolume(i, sc.userGains[sidx]);
         for (int s = 0; s < numSteps; ++s)
