@@ -611,3 +611,29 @@ PCM du sampler V1 (`getSlotPcmView`) pour analyser les 8 scènes pendant
 `applyMagicMix()` ; `MainComponent` consomme ses résultats (tags UI, spatial
 viz, `onDone` → `sc.userGains`, bouton ⚡, `aiCloud_`). Tant qu'il n'est pas
 porté dans le moteur V2 (recette M9), `src/dsp/` ne peut pas être supprimé.
+
+### État M9 (portage magic mix → engine/mix/)
+Le portage suit un découpage en étapes (voir rapport M9) ; chaque étape garde le
+nulltest bit-exact (`0xcaf8b973768f00cc` / `0xfb07aa3caefb2d3c`) :
+
+- **Étape 1 ✔ `34265e4`** — `src/engine/mix/MixAlgorithms.h` (header-only, sans
+  JUCE) : helpers DSP purs portés (classification, biquads, EQ par rôle,
+  unmasking, sub ownership, kick/bass, dub echo, gain/spatial, true-peak).
+  Tests MIX-1..7.
+- **Étape 10 ✔ `266ec31`** — purge du sous-système on-load mort de
+  `SmartSamplerEngine` (`processSlotOnLoad`, `OnLoadWorkerThread`,
+  `processSlotData`, BPM/stretch/pitch/cache, `onSlotProgress`,
+  `setSampleRate`, setters AI, sidechain V1). −378 lignes ; `WsolaShifter`
+  découplé des cibles SaxFXLive/SaxFXTests.
+- **Étape 2 ✔ `5935b9e`** — `src/engine/mix/MixDecisions.h` : décisions purs
+  (densité de scène → scale, présence bass, type effectif, gain calibré,
+  duck Serum). Tests MIX-8/9.
+- **Étape 3 ✔ `585da34`** — `src/engine/mix/MixEngine.h` :
+  `processHeuristic()` = branche heuristique complète de `applyNeutronMix`
+  (phases 1/2/4) sans side-effects sur un player. Tests MIX-10/11.
+- **Étape 6 ⏳** — spatialisation runtime V2 (pan + Haas dans `SlotPlayer` /
+  `AudioGraph`) : seul point audible, à valider par NULL1.
+
+À venir : étapes 4 (chemin IA ONNX), 5 (revert), 6 (spatialisation runtime),
+7 (état mix persistant), 8 (façade + worker), 9 (ré-câblage MainComponent),
+11 (réduction surface V1), 12 (purge finale + recette M9).
