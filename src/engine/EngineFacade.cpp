@@ -12,7 +12,6 @@ EngineFacade::EngineFacade()
     for (int s = 0; s < kMaxSlots; ++s) {
         trackBars_[s]              = 1;
         writePatterns_[s].numSteps = 16;
-        diagLastRole_[s].store(-1, std::memory_order_relaxed);
     }
 }
 
@@ -78,21 +77,6 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     // l'invariant est ainsi centralisé et ne dépend plus de la taille du bloc.
     const int64_t blockStart = ts.blockStart;
 
-    // ── Diagnostic régularité transport (M8c à retirer) ─────────────────────
-    {
-        const int64_t prev  = diagPrevBlockStart_.load(std::memory_order_relaxed);
-        const int32_t prevN = diagPrevBlockN_.load(std::memory_order_relaxed);
-        if (ts.playing && prev >= 0 && prevN > 0) {
-            const int64_t expected = prev + static_cast<int64_t>(prevN);
-            const int64_t delta    = blockStart - expected;   // 0 si consécutif
-            diagBlockDeltaErr_.store(delta, std::memory_order_relaxed);
-        } else {
-            diagBlockDeltaErr_.store(0, std::memory_order_relaxed);
-        }
-        diagPrevBlockStart_.store(blockStart, std::memory_order_relaxed);
-        diagPrevBlockN_.store(numSamples, std::memory_order_relaxed);
-    }
-
     // ── Drainer les events UI (triggers/stops de pads live) ──────────────────
     {
         const uint16_t trigs = pendingTriggers_.exchange(0, std::memory_order_acq_rel);
@@ -129,24 +113,6 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     // ── Flush delay si stop demandé depuis message thread ────────────────────
     if (delayResetPending_.exchange(false, std::memory_order_acq_rel))
         graph_.delay().reset();
-
-    // ── Log triggers kick pour diagnostic (M8c à retirer) ────────────────────
-    for (int i = 0; i < evCount; ++i) {
-        if (evBuf[i].type != EventType::Trigger) continue;
-        if (static_cast<int>(evBuf[i].slot) != 2) continue;   // slot 2 = KCK
-        const bool fromSeq = (evBuf[i].time != kNextBlock);
-        const int64_t pos        = fromSeq ? evBuf[i].time : ts.samplePos;
-        const int64_t globalStep = stepIndexAt(ts, pos);
-        // Step de pattern (modulo) — c'est ce que le séquenceur a réellement matché
-        const TrackPattern* pat  = graph_.sequencer().patterns().readBuffer(2);
-        const int32_t nSteps     = (pat->numSteps > 0) ? pat->numSteps : 1;
-        const int32_t patStep    = static_cast<int32_t>(globalStep % static_cast<int64_t>(nSteps));
-        const int idx = diagTrigHead_.load(std::memory_order_relaxed) % kTrigDiag;
-        diagTrigPos_ [idx].store(pos,     std::memory_order_relaxed);
-        diagTrigStep_[idx].store(patStep, std::memory_order_relaxed);
-        diagTrigSrc_ [idx].store(fromSeq, std::memory_order_relaxed);
-        diagTrigHead_.fetch_add(1, std::memory_order_release);
-    }
 
     // ── AudioGraph ────────────────────────────────────────────────────────────
     std::fill(interleavedOut_.begin(),
@@ -296,9 +262,6 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         const float projectBpm = getBpm();
         AnalysisResult result = importPipeline_.analyzeSync(
             mono.data(), numFrames, 1, sr, projectBpm);
-
-        diagLastRole_[slot].store(static_cast<int32_t>(result.role),
-                                  std::memory_order_relaxed);
 
         // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
         graph_.setSlotRole(slot, mapRole(result.role));
@@ -513,7 +476,7 @@ void EngineFacade::flipPatternBuffer() noexcept
     graph_.sequencer().patterns().flip();
 }
 
-// ─── Diagnostics slot (temporaire — M8c) ─────────────────────────────────────
+// ─── Édition sample (waveforms, éditeur de trim) ──────────────────────────────
 
 std::vector<float> EngineFacade::getSlotPcmSnapshot(int slot) const noexcept
 {
@@ -541,89 +504,6 @@ void EngineFacade::reloadSlotPcm(int slot, std::vector<float> mono, float sample
     slotLoaded_[slot].store(true, std::memory_order_release);
 }
 
-float EngineFacade::getSlotSemitones(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return 0.f;
-    return graph_.slotPlayer().getSemitones(slot);
-}
-
-float EngineFacade::getSlotTimeRatio(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return 1.f;
-    return graph_.slotPlayer().getTimeRatio(slot);
-}
-
-PlayMode EngineFacade::getSlotMode(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return PlayMode::Free;
-    return graph_.slotPlayer().getMode(slot);
-}
-
-int EngineFacade::getSlotLoopBeats(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return 0;
-    return graph_.slotPlayer().getLoopBeats(slot);
-}
-
-std::string EngineFacade::getTriggerDiag(int slot) const noexcept
-{
-    (void)slot;  // actuellement hardcodé sur slot 2 (KCK)
-    const int head = diagTrigHead_.load(std::memory_order_acquire);
-    if (head == 0) return "no trig";
-
-    // Lire les 4 derniers (ou moins si < 4 triggers au total)
-    const int count = std::min(head, kTrigDiag);
-    const int start = head - count;
-    std::string s;
-    for (int i = start; i < head; ++i) {
-        const int idx = i % kTrigDiag;
-        const int64_t pos  = diagTrigPos_ [idx].load(std::memory_order_relaxed);
-        const int32_t step = diagTrigStep_[idx].load(std::memory_order_relaxed);
-        const bool    src  = diagTrigSrc_ [idx].load(std::memory_order_relaxed);
-        s += (src ? "S" : "U");   // S=Sequencer, U=UI/pad
-        s += std::to_string(step);
-        s += "@";
-        s += std::to_string(pos);
-        s += " ";
-    }
-    return s;
-}
-
-std::string EngineFacade::getPatternDiag(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return "slot invalide";
-
-    // Lecture writePatterns_ (source de vérité message thread)
-    const TrackPattern& wp = writePatterns_[slot];
-    std::string wStr = "write:[";
-    bool first = true;
-    const int wn = std::min(wp.numSteps, kMaxSteps);
-    for (int s = 0; s < wn; ++s) {
-        if (wp.steps[s]) {
-            if (!first) wStr += ",";
-            wStr += std::to_string(s);
-            first = false;
-        }
-    }
-    wStr += "]";
-
-    // Lecture du buffer actif (ce que le thread audio lit réellement)
-    const TrackPattern* ap = graph_.sequencer().patterns().readBuffer(slot);
-    std::string aStr = "active:[";
-    first = true;
-    const int an = std::min(ap->numSteps, kMaxSteps);
-    for (int s = 0; s < an; ++s) {
-        if (ap->steps[s]) {
-            if (!first) aStr += ",";
-            aStr += std::to_string(s);
-            first = false;
-        }
-    }
-    aStr += "]";
-
-    return wStr + " " + aStr + " nSteps=" + std::to_string(wp.numSteps);
-}
-
 // ─── Scènes ───────────────────────────────────────────────────────────────────
 
 void EngineFacade::setCurrentScene(int idx) noexcept
@@ -638,56 +518,6 @@ void EngineFacade::requestTransition(int toScene) noexcept
     if (toScene < 0 || toScene >= kMaxScenes) return;
     transition_.requestTransition(currentScene_, toScene,
                                   sceneStore_, transport_.state());
-}
-
-std::string EngineFacade::getVoiceDiag(int slot) const noexcept
-{
-    if (slot < 0 || slot >= kMaxSlots) return "inv";
-    const auto& sp       = graph_.slotPlayer();
-    const PlayMode mode  = sp.getMode(slot);
-    const float srRatio  = sp.diagSrRatio(slot);
-    const auto d         = sp.getVoiceDiagInfo(slot);
-
-    const char* mStr = (mode == PlayMode::OneShot) ? "1S"
-                     : (mode == PlayMode::Free)     ? "FR" : "LS";
-
-    // Rôle détecté par l'analyse (SlotRoleV2 as int)
-    static const char* const kRoleNames[] = {
-        "Kick","Snare","HiHat","Bass","Melodic","Pad","Perc","Fx","Loop","Unk"
-    };
-    const int32_t roleIdx = diagLastRole_[slot].load(std::memory_order_relaxed);
-    const char* roleStr = (roleIdx >= 0 && roleIdx < 9) ? kRoleNames[roleIdx] : "?";
-
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), "%s role=%s sr=%.3f nF=%d", mStr, roleStr, srRatio, d.numFrames);
-    std::string s = buf;
-    for (int v = 0; v < 2; ++v) {
-        s += " v";
-        s += static_cast<char>('0' + v);
-        s += '[';
-        if (!d.active[v]) {
-            s += "off";
-        } else {
-            std::snprintf(buf, sizeof(buf), "r=%lld%s g=%.2f",
-                static_cast<long long>(d.readPos[v]),
-                d.fadingOut[v] ? "F" : "",
-                static_cast<double>(d.fadeGain[v]));
-            s += buf;
-        }
-        s += ']';
-    }
-    return s;
-}
-
-std::string EngineFacade::getTransportDiag() const noexcept
-{
-    char buf[64];
-    const int64_t bs  = diagPrevBlockStart_.load(std::memory_order_relaxed);
-    const int32_t n   = diagPrevBlockN_.load(std::memory_order_relaxed);
-    const int64_t err = diagBlockDeltaErr_.load(std::memory_order_relaxed);
-    std::snprintf(buf, sizeof(buf), "bs=%lld n=%d Δ=%lld",
-        static_cast<long long>(bs), n, static_cast<long long>(err));
-    return buf;
 }
 
 void EngineFacade::applySceneInternal(int idx) noexcept

@@ -483,25 +483,4 @@ void SlotPlayer::processBlock(const TransportState& ts,
     }
 }
 
-// ─── Diagnostic voix (message thread) ────────────────────────────────────────
-
-SlotPlayer::VoiceDiagInfo SlotPlayer::getVoiceDiagInfo(int slot) const noexcept {
-    VoiceDiagInfo d{};
-    if (slot < 0 || slot >= kSlots) return d;
-    for (int v = 0; v < 2; ++v) {
-        d.active[v]    = voices_[slot][v].active;
-        d.fadingOut[v] = voices_[slot][v].fadingOut;
-        d.readPos[v]   = voices_[slot][v].readPos;
-        d.fadeGain[v]  = voices_[slot][v].fadeGain;
-    }
-    d.numFrames = pcm_[slot].numFrames;
-    return d;
-}
-
-float SlotPlayer::diagSrRatio(int slot) const noexcept {
-    if (slot < 0 || slot >= kSlots || sampleRate_ <= 0.f) return 1.f;
-    const float sr = pcm_[slot].sampleRate;
-    return (sr > 0.f) ? sr / sampleRate_ : 1.f;
-}
-
 } // namespace engine

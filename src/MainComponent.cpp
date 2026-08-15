@@ -262,20 +262,6 @@ MainComponent::MainComponent()
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_.setSlotLoaded(s, true);
                 stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
-                const float st    = facade_.getSlotSemitones(s);
-                const float ratio = facade_.getSlotTimeRatio(s);
-                const int   lbts  = facade_.getSlotLoopBeats(s);
-                const auto  mode  = facade_.getSlotMode(s);
-                const char* modeStr = (mode == engine::PlayMode::LoopSync) ? "SYNC"
-                                    : (mode == engine::PlayMode::Free)     ? "FREE" : "1SHT";
-                const juce::String info =
-                    "sl" + juce::String(s) +
-                    " st=" + juce::String(st, 2) +
-                    " ratio=" + juce::String(ratio, 3) +
-                    " beats=" + juce::String(lbts) +
-                    " " + modeStr;
-                if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
-                    dw->setName("SaxFX [V2] | " + info);
             });
         });
     };
@@ -1276,20 +1262,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_.setSlotLoaded(s, true);
                     stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
-                    const float st    = facade_.getSlotSemitones(s);
-                    const float ratio = facade_.getSlotTimeRatio(s);
-                    const int   lbts  = facade_.getSlotLoopBeats(s);
-                    const auto  mode  = facade_.getSlotMode(s);
-                    const char* modeStr = (mode == engine::PlayMode::LoopSync) ? "SYNC"
-                                        : (mode == engine::PlayMode::Free)     ? "FREE" : "1SHT";
-                    const juce::String info =
-                        "sl" + juce::String(s) +
-                        " st=" + juce::String(st, 2) +
-                        " ratio=" + juce::String(ratio, 3) +
-                        " beats=" + juce::String(lbts) +
-                        " " + modeStr;
-                    if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
-                        dw->setName("SaxFX [V2] | " + info);
                 });
             });
 
@@ -1503,7 +1475,6 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
 
     stepSequencer_.prepare(sampleRate);
 
-    juce::Logger::writeToLog("=== ENGINE V2 ACTIF ===");
     facade_.prepare(sampleRate, samplesPerBlockExpected);
     facade_.setBpm(stepSeqPanel_.getBpm());
     facade_.setSerumHost(&serumHost_);
@@ -2956,7 +2927,6 @@ void MainComponent::navigateScene(int delta)
     // P0.3 — bloquer si une transition quantisée est déjà en cours
     if (stepSequencer_.hasPendingTransition())
     {
-        DBG("navigateScene: transition already pending, ignoring.");
         return;
     }
 

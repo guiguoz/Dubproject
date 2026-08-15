@@ -102,25 +102,6 @@ public:
     // Conserve le mode courant ; arrête les voix. Message thread uniquement.
     void reloadSlotPcm(int slot, std::vector<float> mono, float sampleRate) noexcept;
 
-    // Diagnostic temporaire (à retirer en M8c)
-    float    getSlotSemitones(int slot)  const noexcept;
-    float    getSlotTimeRatio(int slot)  const noexcept;
-    PlayMode getSlotMode(int slot)       const noexcept;
-    int      getSlotLoopBeats(int slot)  const noexcept;
-
-    // Retourne "write:[0,4] active:[0,4] nSteps=16" pour un slot donné.
-    std::string getPatternDiag(int slot) const noexcept;
-
-    // Retourne les derniers triggers reçus sur un slot (thread audio → message thread).
-    // Format : "step=X pos=Y src=[seq|UI] | ..."
-    std::string getTriggerDiag(int slot) const noexcept;
-
-    // Retourne "1S/FR/LS sr=0.919 v0[r=N] v1[off]" pour un slot donné.
-    std::string getVoiceDiag(int slot) const noexcept;
-
-    // Retourne "bs=N n=M Δ=0" — régularité du transport entre blocs.
-    std::string getTransportDiag() const noexcept;
-
     // ── Séquenceur (patterns) ──────────────────────────────────────────────────
     void setStep(int track, int step, bool active) noexcept;
     bool getStep(int track, int step) const noexcept;
@@ -201,23 +182,6 @@ private:
 
     // Compteur de blocs audio (incrémenté en tête de processBlock).
     std::atomic<int64_t>  audioBlockCounter_{0};
-
-    // ── Diagnostic de régularité du transport (M8c à retirer) ────────────────
-    std::atomic<int64_t> diagPrevBlockStart_{-1};  // blockStart du bloc précédent
-    std::atomic<int32_t> diagPrevBlockN_{0};        // numSamples du bloc précédent
-    std::atomic<int64_t> diagBlockDeltaErr_{0};     // blockStart - expected (≠0 = anomalie)
-
-    // ── Rôle détecté par l'analyse (écrit dans importSampleAsync) ────────────
-    std::atomic<int32_t> diagLastRole_[kMaxSlots];  // SlotRoleV2 as int, -1 = jamais importé
-
-    // ── Buffer circulaire de diagnostic trigger (audio thread → message thread) ──
-    // Écrit depuis le thread audio avec relaxed, lu depuis timerCallback.
-    // Pas de garantie stricte sur la cohérence inter-champs — usage diagnostic uniquement.
-    static constexpr int kTrigDiag = 8;
-    std::atomic<int64_t> diagTrigPos_ [kTrigDiag] {};   // position transport au trigger
-    std::atomic<int32_t> diagTrigStep_[kTrigDiag] {};   // index de step calculé
-    std::atomic<bool>    diagTrigSrc_ [kTrigDiag] {};   // true=séquenceur, false=UI/pad
-    std::atomic<int>     diagTrigHead_{0};               // prochain index d'écriture (modulo kTrigDiag)
 
     // Buffer entrelacé pré-alloué (évite toute allocation en audio callback)
     std::vector<float> interleavedOut_;
