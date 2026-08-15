@@ -199,21 +199,6 @@ private:
     int                     presetNameTick_ { 0 };
 
     //==========================================================================
-    // Background task management
-    //==========================================================================
-    std::atomic<bool>                               shutdownFlag_{ false };
-    std::atomic<int>                                projectGen_{ 0 };
-    std::vector<std::future<void>>                  backgroundTasks_;
-
-    // ── Loader thread persistant (étape 5 SceneManager) ──────────────────────
-    struct PreloadCache {
-        std::string        path;
-        std::vector<float> pcm;
-        double             sampleRate { 44100.0 };
-        std::atomic<bool>  ready      { false };
-    };
-    std::array<PreloadCache, 9> preloadCache_;
-    std::atomic<int>            preloadTargetScene_ { -1 };
     // Mini-rampe Serum post-purge (remplace le crossfade V1 qui rampait les gains sampler).
     struct SerumGainRamp {
         bool  active     = false;
@@ -226,7 +211,6 @@ private:
     // Trim appliqué en coordonnées fichier par slot (évite le double-trim en scène identique)
     std::array<int,  9>         appliedTrimStart_ {};
     std::array<int,  9>         appliedTrimEnd_   {};
-    void preloadSceneAsync(int targetScene);
 
     //==========================================================================
     // Clipboard

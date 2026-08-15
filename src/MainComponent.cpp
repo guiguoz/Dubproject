@@ -785,17 +785,6 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
-    // Signal background workers to abort as soon as possible
-    shutdownFlag_.store(true, std::memory_order_release);
-
-    // Wait for all pending background tasks (max ~5 s to avoid hanging)
-    for (auto& f : backgroundTasks_)
-    {
-        if (f.valid())
-            f.wait();
-    }
-    backgroundTasks_.clear();
-
     // Restore default look and feel and release SAX-OS look
     setLookAndFeel(nullptr);
     saxOsLookAndFeel_.reset();
@@ -1237,10 +1226,6 @@ void MainComponent::doAutosave()
 
 void MainComponent::applyProjectData(const project::ProjectData& data)
 {
-    // Invalidate all in-flight async callbacks from the previous project.
-    projectGen_.fetch_add(1, std::memory_order_release);
-    preloadTargetScene_.store(-1, std::memory_order_relaxed);
-
     // Restore BPM
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
     stepSequencer_.setBpm(bpm);
@@ -2722,29 +2707,12 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
         if (!newPath.empty() && newPath != currentPath)
         {
-            auto& cache = preloadCache_[static_cast<std::size_t>(i)];
-            if (cache.ready.load(std::memory_order_acquire) && cache.path == newPath)
-            {
-                // Cache hit : PCM déjà décodé hors message thread → chargement direct.
-                {
-                    auto& sampler = dspPipeline_.getSampler();
-                    sampler.loadSample(i, cache.pcm.data(),
-                                       static_cast<int>(cache.pcm.size()), cache.sampleRate);
-                    sampler.setSlotOneShot(i, true);
-                    sampler.setSlotLoop(i, i == 0); // MST=true, perc=false
-                    stepSeqPanel_.setSlotLoaded(i, true);
-                    {
-                        auto pcm = sampler.getSlotPcmSnapshot(i);
-                        stepSeqPanel_.setSlotWaveform(i, computeEnvelope(pcm));
-                    }
-                }
-                cache.ready.store(false, std::memory_order_relaxed);
-            }
-            else
-            {
-                // Cache miss (preload non terminé ou non lancé) : chargement synchrone
-                loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
-            }
+            // Nouveau fichier pour ce slot : chargement synchrone direct.
+            // Le sampler V1 n'est plus audible (chemin V2 exclusif) mais reste
+            // alimenté pour l'IA V1 (détection de rôles / spaceviz depuis
+            // getSlotPcmView). Le V2, lui, est servi par facade_.importSampleAsync
+            // (async) — voir l'alignement en fin de boucle.
+            loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
             loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_.setSlotFilePath(i, newPath);
             samplerEngine_.setSlotFilePath(i, newPath);
@@ -2963,103 +2931,10 @@ void MainComponent::navigateScene(int delta)
         stepSequencer_.prepareStepBuffer(nextBuf);
     }
 
-    preloadSceneAsync(target);
     sceneManager_.setPendingScene(target);
     sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
-}
-
-void MainComponent::preloadSceneAsync(int targetScene)
-{
-    // Purger les futures déjà terminées avant d'en ajouter de nouvelles
-    backgroundTasks_.erase(
-        std::remove_if(backgroundTasks_.begin(), backgroundTasks_.end(),
-            [](const std::future<void>& f) {
-                return f.valid() &&
-                       f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-            }),
-        backgroundTasks_.end());
-
-    preloadTargetScene_.store(targetScene, std::memory_order_relaxed);
-    for (auto& c : preloadCache_)
-        c.ready.store(false, std::memory_order_relaxed);
-
-    const auto& sc = sceneManager_.scene(targetScene);
-
-    for (int slot = 0; slot < 9; ++slot)
-    {
-        const std::string& newPath = sc.filePaths[static_cast<std::size_t>(slot)];
-        const std::string  curPath = stepSeqPanel_.getSlotFilePath(slot);
-
-        if (newPath.empty() || newPath == curPath)
-            continue;
-
-        const int   trimStart      = sc.trimStart    [static_cast<std::size_t>(slot)];
-        const int   trimEnd        = sc.trimEnd      [static_cast<std::size_t>(slot)];
-        const float pitchOff       = sc.pitchOffsets [static_cast<std::size_t>(slot)];
-        const int   capturedSlot   = slot;
-        const int   capturedTarget = targetScene;
-
-        backgroundTasks_.push_back(std::async(std::launch::async,
-            [this, capturedSlot, capturedTarget, newPath, trimStart, trimEnd, pitchOff]()
-            {
-                if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
-                    return;
-
-                juce::AudioFormatManager fmt;
-                fmt.registerBasicFormats();
-                std::unique_ptr<juce::AudioFormatReader> reader(
-                    fmt.createReaderFor(juce::File { juce::String(newPath) }));
-                if (!reader) return;
-
-                if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
-                    return;
-
-                const int numSamples = static_cast<int>(reader->lengthInSamples);
-                if (numSamples <= 0) return;
-                const int numCh = std::max(1, static_cast<int>(reader->numChannels));
-                juce::AudioBuffer<float> buf(numCh, numSamples);
-                reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
-
-                const int start = juce::jlimit(0, numSamples - 1, trimStart);
-                const int end   = (trimEnd >= 0) ? juce::jlimit(start + 1, numSamples, trimEnd)
-                                                 : numSamples;
-                std::vector<float> pcm(static_cast<std::size_t>(end - start));
-                if (numCh > 1) {
-                    const float* L = buf.getReadPointer(0);
-                    const float* R = buf.getReadPointer(1);
-                    for (int i = 0; i < end - start; ++i)
-                        pcm[i] = (L[start + i] + R[start + i]) * 0.5f;
-                } else {
-                    std::copy(buf.getReadPointer(0) + start,
-                              buf.getReadPointer(0) + end, pcm.begin());
-                }
-
-                if (std::abs(pitchOff) > 0.25f)
-                {
-                    ::dsp::WsolaShifter ws;
-                    ws.prepare(reader->sampleRate, 1024);
-                    ws.setShiftSemitones(pitchOff);
-                    std::vector<float> shifted(pcm.size(), 0.f);
-                    constexpr int kBlock = 1024;
-                    for (int i = 0; i < static_cast<int>(pcm.size()); i += kBlock)
-                    {
-                        if (preloadTargetScene_.load(std::memory_order_relaxed) != capturedTarget)
-                            return;
-                        const int n = std::min(kBlock, static_cast<int>(pcm.size()) - i);
-                        ws.process(pcm.data() + i, shifted.data() + i, n, 0.f);
-                    }
-                    pcm = std::move(shifted);
-                }
-
-                auto& cache      = preloadCache_[static_cast<std::size_t>(capturedSlot)];
-                cache.path       = newPath;
-                cache.sampleRate = reader->sampleRate;
-                cache.pcm        = std::move(pcm);
-                cache.ready.store(true, std::memory_order_release);
-            }));
-    }
 }
 
 void MainComponent::resetCurrentScene()
