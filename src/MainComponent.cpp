@@ -452,16 +452,6 @@ MainComponent::MainComponent()
 
         // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
         // En V2, l'AutoMix (thread de mix 50 ms) pilote le bus delay depuis les rôles.
-#ifndef DUB_ENGINE_V2
-        auto& dd = dspPipeline_.getDubDelay();
-        dd.setEnabled(true);
-        dd.setSend   (0.25f);
-        dd.setWet    (0.30f);
-        dd.setFeedback(0.50f);
-        dd.setTone   (0.55f);
-        dd.setDrive  (0.15f);
-        dd.setDiv    (1);   // Quarter note par défaut
-#endif
 
         // Sync visuel du bouton ON (pas obligatoire mais cohérent)
         juce::MessageManager::callAsync([this]
@@ -579,17 +569,14 @@ MainComponent::MainComponent()
         stepSequencer_.setTrackBarCount(slot, cb.barCount);
         stepSeqPanel_.setTrackStepCount(slot, cb.barCount * 16);
         const int numSteps = cb.barCount * 16;
+        facade_.setTrackBarCount(slot, cb.barCount);
         for (int s = 0; s < numSteps; ++s)
         {
             stepSequencer_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
             stepSeqPanel_.setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
-        }
-#ifdef DUB_ENGINE_V2
-        facade_.setTrackBarCount(slot, cb.barCount);
-        for (int s = 0; s < numSteps; ++s)
             facade_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
+        }
         facade_.flipPatternBuffer();
-#endif
 
         // Gain + mute
         dspPipeline_.getSampler().setSlotGain(slot, cb.gain);
@@ -986,38 +973,22 @@ void MainComponent::openSampleEditor(int slot)
 
     editor->onPlayRequested = [this, slot]()
     {
-#ifdef DUB_ENGINE_V2
         facade_.triggerSlot(slot);
-#else
-        dspPipeline_.getSampler().trigger(slot);
-#endif
     };
 
     editor->onStopRequested = [this, slot]()
     {
-#ifdef DUB_ENGINE_V2
         facade_.stopSlot(slot, true);
-#else
-        dspPipeline_.getSampler().stop(slot);
-#endif
     };
 
     editor->getPlayheadRatio = [this, slot]() -> float
     {
-#ifdef DUB_ENGINE_V2
         return facade_.getSlotPlayheadRatio(slot);
-#else
-        return dspPipeline_.getSampler().getSlotPlayheadRatio(slot);
-#endif
     };
 
     editor->isSlotPlaying = [this, slot]() -> bool
     {
-#ifdef DUB_ENGINE_V2
         return facade_.isSlotPlaying(slot);
-#else
-        return dspPipeline_.getSampler().isPlaying(slot);
-#endif
     };
 
     editor->onClose = [this]() { sampleEditorWindow_.reset(); };
@@ -1419,10 +1390,8 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         applyScene(sceneManager_.currentIdx());
         updateSceneLabel();
 
-#ifdef DUB_ENGINE_V2
         // Seed toutes les scènes V1 → SceneStore moteur (pour transitions/scènes).
         syncV2Scenes();
-#endif
     }
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
@@ -1436,7 +1405,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         dubDelayDriveSlider_.setValue      (static_cast<double>(data.dubDelayDrive),     juce::dontSendNotification);
         dubDelayDivCombo_   .setSelectedId (data.dubDelayDiv + 1,                        juce::dontSendNotification);
 
-#ifdef DUB_ENGINE_V2
         facade_.delay().setEnabled (data.dubDelayEnabled);
         facade_.delay().setSend    (data.dubDelaySend);
         facade_.delay().setWet     (data.dubDelayWet);
@@ -1444,16 +1412,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         facade_.delay().setTone    (data.dubDelayTone);
         facade_.delay().setDrive   (data.dubDelayDrive);
         facade_.delay().setDiv     (data.dubDelayDiv);
-#else
-        auto& dd = dspPipeline_.getDubDelay();
-        dd.setEnabled (data.dubDelayEnabled);
-        dd.setSend    (data.dubDelaySend);
-        dd.setWet     (data.dubDelayWet);
-        dd.setFeedback(data.dubDelayFeedback);
-        dd.setTone    (data.dubDelayTone);
-        dd.setDrive   (data.dubDelayDrive);
-        dd.setDiv     (data.dubDelayDiv);
-#endif
     }
 
     // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
@@ -2483,27 +2441,15 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
         break;
     case MT::DubDelaySend:
         dubDelaySendSlider_.setValue(v, juce::dontSendNotification);
-#ifdef DUB_ENGINE_V2
         facade_.delay().setSend(v);
-#else
-        dspPipeline_.getDubDelay().setSend(v);
-#endif
         break;
     case MT::DubDelayWet:
         dubDelayWetSlider_.setValue(v, juce::dontSendNotification);
-#ifdef DUB_ENGINE_V2
         facade_.delay().setWet(v);
-#else
-        dspPipeline_.getDubDelay().setWet(v);
-#endif
         break;
     case MT::DubDelayFeedback:
         dubDelayFeedbackSlider_.setValue(v * 0.95f, juce::dontSendNotification);
-#ifdef DUB_ENGINE_V2
         facade_.delay().setFeedback(v * 0.95f);
-#else
-        dspPipeline_.getDubDelay().setFeedback(v * 0.95f);
-#endif
         break;
     case MT::SerumGain:
         serumUserGain_.store(v, std::memory_order_relaxed);
@@ -2512,11 +2458,7 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
     case MT::Slot4Gain: case MT::Slot5Gain: case MT::Slot6Gain: case MT::Slot7Gain:
     {
         const int slot = static_cast<int>(t) - static_cast<int>(MT::Slot0Gain);
-#ifdef DUB_ENGINE_V2
         facade_.setSlotGain(slot, v);
-#else
-        dspPipeline_.getSampler().setSlotGain(slot, v);
-#endif
         break;
     }
     default: break;
@@ -3062,9 +3004,7 @@ void MainComponent::navigateScene(int delta)
 
     // Moteur V2 : armer la transition vers la cible. Le diff est calculé depuis
     // la scène courante du moteur (mise à jour par applyScene / setCurrentScene).
-#ifdef DUB_ENGINE_V2
     facade_.requestTransition(target);
-#endif
 
     // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
     // pour que la détection de fin de cycle soit stable dans le thread audio.
@@ -3198,14 +3138,10 @@ void MainComponent::resetCurrentScene()
         {
             stepSequencer_.setStep(i, s, false);
             stepSeqPanel_.setStepState(i, s, false);
-#ifdef DUB_ENGINE_V2
             facade_.setStep(i, s, false);
-#endif
         }
     }
-#ifdef DUB_ENGINE_V2
     facade_.flipPatternBuffer();
-#endif
     sceneManager_.scene(sceneManager_.currentIdx()).used = false;
 }
 
@@ -3219,14 +3155,10 @@ void MainComponent::resetCurrentSceneFull()
         {
             stepSequencer_.setStep(i, s, false);
             stepSeqPanel_.setStepState(i, s, false);
-#ifdef DUB_ENGINE_V2
             facade_.setStep(i, s, false);
-#endif
         }
     }
-#ifdef DUB_ENGINE_V2
     facade_.flipPatternBuffer();
-#endif
     // Unload all samples
     auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 9; ++i)
@@ -3274,11 +3206,7 @@ void MainComponent::applyDubDelayMorph(float t)
 {
     const auto& from = sceneManager_.getScene(sceneManager_.getMorphFromScene());
     const auto& to   = sceneManager_.getScene(sceneManager_.getMorphToScene());
-#ifdef DUB_ENGINE_V2
     auto& delay = facade_.delay();
-#else
-    auto& delay = dspPipeline_.getDubDelay();
-#endif
     const auto lerp  = [](float a, float b, float x) { return a + (b - a) * x; };
     delay.setFeedback(lerp(from.dubDelayFeedback, to.dubDelayFeedback, t));
     delay.setWet     (lerp(from.dubDelayWet,      to.dubDelayWet,      t));
