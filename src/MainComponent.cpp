@@ -1,8 +1,6 @@
 #include "MainComponent.h"
 
-#include "dsp/BpmDetector.h"
 #include "dsp/FeatureExtractor.h"
-#include "dsp/KeyDetector.h"
 
 #include <cmath>
 #include <future>
@@ -140,7 +138,6 @@ MainComponent::MainComponent()
             looperEngine_.setBpm(bpm);
             stepSeqPanel_.setBpm(bpm);
             updateSidebarBpm(bpm);
-            bpmRestrechCountdown_ = 12;  // A2: 12 × 33 ms ≈ 400 ms debounce
         }
         else
         {
@@ -888,364 +885,6 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// autoMatchSampleAsync — BPM + key detection, time-stretch + pitch-shift, then
-// reload into Sampler.
-//
-// Thread safety:
-//   - Raw sample loaded immediately on the GUI thread (playable at once).
-//   - Background worker: std::async (stored in backgroundTasks_).
-//   - processingSlot_[slot] prevents overlapping jobs on the same slot.
-//   - shutdownFlag_ checked periodically; lambda exits cleanly on destruction.
-// ─────────────────────────────────────────────────────────────────────────────
-void MainComponent::autoMatchSampleAsync(int slot, std::vector<float> raw, double sr)
-{
-    // Load the raw sample immediately — slot is playable right away
-    {
-        auto& sampler = dspPipeline_.getSampler();
-        sampler.loadSample(slot, raw.data(), static_cast<int>(raw.size()), sr);
-        sampler.setSlotOneShot(slot, true);
-        stepSeqPanel_.setSlotLoaded(slot, true);
-        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(raw));
-
-        // A3: save original (pre-stretch) PCM for future BPM re-match and transpose.
-        sampler.saveOriginalPcm(slot, raw.data(), static_cast<int>(raw.size()), sr);
-    }
-
-    // Slot 0 is the reference master — never auto-shift it
-    if (slot == 0)
-    {
-        dspPipeline_.getSampler().setSlotLoop(0, true); // MST est toujours un loop
-        return;
-    }
-
-    // Only one background job per slot at a time
-    if (slot < 0 || slot >= static_cast<int>(processingSlot_.size()))
-        return;
-    bool expected = false;
-    if (!processingSlot_[static_cast<std::size_t>(slot)].compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel))
-        return;  // job already running for this slot
-
-    // Prune completed futures to avoid unbounded growth
-    backgroundTasks_.erase(
-        std::remove_if(backgroundTasks_.begin(), backgroundTasks_.end(),
-            [](const std::future<void>& f) {
-                return f.valid() &&
-                       f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-            }),
-        backgroundTasks_.end());
-
-    // Snapshot project SR on GUI thread before handing off (Réserve #2)
-    const double snapProjectSr = currentSampleRate_;
-
-    // Capture pitch offset before background hand-off (GUI thread only)
-    const float capturedPitchOffset =
-        sceneManager_.scene(sceneManager_.currentIdx())
-                     .pitchOffsets[static_cast<std::size_t>(slot)];
-
-    // Save raw copy for potential BPM-retry (Réserve #3)
-    rawPcmForRetry_[static_cast<std::size_t>(slot)] = raw;
-    rawSrForRetry_ [static_cast<std::size_t>(slot)] = sr;
-
-    const int capturedGen = projectGen_.load(std::memory_order_acquire);
-
-    backgroundTasks_.push_back(
-        std::async(std::launch::async,
-            [this, slot, raw = std::move(raw), sr, snapProjectSr,
-             capturedPitchOffset, capturedGen]() mutable
-            {
-                // RAII guard: clear processingSlot on exit
-                struct SlotGuard {
-                    std::atomic<bool>& flag;
-                    ~SlotGuard() { flag.store(false, std::memory_order_release); }
-                } guard{ processingSlot_[static_cast<std::size_t>(slot)] };
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // ── Réserve #2 : SR normalisation ────────────────────────────────
-                // If the file SR differs from the project SR, resample the raw PCM
-                // so that all analysis and processing runs at the project rate.
-                // NOTE: no intermediate callAsync here — a second reloadSlotData would
-                // race with any voice still reading the first background buffer.
-                // The SR-corrected version is pushed in a single reload at each exit.
-                bool srNormalized = false;
-                if (snapProjectSr > 0.0 && std::abs(sr - snapProjectSr) > 1.0)
-                {
-                    const float srRatio = static_cast<float>(sr / snapProjectSr);
-                    auto resampled = ::dsp::WsolaShifter::resampleLinear(raw, srRatio);
-                    if (!resampled.empty())
-                    {
-                        raw = std::move(resampled);
-                        sr  = snapProjectSr;
-                        srNormalized = true;
-                    }
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // 1. Skip pitch/tempo correction for pure percussion
-                auto features = ::dsp::FeatureExtractor::extract(raw, sr);
-                const bool isPercussive =
-                    (features.contentType == ::dsp::ContentCategory::KICK  ||
-                     features.contentType == ::dsp::ContentCategory::SNARE ||
-                     features.contentType == ::dsp::ContentCategory::HIHAT ||
-                     features.contentType == ::dsp::ContentCategory::PERC);
-                if (isPercussive)
-                {
-                    if (srNormalized)
-                        juce::MessageManager::callAsync(
-                            [this, slot, fix = std::move(raw), capturedGen]() mutable {
-                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
-                                dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
-                                dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
-                            });
-                    return;
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // C2: key detection (offline, non-percussive slots only).
-                const auto keyResult = ::dsp::KeyDetector::detect(
-                    raw.data(), static_cast<int>(raw.size()), sr);
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // 2. BPM detection with confidence (3-method fallback)
-                ::dsp::BpmDetector::BpmDetectionResult bpmResult;
-                if (overrideBpm_ > 0.f)
-                {
-                    // Manual BPM from popup override (Réserve #3)
-                    bpmResult.bpm        = overrideBpm_;
-                    bpmResult.confidence = 1.0f;
-                    overrideBpm_ = 0.f;  // consume it
-                }
-                else
-                {
-                    bpmResult = ::dsp::BpmDetector::detectOfflineRobust(
-                        raw.data(), static_cast<int>(raw.size()), sr);
-                }
-
-                // Snapshot project BPM (atomic read from BPM detector)
-                const float masterBpm = dspPipeline_.getBpmDetector().getBpm();
-
-                // ── Réserve #3 : low-confidence popup ────────────────────────────
-                if (bpmResult.confidence < 0.5f &&
-                    bpmResult.bpm >= ::dsp::BpmDetector::kMinBpm)
-                {
-                    const float detected = bpmResult.bpm;
-                    juce::MessageManager::callAsync(
-                        [this, slot, detected, capturedGen]() {
-                            if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
-                            showBpmConfidencePopup(slot, detected);
-                        });
-                    return;  // async processing will restart if user confirms
-                }
-
-                float stretchRatio      = 1.f;
-                float pitchFixSemitones = 0.f;
-                bool  doStretch         = false;
-
-                if (bpmResult.confidence > 0.5f &&
-                    bpmResult.bpm >= ::dsp::BpmDetector::kMinBpm &&
-                    bpmResult.bpm <= ::dsp::BpmDetector::kMaxBpm &&
-                    masterBpm    >= ::dsp::BpmDetector::kMinBpm)
-                {
-                    stretchRatio = masterBpm / bpmResult.bpm;
-                    doStretch    = (std::abs(stretchRatio - 1.f) >= 0.05f) &&
-                                   stretchRatio > 0.33f && stretchRatio < 3.f;
-                    if (doStretch)
-                        pitchFixSemitones = -12.f * std::log2(stretchRatio);
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                const float keyShiftSemitones = capturedPitchOffset; // v21 manual pitch offset
-
-                // totalSemitones: key correction + pre-compensation for the pitch
-                // drop that Hermite resample will introduce in Pass 2.
-                // pitchFix = -12*log2(stretchRatio)  →  cancelled by resample.
-                const float totalSemitones = keyShiftSemitones + pitchFixSemitones;
-                const bool  doShift        = std::abs(totalSemitones) > 0.25f;
-
-                if (!doStretch && !doShift)
-                {
-                    static constexpr bool kSSL[9] = { true, true, false, false, false, true, true, false, true };
-                    if (srNormalized)
-                        juce::MessageManager::callAsync(
-                            [this, slot, fix = std::move(raw),
-                             bpm       = bpmResult.bpm,
-                             conf      = bpmResult.confidence,
-                             masterBpm, keyResult,
-                             capturedGen]() mutable {
-                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
-                                auto env = computeEnvelope(fix);
-                                dspPipeline_.getSampler().reloadSlotData(slot, std::move(fix));
-                                dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
-                                dspPipeline_.getSampler().setSlotLoop(slot, kSSL[slot]);
-                                dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
-                                dspPipeline_.getSampler().schedulePhaseReset(slot);
-                                stepSeqPanel_.setSlotBpm(slot, bpm, conf);
-                                stepSeqPanel_.setSlotWaveform(slot, std::move(env));
-                                updateSlotKeyBadge(slot, keyResult);
-                                applyKeyMatchIfNeeded(slot, keyResult);
-                            });
-                    else
-                        // Aucun rechargement nécessaire — raw PCM déjà actif — mais loop doit être armé
-                        juce::MessageManager::callAsync(
-                            [this, slot, masterBpm, keyResult, capturedGen]() {
-                                if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
-                                static constexpr bool kSSL2[9] = { true, true, false, false, false, true, true, false, true };
-                                dspPipeline_.getSampler().setSlotLoop(slot, kSSL2[slot]);
-                                dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
-                                dspPipeline_.getSampler().schedulePhaseReset(slot);
-                                updateSlotKeyBadge(slot, keyResult);
-                                applyKeyMatchIfNeeded(slot, keyResult);
-                            });
-                    return;
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // ── Pitch-first dual-pass ─────────────────────────────────────────
-                // Pass 1: WSOLA pitch shift on the pristine (or SR-normalised) signal.
-                //   totalSemitones includes pitchFix to pre-compensate for Pass 2.
-                std::vector<float> processed = raw;
-                if (doShift)
-                {
-                    std::vector<float> shifted(processed.size(), 0.f);
-                    ::dsp::WsolaShifter ws;
-                    ws.prepare(sr, 1024);
-                    ws.setShiftSemitones(totalSemitones);
-                    constexpr int kBlock = 1024;
-                    for (int i = 0; i < static_cast<int>(processed.size()); i += kBlock)
-                    {
-                        if (shutdownFlag_.load(std::memory_order_acquire)) return;
-                        const int n = std::min(kBlock,
-                                               static_cast<int>(processed.size()) - i);
-                        ws.process(processed.data() + i, shifted.data() + i, n, 0.f);
-                    }
-                    processed = std::move(shifted);
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // Pass 2: Hermite resample for tempo alignment.
-                //   Also lowers pitch by -pitchFix semitones — exactly cancelled by Pass 1.
-                if (doStretch)
-                {
-                    auto stretched = ::dsp::WsolaShifter::resampleHermite(processed,
-                                                                            stretchRatio);
-                    if (!stretched.empty()) processed = std::move(stretched);
-                }
-
-                if (shutdownFlag_.load(std::memory_order_acquire)) return;
-
-                // 6. Reload on the GUI thread.
-                //    Capture bpm/confidence as individual floats (Réserve #1 —
-                //    avoids dangling reference to stack-local bpmResult struct).
-                juce::MessageManager::callAsync(
-                    [this, slot,
-                     processed  = std::move(processed),
-                     bpm        = bpmResult.bpm,
-                     confidence = bpmResult.confidence,
-                     masterBpm, keyResult,
-                     capturedGen]() mutable {
-                        if (projectGen_.load(std::memory_order_relaxed) != capturedGen) return;
-                        auto envelope = computeEnvelope(processed);
-                        dspPipeline_.getSampler().reloadSlotData(slot, std::move(processed));
-                        dspPipeline_.getSampler().setSlotTransposeSemitones(slot, 0.f);
-                        static constexpr bool kSSL[9] = { true, true, false, false, false, true, true, false, true };
-                        dspPipeline_.getSampler().setSlotLoop(slot, kSSL[slot]);
-                        dspPipeline_.getSampler().setSlotStretchedBpm(slot, masterBpm);
-                        dspPipeline_.getSampler().schedulePhaseReset(slot);
-                        stepSeqPanel_.setSlotBpm(slot, bpm, confidence);
-                        stepSeqPanel_.setSlotWaveform(slot, std::move(envelope));
-                        updateSlotKeyBadge(slot, keyResult);
-                        applyKeyMatchIfNeeded(slot, keyResult);
-                    });
-            }));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// showBpmConfidencePopup — shown when detectOfflineRobust confidence < 0.5.
-// Lets the user confirm the detected BPM or enter one manually.
-// Called on the GUI thread via MessageManager::callAsync.
-// ─────────────────────────────────────────────────────────────────────────────
-void MainComponent::showBpmConfidencePopup(int slot, float detectedBpm)
-{
-    const juce::String msg =
-        "BPM detected: " + juce::String(juce::roundToInt(detectedBpm)) +
-        "\n(low confidence — may be inaccurate for melodic/ambient samples)\n\n"
-        "What would you like to do?";
-
-    juce::AlertWindow::showAsync(
-        juce::MessageBoxOptions{}
-            .withTitle("BPM Uncertain")
-            .withMessage(msg)
-            .withButton("Use " + juce::String(juce::roundToInt(detectedBpm)) + " BPM")
-            .withButton("Enter Manually")
-            .withButton("Cancel"),
-        [this, slot, detectedBpm](int result)
-        {
-            const auto idx = static_cast<std::size_t>(slot);
-            if (result == 1)  // "Use detected BPM"
-            {
-#ifndef DUB_ENGINE_V2
-                auto   raw = rawPcmForRetry_[idx];
-                double sr  = rawSrForRetry_ [idx];
-                rawPcmForRetry_[idx].clear();
-                overrideBpm_ = detectedBpm;
-                autoMatchSampleAsync(slot, std::move(raw), sr);
-#else
-                rawPcmForRetry_[idx].clear();
-#endif
-            }
-            else if (result == 2)  // "Enter Manually"
-            {
-                auto* aw = new juce::AlertWindow("Manual BPM",
-                                                 "Enter the sample BPM:",
-                                                 juce::MessageBoxIconType::QuestionIcon);
-                aw->addTextEditor("bpm",
-                    juce::String(juce::roundToInt(detectedBpm)), "BPM:");
-                aw->addButton("OK",     1, juce::KeyPress(juce::KeyPress::returnKey));
-                aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-                aw->enterModalState(true,
-                    juce::ModalCallbackFunction::create(
-                        [this, slot, aw](int r)
-                        {
-                            const auto i = static_cast<std::size_t>(slot);
-                            if (r == 1)
-                            {
-                                const float bpm =
-                                    aw->getTextEditorContents("bpm").getFloatValue();
-                                if (bpm >= 40.f && bpm <= 300.f)
-                                {
-#ifndef DUB_ENGINE_V2
-                                    auto   raw = rawPcmForRetry_[i];
-                                    double sr  = rawSrForRetry_ [i];
-                                    rawPcmForRetry_[i].clear();
-                                    overrideBpm_ = bpm;
-                                    autoMatchSampleAsync(slot, std::move(raw), sr);
-#else
-                                    rawPcmForRetry_[i].clear();
-#endif
-                                }
-                            }
-                            else
-                            {
-                                rawPcmForRetry_[i].clear();
-                            }
-                        }),
-                    true);  // deleteWhenDismissed
-            }
-            else  // "Cancel"
-            {
-                rawPcmForRetry_[idx].clear();
-            }
-        });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // applyMasterKey — propagate master key to MusicContext
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::applyMasterKey()
@@ -1260,63 +899,6 @@ void MainComponent::applyMasterKey()
         const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
         scaleStaff_.setKey(masterKeyRoot_, t);  // -1 = Aucune → rebuildNoteInfos() efface la portée
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// C2 helpers — called on the GUI thread after key detection worker completes.
-// ─────────────────────────────────────────────────────────────────────────────
-
-static juce::String keyResultName(const ::dsp::KeyResult& kr)
-{
-    if (kr.key < 0) return {};
-    static constexpr const char* kNames[12] =
-        { "C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B" };
-    juce::String name = kNames[kr.key % 12];
-    if (kr.mode == 1) name += "m";
-    return name;
-}
-
-// True if detectedKey is enharmonically identical to projKey, OR if the two
-// keys are relative major/minor (share the same set of scale degrees).
-static bool keysConform(int detKey, int /*detMode*/, int projKey, bool projIsMajor)
-{
-    if (detKey < 0 || projKey < 0) return false;
-    // Same root (mode ignored — C major and C minor are "same key area" for matching).
-    if (detKey == projKey) return true;
-    // Relative: relative minor of C major = Am (root+9); relative major of Am = C (root+3).
-    const int relKey = projIsMajor ? (projKey + 9) % 12 : (projKey + 3) % 12;
-    return detKey == relKey;
-}
-
-void MainComponent::updateSlotKeyBadge(int slot, const ::dsp::KeyResult& kr)
-{
-    if (kr.key < 0 || slot < 0 || slot >= 9) return;
-    slotKeyResults_[static_cast<std::size_t>(slot)] = kr;
-    const bool matches = keysConform(kr.key, kr.mode, masterKeyRoot_, masterKeyMajor_);
-    stepSeqPanel_.setSlotKey(slot, keyResultName(kr), kr.confidence, matches);
-}
-
-void MainComponent::applyKeyMatchIfNeeded(int slot, const ::dsp::KeyResult& kr) noexcept
-{
-    // Condition 1: user has manually set the project key.
-    if (!masterKeySetByUser_ || masterKeyRoot_ < 0) return;
-    // Condition 2: detection confidence sufficient.
-    if (kr.key < 0 || kr.confidence < 0.7f) return;
-    // Condition 3: detected key does NOT conform to project key.
-    if (keysConform(kr.key, kr.mode, masterKeyRoot_, masterKeyMajor_)) return;
-    // Condition 4: global key-match toggle is ON.
-    if (!keyMatchEnabled_) return;
-    // Condition 5: slot role must be melodic/bass/pad (not percussive).
-    // Slots 2=KCK, 3=SNR, 4=HAT, 7=PRC are always percussive — never key-match.
-    static constexpr bool kCanKeyMatch[9] = { false, true, false, false, false, true, true, false, true };
-    if (!kCanKeyMatch[static_cast<std::size_t>(slot)]) return;
-
-    // Shortest semitone path from detectedKey → projectKey.
-    int delta = ((masterKeyRoot_ - kr.key) + 12) % 12;
-    if (delta > 6) delta -= 12;  // prefer ±6 max
-
-    // Apply via transposeRatio (real-time repitch; user can always reset to 0).
-    dspPipeline_.getSampler().setSlotTransposeSemitones(slot, static_cast<float>(delta));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1683,19 +1265,16 @@ void MainComponent::doAutosave()
 void MainComponent::applyProjectData(const project::ProjectData& data)
 {
     // Invalidate all in-flight async callbacks from the previous project.
-    // processingSlot_ reset allows immediate re-launch for each slot.
     projectGen_.fetch_add(1, std::memory_order_release);
-    for (auto& f : processingSlot_) f.store(false, std::memory_order_release);
     preloadTargetScene_.store(-1, std::memory_order_relaxed);
 
     // Restore BPM
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
     stepSequencer_.setBpm(bpm);
-    dspPipeline_.setBpm(bpm);
     serumHost_.setBpm(bpm);
-    looperEngine_.setBpm(bpm);
     stepSeqPanel_.setBpm(bpm);
     updateSidebarBpm(bpm);
+    facade_.setBpm(bpm);
 
     // Load samples and restore step patterns
     for (int i = 0; i < 9; ++i)
@@ -1704,16 +1283,8 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 
         if (!sc.filePath.empty())
         {
-            // Slots loop non-MST : BPM-matching async pour aligner la longueur
-            // du sample sur la grille avant d'activer loopEnabled.
-            static constexpr bool kNeedsMatch[9] =
-                { false, true, false, false, false, true, true, false, true };
-            double fileSr = currentSampleRate_;
-#ifndef DUB_ENGINE_V2
-            loadSampleIntoSlot(i, sc.filePath, 0, -1,
-                               kNeedsMatch[i] ? &fileSr : nullptr);
-#endif
-#ifdef DUB_ENGINE_V2
+            // Moteur V2 : l'import lit/analyse le fichier et charge le PCM
+            // dans SlotPlayer (rôles, BPM, tonalité, mode de lecture).
             facade_.importSampleAsync(i, sc.filePath, [this](int s, const engine::AnalysisResult&) {
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_.setSlotLoaded(s, true);
@@ -1733,26 +1304,17 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                         dw->setName("SaxFX [V2] | " + info);
                 });
             });
-#else
-            if (i > 0 && kNeedsMatch[i])
-            {
-                auto pcm = dspPipeline_.getSampler().getSlotPcmSnapshot(i);
-                autoMatchSampleAsync(i, std::move(pcm), fileSr);
-            }
-#endif
 
             stepSeqPanel_.setSlotFilePath(i, sc.filePath);   // updates LCD name
-            samplerEngine_.setSlotFilePath(i, sc.filePath);
 
             // Restore saved gain (fallback to unity if not yet set)
             const float savedGain = sc.gain > 0.f ? sc.gain : 1.0f;
-            dspPipeline_.getSampler().setSlotGain(i, savedGain);
+            facade_.setSlotGain(i, savedGain);
         }
         else
         {
             // Vide explicitement le slot s'il n'y a pas de sample configuré
-            dspPipeline_.getSampler().clearSlot(i);
-            samplerEngine_.clearSlot(i);
+            facade_.clearSlot(i);
             stepSeqPanel_.setSlotFilePath(i, "");
             stepSeqPanel_.setSlotLoaded(i, false);
             stepSeqPanel_.setSlotWaveform(i, {});
@@ -1763,16 +1325,12 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             const bool active = sc.stepPattern[s];
             stepSequencer_.setStep(i, s, active);
             stepSeqPanel_.setStepState(i, s, active);
-#ifdef DUB_ENGINE_V2
             facade_.setStep(i, s, active);
-#endif
         }
-#ifdef DUB_ENGINE_V2
         facade_.setTrackBarCount(i, stepSequencer_.getTrackBarCount(i));
-#endif
 
-        dspPipeline_.getSampler().setSlotMuted(i, sc.muted);
         stepSeqPanel_.setSlotMuted(i, sc.muted);
+        facade_.setSlotMuted(i, sc.muted);
     }
 
     if (data.musicContext.keyRoot >= 0)
@@ -2720,9 +2278,6 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
-    // A2: debounced BPM re-stretch
-    if (bpmRestrechCountdown_ > 0 && --bpmRestrechCountdown_ == 0)
-        scheduleRestrechAllSlots();
 
     // ── MIDI Learn : consommer le dernier CC reçu ─────────────────────────────
     if (learningTarget_ >= 0)
@@ -2759,34 +2314,7 @@ void MainComponent::timerCallback()
             triggerPanic();
     }
 
-#ifdef DUB_ENGINE_V2
-    // ── Diagnostic complet kick — titre fenêtre (M8c à retirer) ────────────────
-    {
-        const auto voice = facade_.getVoiceDiag(2);
-        const auto trig  = facade_.getTriggerDiag(2);
-        const auto tdg   = facade_.getTransportDiag();
-
-        // Longueur de scène V1 (max toutes pistes) vs longueur pattern V2 kick
-        int v1SceneLen = 1;
-        for (int i = 0; i < 9; ++i)
-            v1SceneLen = std::max(v1SceneLen, stepSequencer_.getTrackStepCount(i));
-        const int v1KckN  = stepSequencer_.getTrackStepCount(2);
-        const int v2KckN  = facade_.getTrackStepCount(2);
-
-        const juce::String title =
-            "KCK " + juce::String(voice)
-            + " | " + juce::String(trig)
-            + " | " + juce::String(tdg)
-            + " V1kck=" + juce::String(v1KckN)
-            + " V2kck=" + juce::String(v2KckN)
-            + " sc=" + juce::String(v1SceneLen);
-
-        if (auto* dw = dynamic_cast<juce::DocumentWindow*>(getTopLevelComponent()))
-            dw->setName(title);
-    }
-#endif
-
-    // ── Preset Serum : mise à jour 1×/s (~30 ticks) ──────────────────────────
+// ── Preset Serum : mise à jour 1×/s (~30 ticks) ──────────────────────────
     if (++presetNameTick_ >= 30)
     {
         presetNameTick_ = 0;
@@ -3280,21 +2808,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
             auto& cache = preloadCache_[static_cast<std::size_t>(i)];
             if (cache.ready.load(std::memory_order_acquire) && cache.path == newPath)
             {
-                // Cache hit : PCM déjà décodé hors message thread.
-                // Slots loop non-MST → BPM-matching async (aligne longueur sur grille).
-                // MST et perc → chargement direct sans matching.
-                static constexpr bool kCacheNeedsMatch[9] =
-                    { false, true, false, false, false, true, true, false, true };
-                if (i > 0 && kCacheNeedsMatch[i])
-                {
-#ifndef DUB_ENGINE_V2
-                    // autoMatchSampleAsync fait loadSample() + setSlotOneShot()
-                    // + setSlotWaveform() immédiatement, puis BPM-match async.
-                    std::vector<float> pcmCopy = cache.pcm;
-                    autoMatchSampleAsync(i, std::move(pcmCopy), cache.sampleRate);
-#endif
-                }
-                else
+                // Cache hit : PCM déjà décodé hors message thread → chargement direct.
                 {
                     auto& sampler = dspPipeline_.getSampler();
                     sampler.loadSample(i, cache.pcm.data(),
@@ -3772,20 +3286,6 @@ void MainComponent::applyDubDelayMorph(float t)
     delay.setDrive   (lerp(from.dubDelayDrive,    to.dubDelayDrive,    t));
 }
 
-void MainComponent::scheduleRestrechAllSlots()
-{
-#ifndef DUB_ENGINE_V2
-    auto& sampler = dspPipeline_.getSampler();
-    for (int i = 0; i < ::dsp::Sampler::kMaxSlots; ++i)
-    {
-        std::vector<float> orig;
-        double origSr = 44100.0;
-        if (sampler.getOriginalPcm(i, orig, origSr) && !orig.empty())
-            autoMatchSampleAsync(i, std::move(orig), origSr);
-    }
-#endif
-}
-
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 {
     // 1. Persist in current scene
@@ -3796,49 +3296,5 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
     stepSeqPanel_.setSlotPitchOffset(slot, semitones);
 
     // 3. Instant repitch
-#ifdef DUB_ENGINE_V2
     facade_.setSlotTransposeSemitones(slot, semitones);
-#else
-    // 3. Instant repitch via transposeRatio (C1)
-    dspPipeline_.getSampler().setSlotTransposeSemitones(slot, semitones);
-
-    // 4. Offline WSOLA from originalPcm (no disk I/O — A3)
-    //    After reload: transposeRatio reset to 1.0 (pitch baked into PCM).
-    //    Falls back to disk if originalPcm not yet available.
-    {
-        auto& sampler = dspPipeline_.getSampler();
-        std::vector<float> orig;
-        double origSr = 44100.0;
-        if (sampler.getOriginalPcm(slot, orig, origSr) && !orig.empty())
-        {
-            autoMatchSampleAsync(slot, std::move(orig), origSr);
-            return;
-        }
-    }
-
-    // Fallback: re-read from disk (legacy path — no originalPcm yet)
-    const std::string path = sc.filePaths[static_cast<std::size_t>(slot)];
-    if (path.empty()) return;
-
-    juce::AudioFormatManager fmt;
-    fmt.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader(
-        fmt.createReaderFor(juce::File { juce::String(path) }));
-    if (!reader) return;
-
-    const int n = static_cast<int>(reader->lengthInSamples);
-    if (n <= 0) return;
-
-    const int start = juce::jlimit(0, n - 1, sc.trimStart[static_cast<std::size_t>(slot)]);
-    const int end   = (sc.trimEnd[static_cast<std::size_t>(slot)] >= 0)
-                      ? juce::jlimit(start + 1, n, sc.trimEnd[static_cast<std::size_t>(slot)])
-                      : n;
-
-    juce::AudioBuffer<float> buf(1, n);
-    reader->read(&buf, 0, n, 0, true, false);
-
-    std::vector<float> raw(buf.getReadPointer(0) + start,
-                           buf.getReadPointer(0) + end);
-    autoMatchSampleAsync(slot, std::move(raw), reader->sampleRate);
-#endif
 }
