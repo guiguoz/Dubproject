@@ -2601,11 +2601,7 @@ void MainComponent::captureCurrentScene()
     sc.serumPresetName = currentPresetName_.toStdString();
 
     {
-#ifdef DUB_ENGINE_V2
         auto& dd = facade_.delay();
-#else
-        auto& dd = dspPipeline_.getDubDelay();
-#endif
         sc.dubDelayFeedback = dd.getFeedback();
         sc.dubDelayWet      = dd.getWet();
         sc.dubDelayTone     = dd.getTone();
