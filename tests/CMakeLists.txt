@@ -88,8 +88,8 @@ catch_discover_tests(SaxFXTests)
 # ─────────────────────────────────────────────────────────────────────────────
 # EngineTests — moteur V2, sans JUCE ni ONNX
 # ─────────────────────────────────────────────────────────────────────────────
-# signalsmith-stretch — charge aussi signalsmith-linear via FetchContent
-# Guard : si déjà ajouté depuis la racine (DUB_ENGINE_V2), on réutilise la cible.
+# signalsmith-stretch — charge aussi signalsmith-linear via FetchContent.
+# Si déjà ajouté depuis la racine, on réutilise la cible.
 if(NOT TARGET signalsmith-stretch)
     add_subdirectory(../third_party/signalsmith-stretch signalsmith-stretch-build)
 endif()

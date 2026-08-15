@@ -49,11 +49,7 @@ public:
             return EXCEPTION_CONTINUE_SEARCH;
         });
 #endif
-#ifdef DUB_ENGINE_V2
-        mainWindow = std::make_unique<MainWindow>(getApplicationName() + " [MOTEUR V2 ACTIF]");
-#else
-        mainWindow = std::make_unique<MainWindow>(getApplicationName());
-#endif
+mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
     void shutdown() override

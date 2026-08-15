@@ -1,8 +1,6 @@
 #pragma once
 
-#ifdef DUB_ENGINE_V2
 #include "engine/EngineFacade.h"
-#endif
 
 #include "dsp/DspPipeline.h"
 #include "dsp/FeatureExtractor.h"
@@ -79,9 +77,8 @@ private:
     void timerCallback() override;
 
     //==========================================================================
-    // Moteur V2 (actif si DUB_ENGINE_V2 défini)
+    // Moteur V2
     //==========================================================================
-#ifdef DUB_ENGINE_V2
     engine::EngineFacade facade_;
     // Buffers de capture de l'entrée dry (EWI/sax) — le rendu V2 écrase left/right.
     std::vector<float>       v2InputScratchL_, v2InputScratchR_;
@@ -94,7 +91,6 @@ private:
     engine::SlotRole activeRoleForSlot(int slot) const noexcept;
     void             syncV2Scene(int idx) noexcept;
     void             syncV2Scenes() noexcept;
-#endif
 
     //==========================================================================
     // DSP + MIDI

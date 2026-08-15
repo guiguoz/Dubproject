@@ -1,6 +1,5 @@
 #pragma once
 // ─── EngineFacade — pont entre l'UI existante et le moteur V2 ────────────────
-// Masqué derrière DUB_ENGINE_V2.
 // SerumHost est injecté via setSerumHost() (reste dans src/dsp/, dépendances JUCE).
 
 #include <functional>

@@ -887,7 +887,6 @@ void MainComponent::openSampleEditor(int slot)
                 }
 
         // Config V2 : re-sync la configuration scène (trim stocké dans SceneStore).
-#ifdef DUB_ENGINE_V2
         for (int si = 0; si < kMaxScenes; ++si)
             for (int t = 0; t < 9; ++t)
                 if (sceneManager_.scene(si).filePaths[t] == filePath)
@@ -896,7 +895,6 @@ void MainComponent::openSampleEditor(int slot)
                     // voient le bon trim (Replace) et le re-trigger cohérent.
                     syncV2Scene(si);
                 }
-#endif
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
         for (int t = 0; t < 9; ++t)
@@ -2525,7 +2523,6 @@ void MainComponent::captureCurrentScene()
 
 // ═══ Moteur V2 : sync des scènes (V1 SceneManager → engine::SceneStore) ═══════
 
-#ifdef DUB_ENGINE_V2
 engine::SlotRole MainComponent::activeRoleForSlot(int slot) const noexcept
 {
     // Rôle analysé V2 (ImportPipeline, confiance ONNX ≥ 0.75) si fiable ;
@@ -2598,7 +2595,6 @@ void MainComponent::syncV2Scenes() noexcept
     for (int i = 0; i < kMaxScenes; ++i)
         syncV2Scene(i);
 }
-#endif
 
 // ═══ applyScene ══════════════════════════════════════════════════════════════
 
@@ -2613,13 +2609,11 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     const auto& sc = sceneManager_.scene(idx);
 
-#ifdef DUB_ENGINE_V2
     // Config V2 : sync SceneData V1 → SceneStore moteur puis application au graphe
     // (gains, modes, semitones, rôles). setCurrentScene sert aussi de point
     // de départ pour requestTransition() lors des navigations en lecture.
     syncV2Scene(idx);
     facade_.setCurrentScene(idx);
-#endif
 
     if (!sc.used)
     {

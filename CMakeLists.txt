@@ -74,12 +74,6 @@ set_target_properties(SaxFXLive PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/bin"
 )
 
-# ─── Option DUB_ENGINE_V2 ────────────────────────────────────────────────────
-# Compile le moteur V2 (engine/) et active EngineFacade dans MainComponent.
-# ON par défaut depuis M8b (l'app tourne sur la façade) ; le flag sera
-# supprimé à M8c (§12.4.3 du plan).
-option(DUB_ENGINE_V2 "Use V2 engine via EngineFacade (M8+)" ON)
-
 # signalsmith-stretch — requis par engine/StretchConform
 # Ajouté ici (avant add_subdirectory(tests)) pour éviter la double configuration.
 add_subdirectory(third_party/signalsmith-stretch signalsmith-stretch-main-build)
@@ -149,7 +143,6 @@ target_compile_definitions(SaxFXLive PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SaxFXLive,JUCE_VERSION>"
     $<$<BOOL:${JUCE_ASIO}>:JUCE_ASIO=1>
     $<$<BOOL:${SAXFX_ENABLE_ONNX}>:SAXFX_HAS_ONNX=1>
-    $<$<BOOL:${DUB_ENGINE_V2}>:DUB_ENGINE_V2=1>
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
 )
