@@ -261,6 +261,7 @@ MainComponent::MainComponent()
         facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_.setSlotLoaded(s, true);
+                stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                 const float st    = facade_.getSlotSemitones(s);
                 const float ratio = facade_.getSlotTimeRatio(s);
                 const int   lbts  = facade_.getSlotLoopBeats(s);
@@ -1259,6 +1260,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             facade_.importSampleAsync(i, sc.filePath, [this](int s, const engine::AnalysisResult&) {
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_.setSlotLoaded(s, true);
+                    stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                     const float st    = facade_.getSlotSemitones(s);
                     const float ratio = facade_.getSlotTimeRatio(s);
                     const int   lbts  = facade_.getSlotLoopBeats(s);
