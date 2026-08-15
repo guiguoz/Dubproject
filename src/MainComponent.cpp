@@ -360,7 +360,7 @@ MainComponent::MainComponent()
         for (int i = 0; i < 9; ++i)
         {
             const auto type = samplerEngine_.getDetectedType(i);
-            const bool loaded = dspPipeline_.getSampler().isLoaded(i);
+            const bool loaded = !facade_.slotFilePath(i).empty();
             if (loaded)
                 stepSeqPanel_.setSlotContentType(
                     i, ::dsp::SmartSamplerEngine::contentTypeName(type));
@@ -385,7 +385,7 @@ MainComponent::MainComponent()
         for (int i = 0; i < 9; ++i)
         {
             float send = 0.f;
-            if (dspPipeline_.getSampler().isLoaded(i))
+            if (!facade_.slotFilePath(i).empty())
             {
                 switch (samplerEngine_.getDetectedType(i))
                 {
@@ -411,7 +411,7 @@ MainComponent::MainComponent()
 
             int kickSlot = -1;
             for (int i = 0; i < 9; ++i)
-                if (samplerEngine_.getDetectedType(i) == CT::KICK && sc2.isLoaded(i))
+                if (samplerEngine_.getDetectedType(i) == CT::KICK && !facade_.slotFilePath(i).empty())
                     { kickSlot = i; break; }
 
             std::array<int, 4> newTargets {};
@@ -421,7 +421,7 @@ MainComponent::MainComponent()
                     for (int i = 0; i < 9 && nTargets < 4; ++i)
                         if (i != kickSlot
                             && samplerEngine_.getDetectedType(i) == prio
-                            && sc2.isLoaded(i))
+                            && !facade_.slotFilePath(i).empty())
                             newTargets[nTargets++] = i;
 
             if (kickSlot != lastSidechainKick_
@@ -2858,7 +2858,6 @@ void MainComponent::applyScene(int idx, int fromIdx)
             juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
             juce::Colour { 0xFFFF6B35 },
         };
-        auto& sampler = dspPipeline_.getSampler();
         using CT = ::dsp::SmartSamplerEngine::ContentType;
         static constexpr CT kDefaultTypes[9] = {
             CT::LOOP, CT::BASS, CT::KICK, CT::SNARE, CT::HIHAT,
@@ -2869,7 +2868,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
             const auto detected = samplerEngine_.getDetectedType(i);
             const auto ct       = (detected != CT::OTHER) ? detected : kDefaultTypes[i];
             const auto sp       = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
-            const bool loaded   = sampler.isLoaded(i);
+            const bool loaded   = !facade_.slotFilePath(i).empty();
             spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
         }
         spatialViz_.setSaxActive(true);
