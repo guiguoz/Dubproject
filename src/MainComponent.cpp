@@ -2836,6 +2836,26 @@ void MainComponent::applyScene(int idx, int fromIdx)
             appliedTrimStart_[static_cast<std::size_t>(i)] = sc.trimStart[sidx];
             appliedTrimEnd_  [static_cast<std::size_t>(i)] = sc.trimEnd  [sidx];
         }
+
+        // ── Alignement SlotPlayer V2 sur la scène (fichier + trim) ─────────────
+        // importSampleAsync enregistre slotPath_* immédiatement, donc les appels
+        // suivants avec la même (fichier, trim) sont des no-ops. Un fichier
+        // nouveau pour cette scène (ou un trim différent de celui chargé) relance
+        // un import V2 — le SlotPlayer joue le bon PCM, exactement comme le V1.
+        if (!newPath.empty())
+        {
+            if (facade_.slotFilePath(i) != newPath
+                || facade_.slotTrimStart(i) != sc.trimStart[sidx]
+                || facade_.slotTrimEnd(i)   != sc.trimEnd[sidx])
+            {
+                facade_.importSampleAsync(i, newPath, nullptr,
+                                          sc.trimStart[sidx], sc.trimEnd[sidx]);
+            }
+        }
+        else
+        {
+            facade_.clearSlot(i);
+        }
     }
 
     // Second pass: re-apply step states directly from scene data.

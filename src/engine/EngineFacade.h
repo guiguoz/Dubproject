@@ -60,12 +60,23 @@ public:
 
     // ── Slots (9 slots) ────────────────────────────────────────────────────────
     // Import asynchrone : le callback est appelé sur le message thread.
+    // Si trimStart/trimEnd ≥ 0 (coordonnées fichier), le PCM chargé est découpé
+    // avant le stockage (même sémantique que le reload trim de la V1).
+    // Fichier/trim courants exposés via slotFilePath()/slotTrim() pour que
+    // l'UI ne réimporte que si la scène référence un PCM absent du SlotPlayer.
     void importSampleAsync(int slot, const std::string& filePath,
-                           ImportCallback cb = nullptr);
+                           ImportCallback cb = nullptr,
+                           int trimStart = -1, int trimEnd = -1);
 
     void clearSlot(int slot) noexcept;
     void triggerSlot(int slot) noexcept;  // trigger immédiat (pad live)
     void stopSlot(int slot, bool immediate = false) noexcept;
+
+    // Fichier + trim actuellement chargés dans le SlotPlayer (message thread
+    // uniquement — stockés au lancement/achèvement de l'import).
+    const std::string& slotFilePath(int slot) const noexcept;
+    int slotTrimStart(int slot) const noexcept;
+    int slotTrimEnd(int slot) const noexcept;
 
     void setSlotGain(int slot, float gain) noexcept;
     float getSlotGain(int slot) const noexcept;
@@ -168,6 +179,11 @@ private:
 
     // État par slot (metrics, lecture depuis UI thread)
     std::atomic<bool>  slotLoaded_[kMaxSlots] {};
+
+    // Fichier + trim chargés dans le SlotPlayer (message thread seulement).
+    std::string        slotPath_  [kMaxSlots];
+    int                slotTrimStart_[kMaxSlots] { 0 };
+    int                slotTrimEnd_  [kMaxSlots] { -1 };
 
     // Solo par slot : si un slot est solo, les autres sont muets (audio thread).
     std::atomic<int32_t> soloSlot_ {-1};

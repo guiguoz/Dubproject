@@ -246,11 +246,17 @@ static SlotRole mapRole(SlotRoleV2 r) noexcept
 }
 
 void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
-                                     ImportCallback cb)
+                                     ImportCallback cb, int trimStart, int trimEnd)
 {
     if (slot < 0 || slot >= kMaxSlots) return;
 
-    std::thread([this, slot, filePath, cb]() {
+    // Enregistrer le fichier/trim ciblés DES MAINTENANT (message thread) :
+    // applyScene peut relire slotFilePath() sans attendre la fin de l'import.
+    slotPath_[slot] = filePath;
+    slotTrimStart_[slot] = trimStart;
+    slotTrimEnd_[slot]   = trimEnd;
+
+    std::thread([this, slot, filePath, cb, trimStart, trimEnd]() {
         juce::AudioFormatManager fmtMgr;
         fmtMgr.registerBasicFormats();
 
@@ -297,20 +303,30 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
         graph_.setSlotRole(slot, mapRole(result.role));
 
-        // Construction du SlotPcm (conserve la stéréo si disponible)
+        // Construction du SlotPcm (conserve la stéréo si disponible).
+        // Trim optionnel (coordonnées fichier) : découpe AVANT stockage pour que
+        // le SlotPlayer joue exactement la région voulue par la scène.
+        int start = 0;
+        int end   = numFrames;
+        if (trimStart >= 0) start = std::min(numFrames, trimStart);
+        if (trimEnd   >= 0) end   = std::min(numFrames, trimEnd);
+        if (end <= start)   end   = start + 1;
+        const int numTrim = end - start;
+
         SlotPcm pcm;
         pcm.numChannels = readCh;
-        pcm.numFrames   = numFrames;
+        pcm.numFrames   = numTrim;
         pcm.sampleRate  = sr;
-        pcm.data.resize(static_cast<size_t>(numFrames * readCh));
+        pcm.data.resize(static_cast<size_t>(numTrim * readCh));
         if (readCh == 1) {
-            std::copy(mono.begin(), mono.end(), pcm.data.begin());
+            for (int i = 0; i < numTrim; ++i)
+                pcm.data[static_cast<size_t>(i)] = mono[static_cast<size_t>(start + i)];
         } else {
             const float* ch0 = buf.getReadPointer(0);
             const float* ch1 = buf.getReadPointer(1);
-            for (int i = 0; i < numFrames; ++i) {
-                pcm.data[static_cast<size_t>(i * 2)    ] = ch0[i];
-                pcm.data[static_cast<size_t>(i * 2 + 1)] = ch1[i];
+            for (int i = 0; i < numTrim; ++i) {
+                pcm.data[static_cast<size_t>(i * 2)    ] = ch0[start + i];
+                pcm.data[static_cast<size_t>(i * 2 + 1)] = ch1[start + i];
             }
         }
 
@@ -338,6 +354,27 @@ void EngineFacade::clearSlot(int slot) noexcept
     if (slot < 0 || slot >= kMaxSlots) return;
     graph_.slotPlayer().clearSlot(slot);
     slotLoaded_[slot].store(false, std::memory_order_relaxed);
+    slotPath_[slot].clear();
+    slotTrimStart_[slot] = 0;
+    slotTrimEnd_[slot]   = -1;
+}
+
+const std::string& EngineFacade::slotFilePath(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return slotPath_[0];
+    return slotPath_[slot];
+}
+
+int EngineFacade::slotTrimStart(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return 0;
+    return slotTrimStart_[slot];
+}
+
+int EngineFacade::slotTrimEnd(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return -1;
+    return slotTrimEnd_[slot];
 }
 
 void EngineFacade::triggerSlot(int slot) noexcept
