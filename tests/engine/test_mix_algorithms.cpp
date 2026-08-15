@@ -4,6 +4,7 @@
 #include <vector>
 #include "engine/mix/MixAlgorithms.h"
 #include "engine/mix/MixDecisions.h"
+#include "engine/mix/MixEngine.h"
 
 using namespace engine::mix;
 using Catch::Approx;
@@ -236,4 +237,96 @@ TEST_CASE("MIX-9: calibrated gain and serum duck", "[mix]") {
           == MixContentType::BASS);
     CHECK(effectiveType(MixContentType::KICK, false, MixContentType::BASS)
           == MixContentType::KICK);
+}
+
+// ─── MIX-10 : orchestrateur heuristique (déterminisme, finis, gains) ──
+TEST_CASE("MIX-10: heuristic mix engine is deterministic and finite", "[mix]") {
+    MixInputs in;
+    in.sampleRate = kSR;
+    in.masterBpm  = 120.f;
+    in.pcm[0] = makeSine(55.f,  static_cast<int>(kSR * 0.4f), kSR, 0.6f);  // kick
+    in.pcm[1] = makeSine(70.f,  static_cast<int>(kSR * 0.8f), kSR, 0.5f);  // bass
+    in.pcm[2] = makeSine(200.f, static_cast<int>(kSR * 1.6f), kSR, 0.4f);  // pad
+    in.active.fill(true);
+    in.detected[0] = MixContentType::KICK;
+    in.detected[1] = MixContentType::BASS;
+    in.detected[2] = MixContentType::PAD;
+    in.scene.activeCount = 3;
+
+    const auto a = processHeuristic(in);
+    const auto b = processHeuristic(in);
+
+    // Déterminisme bit à bit
+    for (int i = 0; i < kMixSlots; ++i)
+    {
+        CHECK(a.pcm[i].size() == b.pcm[i].size());
+        if (!a.pcm[i].empty())
+            CHECK(a.pcm[i] == b.pcm[i]);
+        CHECK(a.gain[i] == b.gain[i]);
+        CHECK(a.pan[i] == b.pan[i]);
+        CHECK(a.width[i] == b.width[i]);
+    }
+
+    // Finis et bornés
+    for (int i = 0; i < kMixSlots; ++i)
+    {
+        if (!in.active[i]) continue;
+        for (const auto s : a.pcm[i])
+            CHECK(std::isfinite(s));
+        CHECK(a.gain[i] > 0.f);
+        CHECK(a.gain[i] <= 1.5f);
+    }
+
+    // PAD reçoit l'écho dub (bpm>0) → pcm modifié vs entrée
+    CHECK(a.pcm[2].size() == in.pcm[2].size());
+
+    // Slots inactifs non traités
+    MixInputs sparse = in;
+    sparse.active[0] = true;
+    sparse.active[1] = false;
+    sparse.active[2] = false;
+    const auto s = processHeuristic(sparse);
+    CHECK(s.pcm[1].empty());
+    CHECK(s.pcm[2].empty());
+    CHECK(s.pcm[0].size() == in.pcm[0].size());
+
+    // Kick non ducké même si Serum RMS élevé
+    MixInputs serumMix = in;
+    serumMix.serumRms = 0.5f;
+    serumMix.serumCentroid = 800.f;
+    const auto sm = processHeuristic(serumMix);
+    CHECK(sm.gain[0] == a.gain[0]);  // KICK jamais ducké
+}
+
+// ─── MIX-11 : balance L/R flip les PAD/SYNTH/PERC en excès ──────────────
+TEST_CASE("MIX-11: L/R balancing flips non-critical slots", "[mix]") {
+    // 5 slots pannés à gauche, 1 à droite → flip les PAD gauches
+    std::array<SpatialDecision, kMixSlots> spatials {};
+    std::array<bool, kMixSlots> active {};
+    std::array<MixContentType, kMixSlots> types {};
+
+    for (int i = 0; i < 5; ++i)
+    {
+        spatials[i].pan = -0.5f;
+        active[i] = true;
+        types[i] = (i == 2) ? MixContentType::PAD : MixContentType::HIHAT;
+    }
+    active[5] = true;
+    spatials[5].pan = 0.5f;
+    types[5] = MixContentType::PERC;
+
+    balanceLeftRight(spatials, active, types);
+
+    // Le PAD (slot 2) a été flippé à droite
+    CHECK(spatials[2].pan == Approx(0.5f));
+    // La balance globale est revenue proche de 0
+    int left = 0, right = 0;
+    for (int i = 0; i < kMixSlots; ++i)
+    {
+        if (!active[i]) continue;
+        if (spatials[i].pan < 0.f) ++left;
+        if (spatials[i].pan > 0.f) ++right;
+    }
+    CHECK(left >= 2);
+    CHECK(right >= 2);
 }
