@@ -2626,7 +2626,11 @@ void MainComponent::syncV2Scene(int idx) noexcept
         cfg.semitones  = sc.pitchOffsets[static_cast<std::size_t>(i)];
         cfg.trimStart  = sc.trimStart   [static_cast<std::size_t>(i)];
         cfg.trimEnd    = sc.trimEnd     [static_cast<std::size_t>(i)];
-        cfg.role       = v2RoleForSlot(i);
+        // Role : priorité au rôle analysé par le moteur V2 quand fiable
+        // (ImportPipeline, confiance ONNX ≥ 0.75) ; sinon détection V1 via
+        // samplerEngine_.getDetectedType (→ position par défaut en dernier ressort).
+        cfg.role = facade_.isSlotRoleReliable(i) ? facade_.slotRole(i)
+                                                 : v2RoleForSlot(i);
 
         // Actif si fichier + au moins un step dans le pattern.
         bool hasSteps = false;

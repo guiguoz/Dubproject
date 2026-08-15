@@ -266,6 +266,13 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
         graph_.setSlotRole(slot, mapRole(result.role));
 
+        // Publier le rôle analysé (fiabilité = confiance ONNX suffisante et rôle
+        // non indéterminé). Lecture sur message thread via release/acquire.
+        slotRoleAnalyzed_[slot]  = mapRole(result.role);
+        const bool reliable = (result.roleConfidence >= 0.75f &&
+                               result.role != SlotRoleV2::Unknown);
+        slotRoleReliable_[slot].store(reliable, std::memory_order_release);
+
         // Construction du SlotPcm (conserve la stéréo si disponible).
         // Trim optionnel (coordonnées fichier) : découpe AVANT stockage pour que
         // le SlotPlayer joue exactement la région voulue par la scène.
@@ -320,6 +327,8 @@ void EngineFacade::clearSlot(int slot) noexcept
     slotPath_[slot].clear();
     slotTrimStart_[slot] = 0;
     slotTrimEnd_[slot]   = -1;
+    slotRoleAnalyzed_[slot] = SlotRole::Loop;
+    slotRoleReliable_[slot].store(false, std::memory_order_release);
 }
 
 const std::string& EngineFacade::slotFilePath(int slot) const noexcept
@@ -402,6 +411,18 @@ void EngineFacade::setSlotRole(int slot, SlotRole role) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
     graph_.setSlotRole(slot, role);
+}
+
+engine::SlotRole EngineFacade::slotRole(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return SlotRole::Loop;
+    return slotRoleAnalyzed_[static_cast<std::size_t>(slot)];
+}
+
+bool EngineFacade::isSlotRoleReliable(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return false;
+    return slotRoleReliable_[static_cast<std::size_t>(slot)].load(std::memory_order_acquire);
 }
 
 // ─── Métriques slot ───────────────────────────────────────────────────────────

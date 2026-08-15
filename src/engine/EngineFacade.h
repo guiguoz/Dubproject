@@ -87,6 +87,14 @@ public:
     void setSlotMode(int slot, PlayMode mode) noexcept;
     void setSlotRole(int slot, SlotRole role) noexcept;
 
+    // Rôle analysé par le moteur V2 (ImportPipeline) au dernier import du slot.
+    // isSlotRoleReliable() == true quand l'analyse est fiable
+    // (roleConfidence ≥ 0.75 et rôle ≠ Unknown) — dans ce cas slotRole() a la
+    // priorité sur la détection V1 (samplerEngine_.getDetectedType) lors de la
+    // sync des scènes. Message thread uniquement.
+    SlotRole slotRole(int slot) const noexcept;
+    bool     isSlotRoleReliable(int slot) const noexcept;
+
     // Métriques (thread-safe via atomics dans SlotPlayer)
     float getSlotPlayheadRatio(int slot) const noexcept;
     float getSlotOutputPeak(int slot)    const noexcept;
@@ -165,6 +173,11 @@ private:
     std::string        slotPath_  [kMaxSlots];
     int                slotTrimStart_[kMaxSlots] { 0 };
     int                slotTrimEnd_  [kMaxSlots] { -1 };
+
+    // Rôle analysé par le V2 au dernier import (worker → message thread via le
+    // flag slotRoleReliable_, motif release/acquire).
+    SlotRole           slotRoleAnalyzed_ [kMaxSlots] { SlotRole::Loop };
+    std::atomic<bool>  slotRoleReliable_ [kMaxSlots] { false };
 
     // Solo par slot : si un slot est solo, les autres sont muets (audio thread).
     std::atomic<int32_t> soloSlot_ {-1};
