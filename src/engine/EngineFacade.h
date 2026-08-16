@@ -2,6 +2,11 @@
 // ─── EngineFacade — pont entre l'UI existante et le moteur V2 ────────────────
 // SerumHost est injecté via setSerumHost() (reste dans src/dsp/, dépendances JUCE).
 
+// JuceHeader d'abord : dsp/StepSequencer.h et dsp/Sampler.h utilisent juce
+// (jlimit, etc.) dans des membres inline — ce header doit rester auto-suffisant
+// quel que soit l'ordre des includes du TU appelant.
+#include <JuceHeader.h>
+
 #include <functional>
 #include <string>
 #include <vector>
@@ -15,6 +20,8 @@
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
 #include "engine/mix/MixWorker.h"
+#include "dsp/StepSequencer.h"  // StepBuf pour prepareStepBuffer
+#include "dsp/Sampler.h"        // StopMode pour stopAllSlots
 
 // Forward-declare SerumHost (JUCE dep, reste dans src/dsp/)
 namespace dsp { class SerumHost; }
@@ -38,7 +45,7 @@ public:
     void releaseResources() noexcept;
 
     // Injection du SerumHost (reste dans src/dsp/, non porté).
-    void setSerumHost(dsp::SerumHost* sh) noexcept { serumHost_ = sh; }
+    void setSerumHost(::dsp::SerumHost* sh) noexcept { serumHost_ = sh; }
 
     // ── Audio callback ─────────────────────────────────────────────────────────
     // Remplace dspPipeline_.processStereo() + stepSequencer_.process().
@@ -176,6 +183,37 @@ public:
     void requestTransition(int toScene) noexcept;
     SceneData& scene(int idx) noexcept  { return sceneStore_.getScene(idx); }
 
+    // ── Transitions de scène (Tier 1 — Phase 4a) ────────────────────────────────
+    // Accès aux transitions en attente et contrôle du morphing delay.
+    // Remplace V1 sceneManager_/stepSequencer_ pour la logique de transition.
+    int  pendingSceneIdx() const noexcept;           // Index scène en attente
+    void setPendingScene(int idx) noexcept;          // Marquer scène pour transition
+    int  consumePendingScene() noexcept;             // Consommer & appliquer transition
+    bool hasPendingScene() const noexcept;           // Vérifier si transition armée
+    
+    bool hasPendingTransition() const noexcept;      // Transition quantisée en cours?
+    void setPendingTransitionLen(int steps) noexcept; // Durée transition (steps)
+    bool consumeSceneEnd() noexcept;                 // Consommer signal end-of-bar
+    
+    // Morphing du delay : transitions paramétriques (feedback/wet/tone/drive).
+    void startDubDelayMorph(int from, int to, float durationMs = 4000.f) noexcept;
+    void updateMorphing() noexcept;
+    bool isMorphing() const noexcept;
+    float getMorphProgress() const noexcept;         // [0..1]
+    int  getMorphFromSceneIdx() const noexcept;
+    int  getMorphToSceneIdx() const noexcept;
+    
+    // Énergie de scène (pour crossfade adaptatif).
+    void setSceneEnergy(int idx, float energy) noexcept;
+    float getSceneEnergy(int idx) const noexcept;
+
+    // ── Patterns / Sequencer (helper) ───────────────────────────────────────────
+    // Préparer le buffer de pattern pour la prochaine scène (message thread).
+    void prepareStepBuffer(const ::dsp::StepSequencer::StepBuf& buf) noexcept;
+    
+    // Arrêter tous les slots avec mode d'arrêt spécifié.
+    void stopAllSlots(::dsp::Sampler::StopMode mode = ::dsp::Sampler::StopMode::Normal) noexcept;
+
     // ── DubDelay (accès direct à l'objet porté) ───────────────────────────────
     fx::PingPongDelay& delay() noexcept { return graph_.delay(); }
 
@@ -220,7 +258,7 @@ private:
     int    currentScene_  = 0;
 
     // SerumHost (non porté — reste JUCE)
-    dsp::SerumHost* serumHost_ = nullptr;
+    ::dsp::SerumHost* serumHost_ = nullptr;
 
     // Métriques thread-safe
     std::atomic<float> masterRms_ {0.f};
@@ -266,6 +304,29 @@ private:
     // Patterns (write side, message thread)
     TrackPattern writePatterns_[kMaxSlots];
     int          trackBars_[kMaxSlots] = {};
+
+    // ── Transitions quantisées (Tier 1 — Phase 4a) ────────────────────────────
+    // La frontière est détectée par TransitionEngine dans processBlock :
+    // au passage Armed→Executing, sceneEndFlag_ est posé et pendingTransLen_
+    // effacé — le signal « fin de scène » est consommé par l'UI (timer).
+    std::atomic<int>  pendingScene_    { -1 };
+    std::atomic<int>  pendingTransLen_ { 0 };
+    std::atomic<bool> sceneEndFlag_    { false };
+
+    // ── Morphing PingPongDelay (Tier 2 — Phase 4a) ────────────────────────────
+    struct MorphState
+    {
+        bool  active      = false;
+        float progress    = 0.f;
+        float durationMs  = 4000.f;
+        int   fromScene   = -1;
+        int   toScene     = -1;
+        int   tickCounter = 0;
+    };
+    MorphState morphState_;
+
+    // Énergie de scène (crossfade adaptatif) — message thread.
+    float sceneEnergy_[kMaxScenes] {};
 
     // File SPSC message→audio pour triggers/stops live (bitmask 9 bits)
     std::atomic<uint16_t> pendingTriggers_{0};

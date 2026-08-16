@@ -1,5 +1,5 @@
-#include "engine/EngineFacade.h"
 #include <JuceHeader.h>
+#include "engine/EngineFacade.h"
 #include <thread>
 #include <algorithm>
 #include <cmath>
@@ -100,7 +100,16 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     }
 
     // ── TransitionEngine + Séquenceur ─────────────────────────────────────────
+    // Détecter la frontière Armed→Executing : la transition quantisée vient de
+    // s'exécuter → poser le signal « fin de scène » pour l'UI (timer).
+    const auto prevTransState = transition_.state();
     transition_.processBlock(ts, scheduler_);
+    if (prevTransState == TransitionEngine::State::Armed
+        && transition_.state() == TransitionEngine::State::Executing)
+    {
+        sceneEndFlag_.store(true, std::memory_order_release);
+        pendingTransLen_.store(0, std::memory_order_release);
+    }
     graph_.sequencer().generateEvents(ts, blockStart, numSamples,
                                       swingFactor_, scheduler_);
 
@@ -743,6 +752,105 @@ void EngineFacade::applySceneInternal(int idx) noexcept
         graph_.slotPlayer().setSemitones(s, cfg.semitones);
         graph_.setSlotRole(s, cfg.role);
     }
+}
+
+// ─── Transitions de scène (Tier 1 — Phase 4a) ─────────────────────────────────
+// La frontière Armed→Executing est détectée dans processBlock : elle pose
+// sceneEndFlag_ (consommé par l'UI) et efface pendingTransLen_.
+
+int EngineFacade::pendingSceneIdx() const noexcept
+{
+    return pendingScene_.load(std::memory_order_relaxed);
+}
+
+void EngineFacade::setPendingScene(int idx) noexcept
+{
+    if (idx < 0 || idx >= kMaxScenes) return;
+    pendingScene_.store(idx, std::memory_order_relaxed);
+}
+
+int EngineFacade::consumePendingScene() noexcept
+{
+    return pendingScene_.exchange(-1, std::memory_order_acq_rel);
+}
+
+bool EngineFacade::hasPendingScene() const noexcept
+{
+    return pendingScene_.load(std::memory_order_relaxed) >= 0;
+}
+
+bool EngineFacade::hasPendingTransition() const noexcept
+{
+    return pendingTransLen_.load(std::memory_order_relaxed) > 0;
+}
+
+void EngineFacade::setPendingTransitionLen(int steps) noexcept
+{
+    pendingTransLen_.store(steps, std::memory_order_release);
+}
+
+bool EngineFacade::consumeSceneEnd() noexcept
+{
+    return sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
+}
+
+// ─── Morphing PingPongDelay (Tier 2 — Phase 4a) ───────────────────────────────
+
+void EngineFacade::startDubDelayMorph(int from, int to, float durationMs) noexcept
+{
+    if (from < 0 || to < 0 || from >= kMaxScenes || to >= kMaxScenes) return;
+    morphState_ = { true, 0.f, (durationMs > 0.f) ? durationMs : 4000.f,
+                    from, to, 0 };
+}
+
+void EngineFacade::updateMorphing() noexcept
+{
+    if (!morphState_.active) return;
+    morphState_.tickCounter += 33;
+    morphState_.progress = std::clamp(
+        static_cast<float>(morphState_.tickCounter) / morphState_.durationMs,
+        0.f, 1.f);
+    if (morphState_.progress >= 1.f)
+        morphState_.active = false;
+}
+
+bool EngineFacade::isMorphing() const noexcept          { return morphState_.active; }
+float EngineFacade::getMorphProgress() const noexcept   { return morphState_.progress; }
+int   EngineFacade::getMorphFromSceneIdx() const noexcept { return morphState_.fromScene; }
+int   EngineFacade::getMorphToSceneIdx() const noexcept   { return morphState_.toScene; }
+
+// ─── Énergie de scène (crossfade adaptatif) ───────────────────────────────────
+
+void EngineFacade::setSceneEnergy(int idx, float energy) noexcept
+{
+    if (idx < 0 || idx >= kMaxScenes) return;
+    sceneEnergy_[idx] = energy;
+}
+
+float EngineFacade::getSceneEnergy(int idx) const noexcept
+{
+    if (idx < 0 || idx >= kMaxScenes) return 0.f;
+    return sceneEnergy_[idx];
+}
+
+// ─── Patterns / sequencer (helper) ────────────────────────────────────────────
+
+void EngineFacade::prepareStepBuffer(const ::dsp::StepSequencer::StepBuf& buf) noexcept
+{
+    for (int s = 0; s < kMaxSlots; ++s)
+    {
+        TrackPattern* dst = graph_.sequencer().patterns().writeBuffer(s);
+        dst->numSteps = std::clamp(buf.trackStepCount[s], 1, kMaxSteps);
+        for (int i = 0; i < kMaxSteps; ++i)
+            dst->steps[i] = buf.steps[s][i];
+    }
+    graph_.sequencer().patterns().flip();
+}
+
+void EngineFacade::stopAllSlots(::dsp::Sampler::StopMode /*mode*/) noexcept
+{
+    constexpr uint16_t kAllSlots = (1u << kMaxSlots) - 1u;
+    pendingStops_.fetch_or(kAllSlots, std::memory_order_release);
 }
 
 // ─── Playhead / séquenceur (pour l'UI) ─────────────────────────────────────
