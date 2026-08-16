@@ -13,6 +13,7 @@
 #include "engine/SceneStore.h"
 #include "engine/TransitionEngine.h"
 #include "engine/EventScheduler.h"
+#include "engine/mix/MixState.h"
 
 // Forward-declare SerumHost (JUCE dep, reste dans src/dsp/)
 namespace dsp { class SerumHost; }
@@ -85,6 +86,14 @@ public:
     void setSlotTransposeSemitones(int slot, float semitones) noexcept;
     void setSlotMode(int slot, PlayMode mode) noexcept;
     void setSlotRole(int slot, SlotRole role) noexcept;
+
+    // ── État de mix persistant (étape 7 / M9) ────────────────────────────────
+    // Restaure l'état de mix d'un slot (depuis un projet chargé) et l'applique
+    // au runtime (gain + spatialisation SlotPlayer). Marque `applied`.
+    void setSlotMixState(int slot, float gain, float pan,
+                         float width, float depth) noexcept;
+    // Lit l'état courant (pour la sauvegarde projet). Slots non mixés → défaut.
+    mix::SlotMixState getSlotMixState(int slot) const noexcept;
 
     // Rôle analysé par le moteur V2 (ImportPipeline) au dernier import du slot.
     // isSlotRoleReliable() == true quand l'analyse est fiable
@@ -177,6 +186,9 @@ private:
     // flag slotRoleReliable_, motif release/acquire).
     SlotRole           slotRoleAnalyzed_ [kMaxSlots] { SlotRole::Loop };
     std::atomic<bool>  slotRoleReliable_ [kMaxSlots] { false };
+
+    // État de mix persistant par slot (étape 7 / M9) — message thread.
+    mix::MixStateArray mixState_ {};
 
     // Solo par slot : si un slot est solo, les autres sont muets (audio thread).
     std::atomic<int32_t> soloSlot_ {-1};

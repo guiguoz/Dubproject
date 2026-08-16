@@ -639,6 +639,14 @@ nulltest bit-exact (`0xcaf8b973768f00cc` / `0xfb07aa3caefb2d3c`) :
   Tests T-SP6a/b/c. NULL1 régénéré (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`)
   — changement de rendu INTENTIONNEL, seul point audible du portage
   (Debug == Release bit-exact vérifié).
+- **Étape 7 ✔** — état mix persistant : `engine/mix/MixState.h` (header-only,
+  sans JUCE) — `SlotMixState {gain, pan, width, depth, applied}` aligné sur le
+  schéma projet v5 (`SlotMixData`), `mixStateFromOutputs()` capture l'état
+  depuis `MixOutputs` (slots non traités → défauts, rien à écraser à la
+  restauration), `setSlotMixState()`/`slotMixState()` bornés. `EngineFacade`
+  expose `setSlotMixState()` (restaure + applique gain/spatial au SlotPlayer)
+  et `getSlotMixState()` (sauvegarde projet). Tests MIX-12/13/14. NON audible :
+  NULL1 bit-exact inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
 
 À venir : étapes 4 (chemin IA ONNX), 5 (revert), 7 (état mix persistant),
 8 (façade + worker), 9 (ré-câblage MainComponent), 11 (réduction surface V1),

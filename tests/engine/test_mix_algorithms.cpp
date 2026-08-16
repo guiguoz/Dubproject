@@ -5,6 +5,7 @@
 #include "engine/mix/MixAlgorithms.h"
 #include "engine/mix/MixDecisions.h"
 #include "engine/mix/MixEngine.h"
+#include "engine/mix/MixState.h"
 
 using namespace engine::mix;
 using Catch::Approx;
@@ -329,4 +330,102 @@ TEST_CASE("MIX-11: L/R balancing flips non-critical slots", "[mix]") {
     }
     CHECK(left >= 2);
     CHECK(right >= 2);
+}
+
+// ─── MIX-12 : capture de l'état persistant depuis MixOutputs ─────────────
+TEST_CASE("MIX-12: persistent mix state captured from MixOutputs", "[mix]") {
+    MixOutputs out;
+    out.pcm[0].assign(100, 0.f);   // slot 0 traité (PCM non vide)
+    out.pcm[2].assign(200, 0.f);   // slot 2 traité
+    out.gain[0]  = 0.8f;
+    out.pan[0]   = -0.3f;
+    out.width[0] = 0.4f;
+    out.depth[0] = 0.2f;
+    out.gain[2]  = 1.2f;
+    out.pan[2]   = 0.5f;
+    out.width[2] = 0.6f;
+    out.depth[2] = 0.9f;
+
+    const auto st = mixStateFromOutputs(out);
+
+    // Slot traité → applied, valeurs copiées
+    CHECK(st[0].applied);
+    CHECK(st[0].gain  == Approx(0.8f));
+    CHECK(st[0].pan   == Approx(-0.3f));
+    CHECK(st[0].width == Approx(0.4f));
+    CHECK(st[0].depth == Approx(0.2f));
+    CHECK(st[2].applied);
+    CHECK(st[2].gain  == Approx(1.2f));
+    CHECK(st[2].depth == Approx(0.9f));
+
+    // Slot non traité (PCM vide) → défaut non appliqué
+    CHECK_FALSE(st[1].applied);
+    CHECK(st[1].gain  == Approx(1.f));
+    CHECK(st[1].pan   == Approx(0.f));
+    CHECK(st[1].width == Approx(0.f));
+    CHECK(st[1].depth == Approx(0.f));
+}
+
+// ─── MIX-13 : round-trip set → get + bornes ───────────────────────────────
+TEST_CASE("MIX-13: persistent mix state set/get round-trip", "[mix]") {
+    MixStateArray st;
+
+    setSlotMixState(st, 3, 0.9f, 0.1f, 0.2f, 0.3f);
+    const auto s3 = slotMixState(st, 3);
+    CHECK(s3.applied);
+    CHECK(s3.gain  == Approx(0.9f));
+    CHECK(s3.pan   == Approx(0.1f));
+    CHECK(s3.width == Approx(0.2f));
+    CHECK(s3.depth == Approx(0.3f));
+
+    // Réécriture d'un slot déjà persisté
+    setSlotMixState(st, 3, 0.5f, -0.1f, 0.0f, 0.7f);
+    CHECK(slotMixState(st, 3).gain  == Approx(0.5f));
+    CHECK(slotMixState(st, 3).depth == Approx(0.7f));
+
+    // Autres slots restent aux défauts
+    CHECK_FALSE(slotMixState(st, 0).applied);
+    CHECK(slotMixState(st, 8).gain == Approx(1.f));
+
+    // Hors bornes : no-op (lecture) et écriture ignorée
+    CHECK_FALSE(slotMixState(st, -1).applied);
+    CHECK_FALSE(slotMixState(st, 9).applied);
+    CHECK_FALSE(slotMixState(st, 100).applied);
+    setSlotMixState(st, -1, 0.1f, 0.f, 0.f, 0.f);
+    setSlotMixState(st, 99, 0.1f, 0.f, 0.f, 0.f);
+    CHECK(slotMixState(st, 0).gain == Approx(1.f));
+}
+
+// ─── MIX-14 : cohérence état persistant ↔ décisions du mix heuristique ──
+TEST_CASE("MIX-14: captured state matches heuristic mix outputs", "[mix]") {
+    MixInputs in;
+    in.sampleRate = kSR;
+    in.masterBpm  = 120.f;
+    in.pcm[0] = makeSine(55.f,  static_cast<int>(kSR * 0.4f), kSR, 0.6f);  // kick
+    in.pcm[1] = makeSine(70.f,  static_cast<int>(kSR * 0.8f), kSR, 0.5f);  // bass
+    in.pcm[2] = makeSine(200.f, static_cast<int>(kSR * 1.6f), kSR, 0.4f);  // pad
+    in.active.fill(true);
+    in.detected[0] = MixContentType::KICK;
+    in.detected[1] = MixContentType::BASS;
+    in.detected[2] = MixContentType::PAD;
+    in.scene.activeCount = 3;
+
+    const auto out = processHeuristic(in);
+    const auto st  = mixStateFromOutputs(out);
+
+    for (int i = 0; i < kMixSlots; ++i)
+    {
+        if (in.active[i] && !in.pcm[i].empty())
+        {
+            CHECK(st[i].applied);
+            CHECK(st[i].gain  == out.gain[i]);
+            CHECK(st[i].pan   == out.pan[i]);
+            CHECK(st[i].width == out.width[i]);
+            CHECK(st[i].depth == out.depth[i]);
+        }
+        else
+        {
+            CHECK_FALSE(st[i].applied);
+        }
+    }
 }

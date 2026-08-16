@@ -375,6 +375,21 @@ float EngineFacade::getSlotGain(int slot) const noexcept
     return graph_.slotPlayer().getGain(slot);
 }
 
+void EngineFacade::setSlotMixState(int slot, float gain, float pan,
+                                   float width, float depth) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    mix::setSlotMixState(mixState_, slot, gain, pan, width, depth);
+    graph_.slotPlayer().setGain(slot, gain);
+    graph_.slotPlayer().setSpatial(slot, pan, width);
+}
+
+mix::SlotMixState EngineFacade::getSlotMixState(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    return mix::slotMixState(mixState_, slot);
+}
+
 void EngineFacade::setSlotMuted(int slot, bool muted, bool /*quantized*/) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
