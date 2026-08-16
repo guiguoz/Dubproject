@@ -150,7 +150,7 @@ private:
     juce::TextButton loadProjectButton_;
     juce::TextButton saveProjectButton_;
     juce::TextButton filesMenuButton_;
-    ui::StepSequencerPanel stepSeqPanel_ { stepSequencer_ };
+    std::unique_ptr<ui::StepSequencerPanel> stepSeqPanel_;
 
     // ── Sidebar transport ─────────────────────────────────────────────────────
     juce::TextButton        sidebarPlayBtn_;

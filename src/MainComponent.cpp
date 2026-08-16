@@ -114,12 +114,12 @@ MainComponent::MainComponent()
     // Keep accent-green text for semantic play identity, LAF handles background
     sidebarPlayBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
     sidebarPlayBtn_.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4CDFA8));
-    sidebarPlayBtn_.onClick = [this] { stepSeqPanel_.triggerPlay(); };
+    sidebarPlayBtn_.onClick = [this] { stepSeqPanel_->triggerPlay(); };
 
     sidebarTapBtn_.setButtonText("TAP TEMPO");
     // LAF background, accent text to indicate tempo function
     sidebarTapBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4CDFA8));
-    sidebarTapBtn_.onClick = [this] { stepSeqPanel_.triggerTap(); };
+    sidebarTapBtn_.onClick = [this] { stepSeqPanel_->triggerTap(); };
 
     sidebarBpmLabel_.setText("120.00", juce::dontSendNotification);
     sidebarBpmLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(34.f).withStyle("Bold")));
@@ -136,12 +136,12 @@ MainComponent::MainComponent()
             dspPipeline_.setBpm(bpm);
             serumHost_.setBpm(bpm);
             looperEngine_.setBpm(bpm);
-            stepSeqPanel_.setBpm(bpm);
+            stepSeqPanel_->setBpm(bpm);
             updateSidebarBpm(bpm);
         }
         else
         {
-            updateSidebarBpm(stepSeqPanel_.getBpm());
+            updateSidebarBpm(stepSeqPanel_->getBpm());
         }
     };
 
@@ -254,20 +254,20 @@ MainComponent::MainComponent()
     // ── Step Sequencer panel ──────────────────────────────────────────────────
 
     // File loaded: read PCM, pitch-match if needed, push to Sampler
-    stepSeqPanel_.onSlotFileLoaded = [this](int slot, std::string path)
+    stepSeqPanel_->onSlotFileLoaded = [this](int slot, std::string path)
     {
         // Moteur V2 : l'import lit/analyse le fichier (rôles, BPM, tonalité)
         // et charge le PCM dans SlotPlayer. L'UI est notifiée une fois l'analyse prête.
         facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
             juce::MessageManager::callAsync([this, s] {
-                stepSeqPanel_.setSlotLoaded(s, true);
-                stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                stepSeqPanel_->setSlotLoaded(s, true);
+                stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
             });
         });
     };
 
     // Step toggled: stop sample immediately if the track has no more active steps
-    stepSeqPanel_.onStepChanged = [this](int track, int step, bool active)
+    stepSeqPanel_->onStepChanged = [this](int track, int step, bool active)
     {
         stepSequencer_.setStep(track, step, active);  // sync pour le project save
         facade_.setStep(track, step, active);
@@ -275,14 +275,14 @@ MainComponent::MainComponent()
     };
 
     // Slot cleared: unload PCM and clear engine state
-    stepSeqPanel_.onSlotCleared = [this](int slot)
+    stepSeqPanel_->onSlotCleared = [this](int slot)
     {
         facade_.clearSlot(slot);
-        stepSeqPanel_.setSlotLoaded(slot, false);
+        stepSeqPanel_->setSlotLoaded(slot, false);
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
-    stepSeqPanel_.onBpmChanged = [this](float bpm)
+    stepSeqPanel_->onBpmChanged = [this](float bpm)
     {
         stepSequencer_.setBpm(bpm);
         serumHost_.setBpm(bpm);
@@ -291,7 +291,7 @@ MainComponent::MainComponent()
     };
 
     // Play/stop — StepSequencerPanel already calls seq_.setPlaying(); stop samples immediately
-    stepSeqPanel_.onPlayChanged = [this](bool playing)
+    stepSeqPanel_->onPlayChanged = [this](bool playing)
     {
         if (playing) {
             facade_.flipPatternBuffer();
@@ -307,7 +307,7 @@ MainComponent::MainComponent()
     };
 
     // Volume per slot — user fader, multiplied on top of AI normalization gain
-    stepSeqPanel_.onVolumeChanged = [this](int slot, float userGain)
+    stepSeqPanel_->onVolumeChanged = [this](int slot, float userGain)
     {
         auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
         sc.userGains[static_cast<std::size_t>(slot)] = userGain;
@@ -318,32 +318,32 @@ MainComponent::MainComponent()
     // slots (l'IA recalcule l'équilibre avec un slot de plus/moins et peut produire gain≈0
     // sur la basse ou un autre slot). Le mute est appliqué directement ; le prochain
     // triggerAI() (bouton ⚡) reprendra l'état de mute courant pour recalibrer.
-    stepSeqPanel_.onMutedChanged = [this](int slot, bool muted)
+    stepSeqPanel_->onMutedChanged = [this](int slot, bool muted)
     {
         const bool quantize = !muted && stepSequencer_.isPlaying();
         facade_.setSlotMuted(slot, muted, quantize);
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
-    stepSeqPanel_.onMagicButtonPressed = nullptr;
+    stepSeqPanel_->onMagicButtonPressed = nullptr;
 
     // ── Looper ────────────────────────────────────────────────────────────────
-    stepSeqPanel_.onLooperPress        = [this] { looperEngine_.pressButton(); };
-    stepSeqPanel_.onLooperClear        = [this] { looperEngine_.clear(); };
-    stepSeqPanel_.onLooperModeChanged  = [this](bool tape)
+    stepSeqPanel_->onLooperPress        = [this] { looperEngine_.pressButton(); };
+    stepSeqPanel_->onLooperClear        = [this] { looperEngine_.clear(); };
+    stepSeqPanel_->onLooperModeChanged  = [this](bool tape)
     {
         looperEngine_.setOverdubMode(tape ? ::dsp::LooperEngine::OverdubMode::Tape
                                           : ::dsp::LooperEngine::OverdubMode::Replace);
     };
-    stepSeqPanel_.getLooperState  = [this] { return static_cast<int>(looperEngine_.getState()); };
-    stepSeqPanel_.getLooperBars   = [this] { return looperEngine_.getLoopBars(); };
-    stepSeqPanel_.getLooperIsTape = [this]
+    stepSeqPanel_->getLooperState  = [this] { return static_cast<int>(looperEngine_.getState()); };
+    stepSeqPanel_->getLooperBars   = [this] { return looperEngine_.getLoopBars(); };
+    stepSeqPanel_->getLooperIsTape = [this]
     {
         return looperEngine_.getOverdubMode() == ::dsp::LooperEngine::OverdubMode::Tape;
     };
 
     // ── Swing ─────────────────────────────────────────────────────────────────
-    stepSeqPanel_.onSwingChanged = [this](float v) { stepSequencer_.setSwing(v); };
+    stepSeqPanel_->onSwingChanged = [this](float v) { stepSequencer_.setSwing(v); };
 
     // ── Magic mix V2 (worker EngineFacade) — callback unique de fin ────────────
     // Le worker V2 détecte les types + applique le mix d'un bloc (aucun rechargement
@@ -365,8 +365,8 @@ MainComponent::MainComponent()
             // Revert : effacer les tags + reset spatial viz. Le PCM n'est jamais
             // modifié en V2 → aucun re-trim / re-reload nécessaire.
             for (int i = 0; i < 9; ++i)
-                stepSeqPanel_.setSlotContentType(i, "");
-            stepSeqPanel_.setMagicActive(false);
+                stepSeqPanel_->setSlotContentType(i, "");
+            stepSeqPanel_->setMagicActive(false);
             spatialViz_.resetAll();
         }
         else
@@ -377,7 +377,7 @@ MainComponent::MainComponent()
                 const auto type   = facade_.getDetectedType(i);
                 const bool loaded = !facade_.slotFilePath(i).empty();
                 if (loaded)
-                    stepSeqPanel_.setSlotContentType(
+                    stepSeqPanel_->setSlotContentType(
                         i, engine::mix::contentTypeName(type));
 
                 // pan/width/depth sont appliqués au runtime par le worker V2
@@ -387,7 +387,7 @@ MainComponent::MainComponent()
                                          loaded, kSlotColours[i]);
             }
             spatialViz_.setSaxActive(true);
-            stepSeqPanel_.setMagicActive(true);
+            stepSeqPanel_->setMagicActive(true);
 
             // Sync visuel du bouton ON (cohérent avec le comportement V1)
             juce::MessageManager::callAsync([this]
@@ -407,7 +407,7 @@ MainComponent::MainComponent()
                 const std::size_t idx = static_cast<std::size_t>(i);
                 sc.gains[idx]     = ms.gain;    // référence/diagnostique uniquement
                 sc.userGains[idx] = ms.gain;    // le gain IA devient le point de départ du fader
-                stepSeqPanel_.setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
+                stepSeqPanel_->setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
             }
 
             // Normalise le gain Serum vers un niveau RMS cible (≈ −14 dBFS).
@@ -426,7 +426,7 @@ MainComponent::MainComponent()
     });
 
     // Override manuel du type par slot (right-click sur l'indicateur)
-    stepSeqPanel_.onTypeOverrideChanged = [this](int slot, int typeIndex)
+    stepSeqPanel_->onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
         facade_.setManualTypeOverride(slot, typeIndex);
         // Re-lancer l'IA avec le nouveau type
@@ -434,10 +434,10 @@ MainComponent::MainComponent()
     };
 
     // Éditeur de sample (bouton [ED])
-    stepSeqPanel_.onEditPressed = [this](int slot) { openSampleEditor(slot); };
+    stepSeqPanel_->onEditPressed = [this](int slot) { openSampleEditor(slot); };
 
     // ── Clipboard track ───────────────────────────────────────────────────────
-    stepSeqPanel_.onTrackCopyRequest = [this](int slot)
+    stepSeqPanel_->onTrackCopyRequest = [this](int slot)
     {
         auto& cb = trackClipboard_;
         cb.steps    = {};
@@ -445,14 +445,14 @@ MainComponent::MainComponent()
         for (int s = 0; s < numSteps; ++s)
             cb.steps[static_cast<std::size_t>(s)] = stepSequencer_.getStep(slot, s);
         cb.barCount = stepSequencer_.getTrackBarCount(slot);
-        cb.filePath = stepSeqPanel_.getSlotFilePath(slot);
+        cb.filePath = stepSeqPanel_->getSlotFilePath(slot);
         cb.gain     = dspPipeline_.getSampler().getSlotGain(slot);
         cb.muted    = dspPipeline_.getSampler().isSlotMuted(slot);
         cb.valid    = true;
-        stepSeqPanel_.hasPasteData = true;
+        stepSeqPanel_->hasPasteData = true;
     };
 
-    stepSeqPanel_.onTrackPasteRequest = [this](int slot)
+    stepSeqPanel_->onTrackPasteRequest = [this](int slot)
     {
         if (!trackClipboard_.valid) return;
         captureCurrentScene();
@@ -460,13 +460,13 @@ MainComponent::MainComponent()
 
         // Pattern
         stepSequencer_.setTrackBarCount(slot, cb.barCount);
-        stepSeqPanel_.setTrackStepCount(slot, cb.barCount * 16);
+        stepSeqPanel_->setTrackStepCount(slot, cb.barCount * 16);
         const int numSteps = cb.barCount * 16;
         facade_.setTrackBarCount(slot, cb.barCount);
         for (int s = 0; s < numSteps; ++s)
         {
             stepSequencer_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
-            stepSeqPanel_.setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
+            stepSeqPanel_->setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
             facade_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
         }
         facade_.flipPatternBuffer();
@@ -474,13 +474,13 @@ MainComponent::MainComponent()
         // Gain + mute
         dspPipeline_.getSampler().setSlotGain(slot, cb.gain);
         dspPipeline_.getSampler().setSlotMuted(slot, cb.muted);
-        stepSeqPanel_.setSlotMuted(slot, cb.muted);
+        stepSeqPanel_->setSlotMuted(slot, cb.muted);
 
         // Sample (si différent)
-        if (!cb.filePath.empty() && cb.filePath != stepSeqPanel_.getSlotFilePath(slot))
+        if (!cb.filePath.empty() && cb.filePath != stepSeqPanel_->getSlotFilePath(slot))
         {
             loadSampleIntoSlot(slot, cb.filePath);
-            stepSeqPanel_.setSlotFilePath(slot, cb.filePath);
+            stepSeqPanel_->setSlotFilePath(slot, cb.filePath);
         }
 
         // Mettre à jour la scène courante en mémoire
@@ -495,13 +495,13 @@ MainComponent::MainComponent()
             sc.filePaths  [static_cast<std::size_t>(slot)] = cb.filePath;
     };
 
-    stepSeqPanel_.onPitchOffsetChanged = [this](int slot, float semitones)
+    stepSeqPanel_->onPitchOffsetChanged = [this](int slot, float semitones)
     {
         onPitchOffsetChanged(slot, semitones);
     };
 
     // Changement de longueur de pattern via le menu pageLabel_
-    stepSeqPanel_.onTrackBarCountChanged = [this](int track, int bars)
+    stepSeqPanel_->onTrackBarCountChanged = [this](int track, int bars)
     {
         stepSequencer_.setTrackBarCount(track, bars);   // sync pour le project save
         facade_.setTrackBarCount(track, bars);
@@ -509,7 +509,7 @@ MainComponent::MainComponent()
     };
 
     // Override manuel du mode de lecture (clic droit → "Mode de lecture...")
-    stepSeqPanel_.onSlotModeChanged = [this](int slot, int mode)
+    stepSeqPanel_->onSlotModeChanged = [this](int slot, int mode)
     {
         const engine::PlayMode pm = (mode == 1) ? engine::PlayMode::Free
                                   : (mode == 2) ? engine::PlayMode::LoopSync
@@ -518,38 +518,35 @@ MainComponent::MainComponent()
     };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
-    stepSeqPanel_.getSlotPlayhead = [this](int slot) -> float
+    stepSeqPanel_->getSlotPlayhead = [this](int slot) -> float
     {
         return facade_.getSlotPlayheadRatio(slot);
     };
 
     // VU meter — real per-slot output peak from audio thread (reflects gain/mute)
-    stepSeqPanel_.getSlotLevel = [this](int slot) -> float
+    stepSeqPanel_->getSlotLevel = [this](int slot) -> float
     {
         return facade_.getSlotOutputPeak(slot);
     };
 
     // Solo per slot
-    stepSeqPanel_.onSoloChanged = [this](int slot, bool soloed)
+    stepSeqPanel_->onSoloChanged = [this](int slot, bool soloed)
     {
         facade_.setSlotSolo(slot, soloed);
     };
 
     // Ducking display — le ducking V2 est géré en interne par AutoMix (sidechain)
     // et n'est pas exposé à l'UI ; on renvoie 1.0 (pas de duck externe visible).
-    stepSeqPanel_.getDuckingGain = [this]() -> float
+    stepSeqPanel_->getDuckingGain = [this]() -> float
     {
         return 1.0f;
     };
 
     // Input RMS — RMS maître du graphe V2.
-    stepSeqPanel_.getInputRms = [this]() -> float
+    stepSeqPanel_->getInputRms = [this]() -> float
     {
         return facade_.getMasterRms();
     };
-
-
-    addAndMakeVisible(stepSeqPanel_);
 
     // ── Master key selector (sidebar) ─────────────────────────────────────────
     // ── Dub Delay global bus
@@ -682,6 +679,10 @@ MainComponent::MainComponent()
     // Auto-lancement IA au démarrage (après init audio)
     juce::MessageManager::callAsync([this] { triggerAI(); });
 
+    // Initialize StepSequencerPanel with facade reference (after facade construction)
+    stepSeqPanel_ = std::make_unique<ui::StepSequencerPanel>(&facade_);
+    addAndMakeVisible(stepSeqPanel_.get());
+
     setSize(1280, 900);
     setAudioChannels(1, 2);
     midiManager_.start(deviceManager);
@@ -744,11 +745,11 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
     if (slot >= 0 && slot < 9)
         sampler.setSlotLoop(slot, kSlotLoop[slot]);
 
-    stepSeqPanel_.setSlotLoaded(slot, true);
+    stepSeqPanel_->setSlotLoaded(slot, true);
 
     {
         auto snap = sampler.getSlotPcmSnapshot(slot);
-        stepSeqPanel_.setSlotWaveform(slot, computeEnvelope(snap));
+        stepSeqPanel_->setSlotWaveform(slot, computeEnvelope(snap));
     }
 }
 
@@ -796,10 +797,10 @@ void MainComponent::openSampleEditor(int slot)
 
     // Arrêter le morceau pour permettre d'écouter le sample en isolation
     if (stepSequencer_.isPlaying())
-        stepSeqPanel_.triggerPlay();
+        stepSeqPanel_->triggerPlay();
 
     const juce::String fileName =
-        juce::File(stepSeqPanel_.getSlotFilePath(slot))
+        juce::File(stepSeqPanel_->getSlotFilePath(slot))
             .getFileNameWithoutExtension();
     const juce::String title =
         "Edit Sample  —  " + (fileName.isEmpty() ? "S" + juce::String(slot + 1) : fileName)
@@ -834,7 +835,7 @@ void MainComponent::openSampleEditor(int slot)
         const int fileS = fileTrimOffset + s;
         const int fileE = fileTrimOffset + e;
 
-        const std::string filePath = stepSeqPanel_.getSlotFilePath(slot);
+        const std::string filePath = stepSeqPanel_->getSlotFilePath(slot);
         for (int si = 0; si < kMaxScenes; ++si)
             for (int t = 0; t < 9; ++t)
                 if (sceneManager_.scene(si).filePaths[t] == filePath)
@@ -855,7 +856,7 @@ void MainComponent::openSampleEditor(int slot)
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
         for (int t = 0; t < 9; ++t)
-            if (t != slot && stepSeqPanel_.getSlotFilePath(t) == filePath)
+            if (t != slot && stepSeqPanel_->getSlotFilePath(t) == filePath)
                 facade_.reloadSlotPcm(t, trimmed, sr);
     };
 
@@ -911,7 +912,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     for (int i = 0; i < 9; ++i)
     {
         auto& sc    = data.samples[static_cast<std::size_t>(i)];
-        sc.filePath = stepSeqPanel_.getSlotFilePath(i);
+        sc.filePath = stepSeqPanel_->getSlotFilePath(i);
         sc.gain     = sampler.getSlotGain(i);
         sc.loop     = false;
         sc.oneShot  = true;
@@ -1127,7 +1128,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
     stepSequencer_.setBpm(bpm);
     serumHost_.setBpm(bpm);
-    stepSeqPanel_.setBpm(bpm);
+    stepSeqPanel_->setBpm(bpm);
     updateSidebarBpm(bpm);
     facade_.setBpm(bpm);
 
@@ -1142,12 +1143,12 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             // dans SlotPlayer (rôles, BPM, tonalité, mode de lecture).
             facade_.importSampleAsync(i, sc.filePath, [this](int s, const engine::AnalysisResult&) {
                 juce::MessageManager::callAsync([this, s] {
-                    stepSeqPanel_.setSlotLoaded(s, true);
-                    stepSeqPanel_.setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                    stepSeqPanel_->setSlotLoaded(s, true);
+                    stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                 });
             });
 
-            stepSeqPanel_.setSlotFilePath(i, sc.filePath);   // updates LCD name
+            stepSeqPanel_->setSlotFilePath(i, sc.filePath);   // updates LCD name
 
             // Restore saved gain (fallback to unity if not yet set)
             const float savedGain = sc.gain > 0.f ? sc.gain : 1.0f;
@@ -1157,21 +1158,21 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         {
             // Vide explicitement le slot s'il n'y a pas de sample configuré
             facade_.clearSlot(i);
-            stepSeqPanel_.setSlotFilePath(i, "");
-            stepSeqPanel_.setSlotLoaded(i, false);
-            stepSeqPanel_.setSlotWaveform(i, {});
+            stepSeqPanel_->setSlotFilePath(i, "");
+            stepSeqPanel_->setSlotLoaded(i, false);
+            stepSeqPanel_->setSlotWaveform(i, {});
         }
 
         for (int s = 0; s < 16; ++s)
         {
             const bool active = sc.stepPattern[s];
             stepSequencer_.setStep(i, s, active);
-            stepSeqPanel_.setStepState(i, s, active);
+            stepSeqPanel_->setStepState(i, s, active);
             facade_.setStep(i, s, active);
         }
         facade_.setTrackBarCount(i, stepSequencer_.getTrackBarCount(i));
 
-        stepSeqPanel_.setSlotMuted(i, sc.muted);
+        stepSeqPanel_->setSlotMuted(i, sc.muted);
         facade_.setSlotMuted(i, sc.muted);
     }
 
@@ -1310,7 +1311,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 
     // ── Swing (absent dans anciens projets → 0 = straight) ───────────────────
     stepSequencer_.setSwing(data.swing);
-    stepSeqPanel_.setSwing(data.swing);
+    stepSeqPanel_->setSwing(data.swing);
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
 }
@@ -1341,7 +1342,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     stepSequencer_.prepare(sampleRate);
 
     facade_.prepare(sampleRate, samplesPerBlockExpected);
-    facade_.setBpm(stepSeqPanel_.getBpm());
+    facade_.setBpm(stepSeqPanel_->getBpm());
     facade_.setSerumHost(&serumHost_);
     facade_.setInputGain(v2InputGain_.load(std::memory_order_relaxed));
     facade_.startMixThread();
@@ -2065,7 +2066,7 @@ void MainComponent::resized()
     // Step sequencer poussé sous la zone info
     const int seqTop = kInfoZoneTop + kInfoZoneH + 8;
     samplerLabel_.setBounds(16, seqTop - 20, 200, 16);
-    stepSeqPanel_.setBounds(16, seqTop, mainW, H - seqTop - kStatusH - kPad);
+    stepSeqPanel_->setBounds(16, seqTop, mainW, H - seqTop - kStatusH - kPad);
 
     // MIDI Learn overlay panel (se superpose au step sequencer)
     {
@@ -2389,7 +2390,7 @@ void MainComponent::captureCurrentScene()
     {
         const std::size_t idx  = static_cast<std::size_t>(i);
         const int numSteps     = stepSequencer_.getTrackStepCount(i);
-        sc.filePaths    [idx]  = stepSeqPanel_.getSlotFilePath(i);
+        sc.filePaths    [idx]  = stepSeqPanel_->getSlotFilePath(i);
         sc.mutes        [idx]  = sampler.isSlotMuted(i);
         {
             const auto ms = facade_.getSlotMixState(i);
@@ -2530,7 +2531,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         // Empty scene: clear step patterns and reset all gains to unity
         for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
-                stepSeqPanel_.setStepState(i, s, false);
+                stepSeqPanel_->setStepState(i, s, false);
         if (!stepSequencer_.hasPendingTransition())
             stepSequencer_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
         for (int i = 0; i < 9; ++i)
@@ -2547,7 +2548,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     ::dsp::StepSequencer::StepBuf nextStepBuf;
 
     // Reset scroll so setStepState() calls below are not filtered out by a stale offset
-    stepSeqPanel_.resetViewToStart();
+    stepSeqPanel_->resetViewToStart();
 
     // Restore samples, bar counts and step patterns
     for (int i = 0; i < 9; ++i)
@@ -2556,14 +2557,14 @@ void MainComponent::applyScene(int idx, int fromIdx)
         const int barCount        = sc.trackBarCounts[sidx];
         const int numSteps        = barCount * 16;
         const std::string& newPath     = sc.filePaths[i];
-        const std::string  currentPath = stepSeqPanel_.getSlotFilePath(i);
+        const std::string  currentPath = stepSeqPanel_->getSlotFilePath(i);
 
         // Mettre à jour le step buffer local (sera préparé atomiquement après la boucle).
         nextStepBuf.trackStepCount[i] = numSteps;
         for (int s = 0; s < ::dsp::StepSequencer::kMaxSteps; ++s)
             nextStepBuf.steps[i][s] = sc.steps[sidx][static_cast<std::size_t>(s)];
 
-        stepSeqPanel_.setTrackStepCount(i, numSteps);
+        stepSeqPanel_->setTrackStepCount(i, numSteps);
 
         if (!newPath.empty() && newPath != currentPath)
         {
@@ -2574,13 +2575,13 @@ void MainComponent::applyScene(int idx, int fromIdx)
             // (async) — voir l'alignement en fin de boucle.
             loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
             loadedNewFile[static_cast<std::size_t>(i)] = true;
-            stepSeqPanel_.setSlotFilePath(i, newPath);
+            stepSeqPanel_->setSlotFilePath(i, newPath);
         }
         else if (newPath.empty() && !currentPath.empty())
         {
             // Slot doit être vidé
             dspPipeline_.getSampler().clearSlot(i);
-            stepSeqPanel_.setSlotFilePath(i, "");
+            stepSeqPanel_->setSlotFilePath(i, "");
         }
         else if (!newPath.empty())
         {
@@ -2598,10 +2599,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
                 ? gainsBeforeScene[static_cast<std::size_t>(i)]
                 : 0.5f);
         dspPipeline_.getSampler().setSlotGain     (i, targetGain);
-        stepSeqPanel_.setSlotMuted (i, sc.mutes[i]);
-        stepSeqPanel_.setSlotVolume(i, sc.userGains[sidx]);
+        stepSeqPanel_->setSlotMuted (i, sc.mutes[i]);
+        stepSeqPanel_->setSlotVolume(i, sc.userGains[sidx]);
         for (int s = 0; s < numSteps; ++s)
-            stepSeqPanel_.setStepState(i, s, sc.steps[sidx][static_cast<std::size_t>(s)]);
+            stepSeqPanel_->setStepState(i, s, sc.steps[sidx][static_cast<std::size_t>(s)]);
 
         // v7 — re-appliquer le trim si défini pour ce slot/scène.
         // Seulement si même fichier : trim déjà intégré lors du chargement ci-dessus.
@@ -2663,7 +2664,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         const std::size_t sidx2   = static_cast<std::size_t>(i);
         const int         nSteps2 = sc.trackBarCounts[sidx2] * 16;
         for (int s = 0; s < nSteps2; ++s)
-            stepSeqPanel_.setStepState(i, s, sc.steps[sidx2][static_cast<std::size_t>(s)]);
+            stepSeqPanel_->setStepState(i, s, sc.steps[sidx2][static_cast<std::size_t>(s)]);
     }
 
     // When a bar-quantized transition is armed (navigateScene pre-armed the buffer),
@@ -2801,7 +2802,7 @@ void MainComponent::resetCurrentScene()
         for (int s = 0; s < numSteps; ++s)
         {
             stepSequencer_.setStep(i, s, false);
-            stepSeqPanel_.setStepState(i, s, false);
+            stepSeqPanel_->setStepState(i, s, false);
             facade_.setStep(i, s, false);
         }
     }
@@ -2818,7 +2819,7 @@ void MainComponent::resetCurrentSceneFull()
         for (int s = 0; s < numSteps; ++s)
         {
             stepSequencer_.setStep(i, s, false);
-            stepSeqPanel_.setStepState(i, s, false);
+            stepSeqPanel_->setStepState(i, s, false);
             facade_.setStep(i, s, false);
         }
     }
@@ -2829,8 +2830,8 @@ void MainComponent::resetCurrentSceneFull()
     {
         sampler.clearSlot(i);
         facade_.clearSlot(i);
-        stepSeqPanel_.setSlotFilePath(i, "");
-        stepSeqPanel_.setSlotLoaded(i, false);
+        stepSeqPanel_->setSlotFilePath(i, "");
+        stepSeqPanel_->setSlotLoaded(i, false);
     }
     sceneManager_.scene(sceneManager_.currentIdx()).used = false;
 }
@@ -2885,7 +2886,7 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
     sc.pitchOffsets[static_cast<std::size_t>(slot)] = semitones;
 
     // 2. Update panel checkmark
-    stepSeqPanel_.setSlotPitchOffset(slot, semitones);
+    stepSeqPanel_->setSlotPitchOffset(slot, semitones);
 
     // 3. Instant repitch
     facade_.setSlotTransposeSemitones(slot, semitones);

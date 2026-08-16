@@ -2,7 +2,7 @@
 
 #include "Colours.h"
 #include "NeonButton.h"
-#include "dsp/StepSequencer.h"
+#include "engine/EngineFacade.h"
 #include "dsp/Sampler.h"
 
 #include <JuceHeader.h>
@@ -73,8 +73,8 @@ public:
     std::function<void(float)> onSwingChanged;
 
     // ── Constructor ───────────────────────────────────────────────────────────
-    explicit StepSequencerPanel(::dsp::StepSequencer& seq)
-        : seq_(seq)
+    explicit StepSequencerPanel(engine::EngineFacade* facade)
+        : facade_(facade)
     {
         // Play/stop
         playBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
@@ -244,7 +244,7 @@ public:
                 {
                     const int  actualStep = viewOffsetSteps_ + s;
                     const bool active     = stepBtns_[t][s].getToggleState();
-                    seq_.setStep(t, actualStep, active);
+                    if (facade_) facade_->setStep(t, actualStep, active);
                     if (onStepChanged) onStepChanged(t, actualStep, active);
                 };
                 addAndMakeVisible(stepBtns_[t][s]);
@@ -819,9 +819,9 @@ public:
             g.drawText("DROP", kLeftW, ry, gridW, rowH, juce::Justification::centred);
         }
 
-        if (!seq_.isPlaying()) return;
+        if (!facade_ || !facade_->isPlaying()) return;
 
-        const int globalStep = seq_.getCurrentStep();
+        const int globalStep = facade_->getCurrentStep();
         const juce::Colour playheadCol(0xFF4CDFA8);  // primary green
 
         // Per-track playhead (each track has its own step count)
@@ -1114,9 +1114,9 @@ private:
         }
 
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
-        if (seq_.isPlaying())
+        if (facade_ && facade_->isPlaying())
         {
-            const int globalStep = seq_.getCurrentStep();
+            const int globalStep = (facade_) ? facade_->getCurrentStep() : 0;
             const int maxSteps   = trackStepCounts_[0];  // all tracks same length
             const int trackStep  = globalStep % maxSteps;
 
@@ -1134,8 +1134,10 @@ private:
 
     void togglePlay()
     {
-        const bool nowPlaying = !seq_.isPlaying();
-        seq_.setPlaying(nowPlaying);
+        const bool nowPlaying = facade_ && !facade_->isPlaying();
+        if (facade_) {
+            if (nowPlaying) facade_->play(); else facade_->stop();
+        }
         playBtn_.setButtonText(nowPlaying
                                ? juce::CharPointer_UTF8("\xe2\x96\xa0")
                                : juce::CharPointer_UTF8("\xe2\x96\xb6"));
@@ -1161,7 +1163,7 @@ private:
             currentBpm_ = bpm;
             bpmLabel_.setText(juce::String(juce::roundToInt(bpm)) + " BPM",
                               juce::dontSendNotification);
-            seq_.setBpm(bpm);
+            if (facade_) facade_->setBpm(bpm);
             if (onBpmChanged) onBpmChanged(bpm);
         }
     }
@@ -1284,7 +1286,7 @@ private:
         for (int t = 0; t < 9; ++t)
         {
             trackStepCounts_[t] = newSteps;
-            seq_.setTrackStepCount(t, newSteps);
+            if (facade_) facade_->setTrackBarCount(t, (newSteps + 15) / 16);
         }
         if (onTrackBarCountChanged)
             for (int t = 0; t < 9; ++t)
@@ -1332,7 +1334,7 @@ private:
                 const int actualStep = viewOffsetSteps_ + s;
                 if (actualStep < trackStepCounts_[t])
                     stepBtns_[t][s].setToggleState(
-                        seq_.getStep(t, actualStep), juce::dontSendNotification);
+                        facade_ ? facade_->getStep(t, actualStep) : false, juce::dontSendNotification);
             }
     }
 
@@ -1449,7 +1451,7 @@ private:
 
     // ── Members ───────────────────────────────────────────────────────────────
 
-    ::dsp::StepSequencer& seq_;
+    engine::EngineFacade* facade_;
 
     juce::TextButton playBtn_;
     juce::TextButton tapBtn_;
