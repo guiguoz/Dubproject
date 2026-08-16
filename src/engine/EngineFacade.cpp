@@ -390,6 +390,183 @@ mix::SlotMixState EngineFacade::getSlotMixState(int slot) const noexcept
     return mix::slotMixState(mixState_, slot);
 }
 
+// ─── Magic mix asynchrone (worker — étape 8 / M9) ─────────────────────────────
+// Le snapshot est capturé sur le message thread (appelant) pour éviter toute
+// lecture concurrente du SlotPlayer, puis processHeuristic tourne sur un thread
+// dédié. À la fin, l'état persistant (mixState_) est appliqué au runtime et le
+// callback est redirigé sur le message thread (JuceHeader fournit
+// MessageManager::callAsync).
+
+namespace {
+
+// Capture le snapshot runtime du magic mix (message thread) : PCM mono par
+// slot, rôles courants, scène courante (densité). Partagé entre le chemin
+// heuristique et le chemin IA.
+mix::MixWorkerInputs captureMixSnapshot(const SceneData& sc, AudioGraph& graph,
+                                        const std::atomic<bool>* slotLoaded,
+                                        float masterBpm, double sampleRate,
+                                        float serumRms, float serumCentroid,
+                                        float serumMidFrac, float serumHighFrac,
+                                        mix::MixContentType serumContentType,
+                                        const mix::MixContentType* manualOverrides,
+                                        const bool* manualOverrideActive)
+{
+    mix::MixWorkerInputs in;
+    in.masterBpm  = masterBpm;
+    in.sampleRate = sampleRate;
+
+    in.serumRms      = serumRms;
+    in.serumCentroid = serumCentroid;
+    in.serumMidFrac  = serumMidFrac;
+    in.serumHighFrac = serumHighFrac;
+    in.serumContentType = serumContentType;
+
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const SlotConfig& cfg = sc.slots[s];
+        in.pcm[s]    = graph.slotPlayer().getPcmSnapshot(s);
+        in.loaded[s] = slotLoaded[s].load(std::memory_order_acquire);
+        in.muted[s]  = graph.slotPlayer().isMuted(s);
+        in.types[s]  = roleToMixType(graph.slotRole(s));
+        // Override manuel utilisateur (clic droit UI) → priorité au mix.
+        if (manualOverrideActive[s] && manualOverrides[s] != mix::MixContentType::OTHER)
+            in.types[s] = manualOverrides[s];
+        in.scene.slotActive[static_cast<std::size_t>(s)] = cfg.active && in.loaded[s];
+        in.scene.slotTypes [static_cast<std::size_t>(s)] = roleToMixType(cfg.role);
+        if (cfg.active && in.loaded[s])
+            ++in.scene.activeCount;
+    }
+    in.scene.isDrop      = in.scene.activeCount >= 6;
+    in.scene.isBreakdown = in.scene.activeCount <= 2;
+    return in;
+}
+
+} // namespace
+
+void EngineFacade::triggerMagicMix() noexcept
+{
+    if (magicMixBusy_.load(std::memory_order_acquire)) return;
+    magicMixBusy_.store(true, std::memory_order_release);
+
+    // ── Snapshot runtime (message thread) ────────────────────────────────────
+    const SceneData& sc = sceneStore_.getScene(currentScene_);
+    mix::MixWorkerInputs in = captureMixSnapshot(
+        sc, graph_, slotLoaded_, getBpm(), sampleRate_,
+        serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
+        serumContentType_, manualOverrides_, manualOverrideActive_);
+
+    // ── Lancement du worker ──────────────────────────────────────────────────
+    std::thread([this, in = std::move(in)]() mutable {
+        const mix::MixStateArray state = mix::runHeuristicMix(in);
+
+        // Application + callback sur le message thread (l'état persistant n'est
+        // jamais écrit depuis un thread de travail).
+        juce::MessageManager::callAsync([this, in = std::move(in), state]() {
+            for (int s = 0; s < kMaxSlots; ++s) {
+                const mix::SlotMixState st = mix::slotMixState(state, s);
+                if (st.applied)
+                    setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
+                detectedTypes_[s] = in.types[s];
+            }
+            magicMixBusy_.store(false, std::memory_order_release);
+            magicMixActive_.store(true, std::memory_order_release);
+            lastMixUsedFallback_.store(true, std::memory_order_release);
+            if (magicMixDoneCb_)
+                magicMixDoneCb_();
+        });
+    }).detach();
+}
+
+void EngineFacade::triggerAiMagicMix(
+    const std::array<engine::mix::MixAiDecision, 8>& decisions) noexcept
+{
+    if (magicMixBusy_.load(std::memory_order_acquire)) return;
+    magicMixBusy_.store(true, std::memory_order_release);
+
+    const SceneData& sc = sceneStore_.getScene(currentScene_);
+    mix::MixWorkerInputs in = captureMixSnapshot(
+        sc, graph_, slotLoaded_, getBpm(), sampleRate_,
+        serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
+        serumContentType_, manualOverrides_, manualOverrideActive_);
+
+    std::thread([this, in = std::move(in), decisions]() mutable {
+        const mix::MixStateArray state = mix::runAiMix(in, decisions);
+
+        juce::MessageManager::callAsync([this, in = std::move(in), state]() {
+            for (int s = 0; s < kMaxSlots; ++s) {
+                const mix::SlotMixState st = mix::slotMixState(state, s);
+                if (st.applied)
+                    setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
+                detectedTypes_[s] = in.types[s];
+            }
+            magicMixBusy_.store(false, std::memory_order_release);
+            magicMixActive_.store(true, std::memory_order_release);
+            lastMixUsedFallback_.store(false, std::memory_order_release);
+            if (magicMixDoneCb_)
+                magicMixDoneCb_();
+        });
+    }).detach();
+}
+
+void EngineFacade::toggleMagicMix() noexcept
+{
+    if (magicMixActive_.load(std::memory_order_acquire))
+        revertMagicMix();
+    else
+        triggerMagicMix();
+}
+
+void EngineFacade::revertMagicMix() noexcept
+{
+    if (magicMixBusy_.load(std::memory_order_acquire)) return;
+
+    // Reset de l'état persistant + application au runtime (gain 1 + spatial
+    // neutre). Le PCM n'est jamais modifié (invariant transparence) — aucun
+    // rechargement fichier nécessaire. Synchrone : message thread uniquement.
+    mix::resetMixState(mixState_);
+    for (int s = 0; s < kMaxSlots; ++s) {
+        graph_.slotPlayer().setGain(s, 1.f);
+        graph_.slotPlayer().setSpatial(s, 0.f, 0.f);
+    }
+    magicMixActive_.store(false, std::memory_order_release);
+
+    if (magicMixDoneCb_)
+        magicMixDoneCb_();
+}
+
+void EngineFacade::setMagicMixDoneCallback(std::function<void()> cb) noexcept
+{
+    magicMixDoneCb_ = std::move(cb);
+}
+
+void EngineFacade::setSerumContext(float rms, float centroid, float midFrac,
+                                   float highFrac,
+                                   mix::MixContentType contentType, bool active) noexcept
+{
+    serumRms_      = active ? rms      : 0.f;
+    serumCentroid_ = active ? centroid : 0.f;
+    serumMidFrac_  = active ? midFrac  : 0.f;
+    serumHighFrac_ = active ? highFrac : 0.f;
+    serumContentType_ = contentType;
+}
+
+engine::mix::MixContentType EngineFacade::getDetectedType(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return mix::MixContentType::OTHER;
+    const auto t = detectedTypes_[static_cast<std::size_t>(slot)];
+    return (t == mix::MixContentType::OTHER) ? roleToMixType(graph_.slotRole(slot)) : t;
+}
+
+void EngineFacade::setManualTypeOverride(int slot, int typeIndex) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    if (typeIndex < 0) {
+        manualOverrideActive_[slot] = false;
+        return;
+    }
+    manualOverrideActive_[slot] = true;
+    manualOverrides_[slot] = static_cast<mix::MixContentType>(typeIndex);
+}
+
 void EngineFacade::setSlotMuted(int slot, bool muted, bool /*quantized*/) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;

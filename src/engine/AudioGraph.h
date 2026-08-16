@@ -8,8 +8,28 @@
 #include "engine/TransitionEngine.h"
 #include "engine/fx/PingPongDelay.h"
 #include "engine/fx/MasterLimiter.h"
+#include "engine/mix/MixAlgorithms.h"
 
 namespace engine {
+
+// Rôle V2 → type magic mix (spatialisation runtime M9 étape 6 + worker M9
+// étape 8). Centralisé ici pour un mapping unique façade/graphe.
+inline mix::MixContentType roleToMixType(SlotRole role) noexcept
+{
+    using mix::MixContentType;
+    switch (role) {
+        case SlotRole::Kick:    return MixContentType::KICK;
+        case SlotRole::Bass:    return MixContentType::BASS;
+        case SlotRole::Snare:   return MixContentType::SNARE;
+        case SlotRole::Pad:     return MixContentType::PAD;
+        case SlotRole::Melodic: return MixContentType::SYNTH;
+        case SlotRole::Perc:    return MixContentType::PERC;
+        case SlotRole::Fx:      return MixContentType::OTHER;
+        case SlotRole::Loop:    return MixContentType::LOOP;
+        case SlotRole::Drum:    return MixContentType::PERC;
+        default:                return MixContentType::OTHER;
+    }
+}
 
 // Downmix stéréo entrelacé → mono : mono[i] = (L[i] + R[i]) * 0.5.
 // Utilisé par EngineFacade::processBlock lorsque le device est mono
@@ -62,6 +82,8 @@ public:
     // Met à jour le slot kick pour le sidechain et la spatialisation pan+Haas
     // (M9 étape 6) si le rôle change.
     void setSlotRole(int slot, SlotRole role) noexcept;
+    // Rôle courant du slot (write side / message thread) — pour le worker magic mix.
+    SlotRole slotRole(int slot) const noexcept { return roles_[slot]; }
 
     // Thread de mix : recalcule les cibles AutoMix à partir des rôles courants.
     // Appelé toutes les 50 ms (thread de mix réel ou simulation offline §11.2).

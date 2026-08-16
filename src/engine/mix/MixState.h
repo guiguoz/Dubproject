@@ -76,4 +76,14 @@ inline SlotMixState slotMixState(const MixStateArray& states, int slot) noexcept
     return states[static_cast<std::size_t>(slot)];
 }
 
+/// Revert du magic mix (étape 5 / M9) : remet TOUT l'état persistant aux
+/// défauts (gain 1, spatial neutre, applied=false). Équivalent V2 de
+/// SmartSamplerEngine::revertToOriginals (le PCM n'étant jamais modifié, il
+/// n'y a rien à recharger). L'application au runtime (gain 1 + spatial neutre
+/// SlotPlayer) reste à la charge de l'appelant.
+inline void resetMixState(MixStateArray& states) noexcept
+{
+    states = {};
+}
+
 } // namespace engine::mix

@@ -14,6 +14,7 @@
 #include "engine/TransitionEngine.h"
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
+#include "engine/mix/MixWorker.h"
 
 // Forward-declare SerumHost (JUCE dep, reste dans src/dsp/)
 namespace dsp { class SerumHost; }
@@ -95,11 +96,54 @@ public:
     // Lit l'état courant (pour la sauvegarde projet). Slots non mixés → défaut.
     mix::SlotMixState getSlotMixState(int slot) const noexcept;
 
+    // ── Magic mix asynchrone (worker — étape 8 / M9) ──────────────────────────
+    // Capture le snapshot runtime (PCM mono + rôles + scène courante) sur le
+    // message thread puis exécute MixEngine::processHeuristic sur un thread
+    // dédié. À la fin, applique gain/pan/width/depth au runtime (SlotPlayer) et
+    // appelle onMagicMixDone sur le message thread.
+    // Déclenché explicitement par l'UI (bouton ⚡) — jamais pendant renderOffline
+    // (le nulltest reste inchangé).
+    void triggerMagicMix() noexcept;
+    // Variante chemin IA (étape 4 / M9) : mêmes captures, mais exécute
+    // MixEngine::processAiMix avec les décisions du modèle ONNX (8 slots).
+    // L'inférence reste côté appelant (src/dsp/, SAXFX_HAS_ONNX) ; ce worker
+    // n'embarque que le post-traitement pur.
+    void triggerAiMagicMix(const std::array<engine::mix::MixAiDecision, 8>& decisions) noexcept;
+    // Toggle ⚡ (étape 5 / M9) : applique si le magic mix n'est pas actif,
+    // revert sinon — sémantique V1 SmartSamplerEngine::toggleMagicMix.
+    void toggleMagicMix() noexcept;
+    // Revert du magic mix (étape 5 / M9) : remet gain 1 + spatial neutre sur
+    // tous les slots (le PCM n'est jamais modifié — invariant), efface l'état
+    // persistant et déclenche le callback done. Synchrone (message thread) —
+    // pas de thread worker nécessaire (aucun traitement PCM).
+    void revertMagicMix() noexcept;
+    bool isMagicBusy() const noexcept { return magicMixBusy_.load(); }
+    bool isMagicActive() const noexcept { return magicMixActive_.load(); }
+    // Vrai si le dernier magic mix a utilisé le chemin heuristique (pas l'IA ONNX).
+    void setMagicMixDoneCallback(std::function<void()> cb) noexcept;
+    bool didLastMixUseFallback() const noexcept { return lastMixUsedFallback_.load(std::memory_order_acquire); }
+
+    // Contexte Serum pour le magic mix (étape 4/9 / M9). Copié au lancement du
+    // worker (message thread) — le thread de mix n'y touche pas.
+    // rms <= 0.02 → pas de duck. contentType SYNTH/PAD → carving EQ (chemin IA).
+    void setSerumContext(float rms, float centroid, float midFrac, float highFrac,
+                         engine::mix::MixContentType contentType, bool active) noexcept;
+
+    // Types effectifs du dernier magic mix (lecture UI : tags + spatial viz).
+    // Avant le premier mix : retourne le rôle courant du slot (rôle analysé ou
+    // rôle de scène). Message thread uniquement.
+    engine::mix::MixContentType getDetectedType(int slot) const noexcept;
+
+    // Override manuel de type (clic droit UI) — équivalent V2 du
+    // manualTypeOverride_/setTypeOverride. Appliqué à la place de la détection
+    // lors du prochain mix.
+    void setManualTypeOverride(int slot, int typeIndex) noexcept;
+
     // Rôle analysé par le moteur V2 (ImportPipeline) au dernier import du slot.
     // isSlotRoleReliable() == true quand l'analyse est fiable
     // (roleConfidence ≥ 0.75 et rôle ≠ Unknown) — dans ce cas slotRole() a la
-    // priorité sur la détection V1 (samplerEngine_.getDetectedType) lors de la
-    // sync des scènes. Message thread uniquement.
+    // priorité sur le type effectif du mix V2 lors de la sync des scènes.
+    // Message thread uniquement.
     SlotRole slotRole(int slot) const noexcept;
     bool     isSlotRoleReliable(int slot) const noexcept;
 
@@ -189,6 +233,24 @@ private:
 
     // État de mix persistant par slot (étape 7 / M9) — message thread.
     mix::MixStateArray mixState_ {};
+
+    // Worker magic mix (étape 8 / M9) : thread dédié + callback fin (message thread).
+    std::atomic<bool> magicMixBusy_   {false};
+    std::atomic<bool> magicMixActive_ {false};
+    std::atomic<bool> lastMixUsedFallback_ {true};
+    std::function<void()> magicMixDoneCb_;
+
+    // Contexte Serum pour le magic mix (message thread — copié au lancement).
+    float serumRms_      = 0.f;
+    float serumCentroid_ = 0.f;
+    float serumMidFrac_  = 0.f;
+    float serumHighFrac_ = 0.f;
+    mix::MixContentType serumContentType_ = mix::MixContentType::OTHER;
+
+    // Types effectifs du dernier mix (message thread) + overrides manuels.
+    mix::MixContentType detectedTypes_[kMaxSlots] {};
+    mix::MixContentType manualOverrides_[kMaxSlots] {};
+    bool manualOverrideActive_[kMaxSlots] {};
 
     // Solo par slot : si un slot est solo, les autres sont muets (audio thread).
     std::atomic<int32_t> soloSlot_ {-1};

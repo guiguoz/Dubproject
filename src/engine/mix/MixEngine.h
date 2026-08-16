@@ -46,6 +46,14 @@ struct MixInputs
     // Contexte Serum (compensation de masquage). rms <= 0.02 → pas de duck.
     float serumRms      = 0.f;
     float serumCentroid = 0.f;
+
+    // Contexte Serum complet pour le chemin IA (étape 4 / M9) — carving EQ du
+    // modèle : type Serum (SYNTH/PAD → creuse les slots similaires), fractions
+    // de bandes mid/high du Serum. Defaults neutres → pas de carving si non
+    // renseigné par l'appelant.
+    MixContentType serumContentType = MixContentType::OTHER;
+    float serumMidFrac  = 0.f;
+    float serumHighFrac = 0.f;
 };
 
 struct MixOutputs

@@ -6,6 +6,8 @@
 #include "engine/mix/MixDecisions.h"
 #include "engine/mix/MixEngine.h"
 #include "engine/mix/MixState.h"
+#include "engine/mix/MixWorker.h"
+#include "engine/mix/MixAi.h"
 
 using namespace engine::mix;
 using Catch::Approx;
@@ -427,5 +429,220 @@ TEST_CASE("MIX-14: captured state matches heuristic mix outputs", "[mix]") {
         {
             CHECK_FALSE(st[i].applied);
         }
+    }
+}
+
+// ─── MIX-15 : toMixInputs — snapshot worker → MixInputs du moteur ──────────
+TEST_CASE("MIX-15: worker snapshot maps to engine inputs", "[mix]") {
+    MixWorkerInputs w;
+    w.masterBpm  = 132.f;
+    w.sampleRate = 48000.0;
+    w.pcm[0] = makeSine(55.f, 1024, 48000.f, 0.6f);
+    w.pcm[3] = makeSine(440.f, 2048, 48000.f, 0.4f);
+    w.loaded[0] = true;
+    w.loaded[3] = true;
+    w.muted[3]  = true;
+    w.types[0]  = MixContentType::KICK;
+    w.scene.activeCount = 2;
+    w.scene.slotActive[0] = true;
+    w.scene.slotActive[3] = true;
+
+    const auto in = toMixInputs(w);
+
+    CHECK(in.masterBpm  == Approx(132.f));
+    CHECK(in.sampleRate == Approx(48000.0));
+    CHECK(in.pcm[0].size() == 1024);
+    CHECK(in.pcm[1].empty());
+    // active = loaded && !muted
+    CHECK(in.active[0]);
+    CHECK_FALSE(in.active[3]);  // muet
+    CHECK_FALSE(in.active[1]);  // non chargé
+    CHECK(in.detected[0] == MixContentType::KICK);
+    // Scène copiée telle quelle
+    CHECK(in.scene.activeCount == 2);
+}
+
+// ─── MIX-16 : runHeuristicMix — orchestration worker complète ──────────────
+TEST_CASE("MIX-16: full worker orchestration is deterministic", "[mix]") {
+    MixWorkerInputs w;
+    w.masterBpm  = 128.f;
+    w.sampleRate = kSR;
+    w.pcm[0] = makeSine(55.f,  static_cast<int>(kSR * 0.4f), kSR, 0.6f);  // kick
+    w.pcm[1] = makeSine(70.f,  static_cast<int>(kSR * 0.8f), kSR, 0.5f);  // bass
+    w.pcm[2] = makeSine(200.f, static_cast<int>(kSR * 1.6f), kSR, 0.4f);  // pad
+    w.loaded[0] = true;
+    w.loaded[1] = true;
+    w.loaded[2] = true;
+    w.types[0] = MixContentType::KICK;
+    w.types[1] = MixContentType::BASS;
+    w.types[2] = MixContentType::PAD;
+    w.scene.activeCount = 3;
+    w.scene.slotActive[0] = true;
+    w.scene.slotActive[1] = true;
+    w.scene.slotActive[2] = true;
+
+    const auto stA = runHeuristicMix(w);
+    const auto stB = runHeuristicMix(w);
+
+    // Déterministe : deux exécutions identiques.
+    for (int i = 0; i < kMixSlots; ++i) {
+        CHECK(stA[i].applied == stB[i].applied);
+        CHECK(stA[i].gain  == stB[i].gain);
+        CHECK(stA[i].pan   == stB[i].pan);
+        CHECK(stA[i].width == stB[i].width);
+        CHECK(stA[i].depth == stB[i].depth);
+    }
+
+    // Slots chargés actifs → appliqués avec une spatialisation non neutre.
+    CHECK(stA[0].applied);
+    CHECK(stA[1].applied);
+    CHECK(stA[2].applied);
+    // Slot vide / non chargé → non appliqué.
+    CHECK_FALSE(stA[4].applied);
+}
+
+// ─── MIX-17 : serumCompensateDecision — duck volume + carving EQ ──────────
+TEST_CASE("MIX-17: serum compensation on AI decisions", "[mix]") {
+    const MixAiDecision base {0.5f, 0.f, 0.f, 0.f};
+
+    // Serum inactif (rms <= 0.02) → décision inchangée.
+    {
+        const auto c = serumCompensateDecision(
+            base, MixContentType::PAD, 1000.f, 2000.f, 0.01f, 0.5f, 0.3f,
+            MixContentType::SYNTH);
+        CHECK(c.volume   == Approx(0.5f));
+        CHECK(c.midGain  == Approx(0.f));
+        CHECK(c.highGain == Approx(0.f));
+    }
+
+    // Serum actif, slot spectralement proche (même octave) → duck de volume.
+    {
+        const auto c = serumCompensateDecision(
+            base, MixContentType::PAD, 2000.f, 2000.f, 0.10f, 0.f, 0.f,
+            MixContentType::OTHER);
+        CHECK(c.volume < 0.5f);
+        CHECK(c.volume >= 0.1f);  // plancher V1
+    }
+
+    // Serum SYNTH + slot PAD → carving mid/high (midFrac/highFrac × 4, ≥ −6).
+    {
+        const auto c = serumCompensateDecision(
+            base, MixContentType::PAD, 2000.f, 2000.f, 0.10f, 0.5f, 0.25f,
+            MixContentType::SYNTH);
+        CHECK(c.midGain  == Approx(-2.f));   // 0 − 0.5×4
+        CHECK(c.highGain == Approx(-1.f));   // 0 − 0.25×4
+    }
+
+    // Serum PERC (non synthé) → pas de carving, seulement duck si proche.
+    {
+        const auto c = serumCompensateDecision(
+            base, MixContentType::PAD, 2000.f, 2000.f, 0.10f, 0.5f, 0.25f,
+            MixContentType::PERC);
+        CHECK(c.midGain  == Approx(0.f));
+        CHECK(c.highGain == Approx(0.f));
+    }
+}
+
+// ─── MIX-18 : processAiMix — EQ depuis décisions + gain calibré ──────────
+TEST_CASE("MIX-18: AI path applies decision EQ and calibrated gain", "[mix]") {
+    MixInputs in;
+    in.sampleRate = kSR;
+    in.masterBpm  = 120.f;
+    in.pcm[0] = makeSine(55.f,  static_cast<int>(kSR * 0.4f), kSR, 0.6f);  // kick
+    in.pcm[1] = makeSine(440.f, static_cast<int>(kSR * 1.6f), kSR, 0.3f);  // pad
+    in.active[0] = true;
+    in.active[1] = true;
+    in.detected[0] = MixContentType::KICK;
+    in.detected[1] = MixContentType::PAD;
+    in.scene.activeCount = 2;
+
+    std::array<MixAiDecision, 8> decisions {};
+    decisions[0] = {0.8f,  0.f,  0.f, 0.f};
+    decisions[1] = {0.6f, -3.f,  2.f, 1.f};
+
+    const auto out = processAiMix(in, decisions);
+
+    // Slots actifs traités → PCM non vide + gain borné.
+    CHECK_FALSE(out.pcm[0].empty());
+    CHECK(out.gain[0] > 0.f);
+    CHECK(out.gain[0] <= 1.5f);
+    CHECK_FALSE(out.pcm[1].empty());
+    CHECK(out.gain[1] > 0.f);
+    CHECK(out.gain[1] <= 1.5f);
+
+    // Slot inactif → non traité (gain défaut 0, pan/width neutres).
+    CHECK(out.pcm[4].empty());
+    CHECK(out.gain[4] == Approx(0.f));
+
+    // Volume élevé → gain plus élevé qu'avec volume faible (même PCM).
+    MixInputs in2 = in;
+    std::array<MixAiDecision, 8> dec2 = decisions;
+    dec2[0].volume = 0.2f;
+    const auto out2 = processAiMix(in2, dec2);
+    CHECK(out2.gain[0] < out.gain[0]);
+}
+
+// ─── MIX-19 : runAiMix — worker IA → état persistant cohérent ─────────────
+TEST_CASE("MIX-19: AI worker orchestration produces persistent state", "[mix]") {
+    MixWorkerInputs w;
+    w.masterBpm  = 128.f;
+    w.sampleRate = kSR;
+    w.pcm[0] = makeSine(55.f,  static_cast<int>(kSR * 0.4f), kSR, 0.6f);  // kick
+    w.pcm[1] = makeSine(70.f,  static_cast<int>(kSR * 0.8f), kSR, 0.5f);  // bass
+    w.pcm[2] = makeSine(200.f, static_cast<int>(kSR * 1.6f), kSR, 0.4f);  // pad
+    w.loaded[0] = true;
+    w.loaded[1] = true;
+    w.loaded[2] = true;
+    w.types[0] = MixContentType::KICK;
+    w.types[1] = MixContentType::BASS;
+    w.types[2] = MixContentType::PAD;
+    w.scene.activeCount = 3;
+    w.scene.slotActive[0] = true;
+    w.scene.slotActive[1] = true;
+    w.scene.slotActive[2] = true;
+
+    std::array<MixAiDecision, 8> decisions {};
+    decisions[0] = {0.8f, 0.f, 0.f, 0.f};
+    decisions[1] = {0.7f, 0.f, 0.f, 0.f};
+    decisions[2] = {0.5f, 0.f, 0.f, 0.f};
+
+    const auto st = runAiMix(w, decisions);
+
+    // Déterministe + slots actifs appliqués.
+    const auto st2 = runAiMix(w, decisions);
+    for (int i = 0; i < kMixSlots; ++i) {
+        CHECK(st[i].applied == st2[i].applied);
+        CHECK(st[i].gain == st2[i].gain);
+    }
+    CHECK(st[0].applied);
+    CHECK(st[1].applied);
+    CHECK(st[2].applied);
+    CHECK(st[0].gain > 0.f);
+    CHECK(st[0].gain <= 1.5f);
+    // Slot non chargé → non appliqué.
+    CHECK_FALSE(st[5].applied);
+}
+
+// ─── MIX-20 : resetMixState — revert du magic mix (étape 5) ───────────────
+TEST_CASE("MIX-20: resetMixState reverts persistent mix state", "[mix]") {
+    MixStateArray st;
+    setSlotMixState(st, 0, 0.8f, -0.3f, 0.4f, 0.2f);
+    setSlotMixState(st, 3, 1.2f,  0.2f, 0.5f, 0.9f);
+    setSlotMixState(st, 7, 0.5f,  0.0f, 0.0f, 0.3f);
+
+    // Avant reset : 3 slots appliqués.
+    CHECK(slotMixState(st, 0).applied);
+    CHECK(slotMixState(st, 3).applied);
+    CHECK(slotMixState(st, 7).applied);
+
+    resetMixState(st);
+
+    // Tout repart aux défauts : gain 1, spatial neutre, applied false.
+    for (int i = 0; i < kMixSlots; ++i) {
+        CHECK_FALSE(slotMixState(st, i).applied);
+        CHECK(slotMixState(st, i).gain  == Approx(1.f));
+        CHECK(slotMixState(st, i).pan   == Approx(0.f));
+        CHECK(slotMixState(st, i).width == Approx(0.f));
+        CHECK(slotMixState(st, i).depth == Approx(0.f));
     }
 }
