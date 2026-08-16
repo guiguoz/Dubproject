@@ -1,17 +1,28 @@
 #pragma once
 
+// ─────────────────────────────────────────────────────────────────────────────
+// engine/Analysis/FeatureExtractor.h
+//
+// Port de src/dsp/FeatureExtractor (M9, étape 12) — analyse hors temps réel
+// du contenu d'un buffer mono : RMS, centroïde spectral, fractions de bandes,
+// rapport de transitoire + classification heuristique du contenu.
+//
+// Zéro dépendance JUCE / dsp/ : compilable par EngineTests (C++17).
+// Utilisé par MainComponent (régie Serum : gain rider + compensation de
+// masquage côté mix V2).
+// ─────────────────────────────────────────────────────────────────────────────
+
 #include <vector>
 
-namespace dsp {
+namespace engine::analysis {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ContentCategory — mirrors SmartSamplerEngine::ContentType without JUCE dep.
+// ContentCategory — classification heuristique du contenu audio (sans ONNX).
 // ─────────────────────────────────────────────────────────────────────────────
 enum class ContentCategory { KICK, SNARE, HIHAT, BASS, SYNTH, PAD, PERC, OTHER };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MixFeatures — per-slot descriptor for the AI mix engine (Sprint 9).
-// Produced by FeatureExtractor::extract() and consumed by AiMixEngine.
+// MixFeatures — descripteur d'un slot/buffer pour la régie de mix.
 // ─────────────────────────────────────────────────────────────────────────────
 struct MixFeatures {
     float rms              = 0.f;  ///< Root mean square amplitude
@@ -43,11 +54,11 @@ private:
     static float computeSpectralCentroid(const std::vector<float>& pcm,
                                           double sampleRate) noexcept;
 
-    /// Heuristic content classification (mirrors SmartSamplerEngine::detectContentType).
+    /// Heuristic content classification.
     static ContentCategory classifyHeuristic(float transientRatio,
                                               float lowFrac, float midFrac,
                                               float highFrac,
                                               float durationMs) noexcept;
 };
 
-} // namespace dsp
+} // namespace engine::analysis

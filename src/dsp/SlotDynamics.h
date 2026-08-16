@@ -1,11 +1,14 @@
 #pragma once
 
-#include "FeatureExtractor.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 
 namespace dsp {
+
+// Content category for preset selection — local to SlotDynamics (decoupled
+// from dsp/FeatureExtractor during the V2 migration, M9 étape 12).
+enum class ContentCategory { KICK, SNARE, HIHAT, BASS, SYNTH, PAD, PERC, OTHER };
 
 // Feed-forward peak compressor — one instance per sampler slot.
 // Parameters are preset-driven by content type; no user controls.

@@ -3,11 +3,10 @@
 #include "engine/EngineFacade.h"
 
 #include "dsp/DspPipeline.h"
-#include "dsp/FeatureExtractor.h"
+#include "engine/Analysis/FeatureExtractor.h"
 #include "dsp/LooperEngine.h"
 #include "dsp/SceneManager.h"
 #include "dsp/SerumHost.h"
-#include "dsp/SmartSamplerEngine.h"
 #include "dsp/StepSequencer.h"
 #include "midi/MidiManager.h"
 #include "midi/MidiLearnMap.h"
@@ -97,7 +96,6 @@ private:
     //==========================================================================
     ::dsp::DspPipeline        dspPipeline_;
     ::dsp::SerumHost          serumHost_;
-    ::dsp::SmartSamplerEngine samplerEngine_ { dspPipeline_.getSampler() };
     ::dsp::StepSequencer      stepSequencer_;
     ::dsp::LooperEngine       looperEngine_;
     midi::MidiManager         midiManager_{dspPipeline_.getMidiEventQueue()};
@@ -110,8 +108,8 @@ private:
     bool                     serumSnapReady_       { false };
     std::atomic<float>       serumGainSmooth_      { 1.0f };  // audio thread r/w + GUI r
     std::atomic<float>       serumUserGain_        { 1.0f };  // MIDI learn multiplier (GUI w, audio r)
-    std::atomic<::dsp::ContentCategory> serumContentType_ { ::dsp::ContentCategory::SYNTH };
-    ::dsp::MixFeatures       serumMixFeatures_ {};   // GUI thread only
+    std::atomic<engine::analysis::ContentCategory> serumContentType_ { engine::analysis::ContentCategory::SYNTH };
+    engine::analysis::MixFeatures                  serumMixFeatures_ {};   // GUI thread only
     int                      serumAnalysisCounter_ { 0 };
 
     // ── EWI Synth UI ─────────────────────────────────────────────────────────
@@ -293,7 +291,6 @@ private:
     void doAutosave();
 
     // Scene management
-    ::dsp::SmartSamplerEngine::SceneSnapshot buildSceneSnapshot(int si) const;
     void captureCurrentScene();
     void applyScene(int idx, int fromIdx = -1);
     void navigateScene(int delta);
@@ -304,6 +301,10 @@ private:
     void updateSidebarBpm(float bpm);
     void applyDubDelayMorph(float t);
     void onPitchOffsetChanged(int slot, float semitones);
+
+    // Mapping ContentCategory (Serum) → MixContentType (mix V2) pour le contexte
+    // de compensation de masquage (étape 9 / M9).
+    engine::mix::MixContentType serumContentTypeForMix() const noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

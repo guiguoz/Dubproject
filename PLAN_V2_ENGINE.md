@@ -647,7 +647,108 @@ nulltest bit-exact (`0xcaf8b973768f00cc` / `0xfb07aa3caefb2d3c`) :
   expose `setSlotMixState()` (restaure + applique gain/spatial au SlotPlayer)
   et `getSlotMixState()` (sauvegarde projet). Tests MIX-12/13/14. NON audible :
   NULL1 bit-exact inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+- **Étape 8 ✔** — worker magic mix asynchrone (façade) : `engine/mix/MixWorker.h`
+  (header-only, sans JUCE) — `MixWorkerInputs` = snapshot runtime (PCM mono par
+  slot, types, loaded/muted, scène courante, bpm, SR), `toMixInputs()` mappe le
+  snapshot vers `MixInputs` (active = loaded && !muted), `runHeuristicMix()`
+  = `processHeuristic()` → `mixStateFromOutputs()`. `EngineFacade` expose
+  `triggerMagicMix()` (capture le snapshot sur le message thread, exécute le
+  mix sur un thread dédié, applique l'état persistant au runtime via
+  `setSlotMixState()` sur le message thread, callback `setMagicMixDoneCallback`),
+  `isMagicBusy()`/`isMagicActive()`. Mapping `SlotRole`→`MixContentType`
+  centralisé dans `AudioGraph::roleToMixType()` (header) + getter
+  `AudioGraph::slotRole()`. Tests MIX-15/16. NON audible (déclenché
+  explicitement par l'UI, jamais dans renderOffline) : NULL1 bit-exact inchangé
+  (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+- **Étape 4 ✔** — chemin IA ONNX du magic mix : `engine/mix/MixAi.h` (header-only,
+  sans JUCE) — `MixAiDecision {volume, lowGain, midGain, highGain}` (sortie
+  modèle), `serumCompensateDecision()` (port V1 L930-968 : duck de volume par
+  proximité spectrale log2 max 25 % + carving EQ mid/high des slots SYNTH/PAD
+  quand Serum est synthé/pad), `processAiMix()` (port V1 L904-1021 : EQ 3 bandes
+  DC-block 20 → shelf 100 → peak 2500 → shelf 8000 (+1 dB air bias) → LP 18 kHz,
+  gains clampés ±6 dB, kick transient / bass harmonics, gain =
+  clamp(0,1.5, volume × saxClearance / truePeak) ; slot 8 DRM = heuristique LOOP ;
+  spatialisation + balance L/R identiques au chemin heuristique).
+  `MixWorker::runAiMix()` + `EngineFacade::triggerAiMagicMix()` (inférence ONNX
+  fournie par l'appelant — src/dsp/ AiMixEngine, SAXFX_HAS_ONNX ; le module ne
+  porte que le post-traitement pur). `MixInputs` étendu (contexte Serum complet :
+  serumContentType/MidFrac/HighFrac, defaults neutres). Tests MIX-17/18/19.
+  NON audible (chemin non déclenché par défaut) : NULL1 bit-exact inchangé
+  (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+- **Étape 5 ✔** — revert du magic mix : `MixState::resetMixState()` (remet tout
+  l'état persistant aux défauts : gain 1, spatial neutre, applied=false) +
+  `EngineFacade::revertMagicMix()` (reset état + application runtime gain 1 /
+  spatial neutre, synchrone message thread — le PCM n'est jamais modifié en V2,
+  invariant transparence, donc aucun rechargement fichier comme en V1) +
+  `EngineFacade::toggleMagicMix()` (apply si inactif, revert sinon — sémantique
+  V1 `toggleMagicMix`). Test MIX-20. NON audible : NULL1 bit-exact inchangé
+  (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
 
-À venir : étapes 4 (chemin IA ONNX), 5 (revert), 7 (état mix persistant),
-8 (façade + worker), 9 (ré-câblage MainComponent), 11 (réduction surface V1),
-12 (purge finale + recette M9).
+À venir : étape 9 (ré-câblage MainComponent),
+11 (réduction surface V1), 12 (purge finale + recette M9).
+
+### Étape 9 ✔ — ré-câblage MainComponent sur la façade (M9)
+MainComponent ne consomme plus la surface du magic mix V1 :
+- `triggerAI()` → `facade_.setSerumContext(...)` (rms/centroid/midFrac/highFrac/
+  type Serum) + `facade_.triggerMagicMix()`. Les rôles fixes par piste et
+  `setTypeOverride`/`setArrangement`/`buildSceneSnapshot` sont supprimés (le
+  worker V2 capture le snapshot runtime : PCM + rôles + overrides manuels).
+- Save projet → `facade_.getSlotMixState` (champ `applied`, pas `active`).
+- Load projet → `facade_.setSlotMixState` (restaure + applique runtime).
+- Timer `aiCloud_` → `facade_.isMagicBusy/isMagicActive/didLastMixUseFallback`.
+- Spatial viz + `activeRoleForSlot`/`v2RoleForSlot` → `facade_.getDetectedType`
+  (mapping `MixContentType`→`SlotRole` pour AutoMix/delay sends).
+- Helper `serumContentTypeForMix()` : `engine::analysis::ContentCategory`→`MixContentType`.
+- Suppression de `buildSceneSnapshot` (mort) et des appels V1 morts
+  (`setSlotFilePath`/`setMusicContext`/`clearSlot`, `restoreSlotMixState`).
+- Membre `samplerEngine_` retiré de `MainComponent.h`.
+NON audible (re-câblage UI, aucun chemin audio changé) : NULL1 bit-exact inchangé
+(`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+
+### Étape 11 ✔ — réduction surface V1 (M9)
+Fichiers `src/dsp/` totalement orphelins supprimés (plus aucune inclusion depuis
+`src/`, `tests/` ni CMake) :
+- `SmartSamplerEngine.h` (header-only, magic mix V1 — toute la logique a été
+  portée dans `engine/mix/` aux étapes 1-8 et le câblage UI en étape 9).
+- `WsolaShifter.h/.cpp` (le WSOLA maison est abandonné — Signalsmith Stretch
+  vendored, §4.4 ; déjà découplé des cibles à l'étape 10).
+NON audible (fichiers jamais compilés/référencés au runtime) : NULL1 bit-exact
+inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+
+À venir : étape 12 (purge finale + recette M9).
+
+### Étape 12 — purge finale (M9) — purge ciblée ✔, purge complète bloquée
+Port et purge des orphelins du magic mix restants dans `src/dsp/`,
+indépendants du pipeline audio V1 (toujours en service, câblage M8b en attente) :
+
+- **Port FeatureExtractor** → `engine/Analysis/FeatureExtractor.h/.cpp`
+  (V2, namespace `engine::analysis`, zéro dépendance JUCE/dsp). MainComponent
+  (`serumMixFeatures_`, régie Serum) consomme désormais le port V2 ; l'include
+  V1 retiré. `tests/test_feature_extractor.cpp` migré vers le V2 (tests déjà
+  à l'identique, namespace seul).
+- **Purge ciblée** des fichiers `src/dsp/` devenus orphelins (plus aucune
+  inclusion depuis `src/`, `tests/` ni CMake) :
+  - `FeatureExtractor.*` (V1) — remplacé par le port V2.
+  - `AiMixEngine.*` (V1) — le chemin IA ONNX du magic mix ne vit plus que dans
+    `engine/mix/MixAi.h` (post-traitement pur, tests MIX-17/18/19) ;
+    `EngineFacade::triggerAiMagicMix()` (injecter des décisions IA) est
+    conservé sans wrapper V1, l'inférence ONNX étant fournie par l'appelant.
+  - `AiContentClassifier.*` (V1) — l'app n'utilise que
+    `engine/Analysis/AiContentClassifier.*` (V2). `tests/test_ai_classifier.cpp`
+    migré vers le V2 (API identique, namespace seul).
+- **Découplage** `SlotDynamics.h` : enum `ContentCategory` désormais locale
+  (n'importait `FeatureExtractor.h` que pour celle-ci) — seul garde-fou qui
+  empêchait la suppression du V1.
+- CMake : sources V1 retirées de `SaxFXLive` et `SaxFXTests` ;
+  `MIX_MODEL_PATH/NORM` supprimés (test V1 mort) ; port V2 ajouté à `SaxFXLive`.
+- `tests/test_ai_mix_engine.cpp` supprimé (moteur V1 mort, couverture portée
+  dans `engine/mix/`).
+
+NON audible (purge de fichiers jamais référencés au runtime) : NULL1 bit-exact
+inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+Vérifications : SaxFXLive compile, **84/84** SaxFXTests.
+
+⛔ La purge complète de `src/dsp/` (checklist §12.4) reste bloquée par M8b :
+`DspPipeline`, `Sampler`, `StepSequencer`, `LooperEngine`, `SceneManager`,
+`SerumHost`, `BeatClock` sont toujours consommés par le fil audio / l'UI.
+Recette M9 (validation manuelle app + nulltest final) à faire après M8b.

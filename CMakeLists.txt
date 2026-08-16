@@ -87,9 +87,6 @@ target_sources(SaxFXLive PRIVATE
     src/dsp/LooperEngine.cpp
     src/dsp/BpmDetector.cpp
     src/dsp/PingPongDelay.cpp
-    src/dsp/AiContentClassifier.cpp
-    src/dsp/AiMixEngine.cpp
-    src/dsp/FeatureExtractor.cpp
     src/dsp/SerumHost.cpp
     src/midi/MidiManager.cpp
     src/project/ProjectLoader.cpp
@@ -102,6 +99,7 @@ target_sources(SaxFXLive PRIVATE
     src/engine/StretchConform.cpp
     src/engine/Analysis/BpmDetector.cpp
     src/engine/Analysis/AiContentClassifier.cpp
+    src/engine/Analysis/FeatureExtractor.cpp
     src/engine/ImportPipeline.cpp
     src/engine/TransitionEngine.cpp
     src/engine/AutoMixDub.cpp

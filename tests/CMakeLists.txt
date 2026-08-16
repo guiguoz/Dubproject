@@ -27,7 +27,6 @@ add_executable(SaxFXTests
     test_onnx_benchmark.cpp
     test_ai_classifier.cpp
     test_feature_extractor.cpp
-    test_ai_mix_engine.cpp
     test_pingpongdelay.cpp
     test_ewi_filter.cpp
     test_slot_dynamics_ab.cpp
@@ -38,9 +37,7 @@ add_executable(SaxFXTests
     ../src/dsp/PingPongDelay.cpp
     ../src/dsp/DspPipeline.cpp
     ../src/dsp/BpmDetector.cpp
-    ../src/dsp/AiContentClassifier.cpp
-    ../src/dsp/FeatureExtractor.cpp
-    ../src/dsp/AiMixEngine.cpp
+    ../src/engine/Analysis/FeatureExtractor.cpp
 )
 
 target_include_directories(SaxFXTests PRIVATE
@@ -65,8 +62,6 @@ if(SAXFX_ENABLE_ONNX)
         CLASSIFIER_MODEL_PATH="${CMAKE_SOURCE_DIR}/models/content_classifier.onnx"
         CLASSIFIER_NORM_PATH="${CMAKE_SOURCE_DIR}/models/content_classifier_norm.bin"
         DATASET_DIR="${CMAKE_SOURCE_DIR}/data/dataset"
-        MIX_MODEL_PATH="${CMAKE_SOURCE_DIR}/models/mix_model.onnx"
-        MIX_MODEL_NORM_PATH="${CMAKE_SOURCE_DIR}/models/mix_model_norm.bin"
     )
     ort_copy_dll(SaxFXTests)
 endif()

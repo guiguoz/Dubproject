@@ -2,8 +2,7 @@
 
 #ifdef SAXFX_HAS_ONNX
 
-#include "dsp/AiContentClassifier.h"
-#include "dsp/OnnxInference.h"
+#include "engine/Analysis/AiContentClassifier.h"
 
 #include <cmath>
 #include <cstring>
@@ -98,13 +97,13 @@ static bool readWavMono(const std::string& path,
 
 TEST_CASE("AiContentClassifier -- featureSize is 64", "[ai_classifier]")
 {
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     REQUIRE(clf.featureSize() == 64);
 }
 
 TEST_CASE("AiContentClassifier -- classify silence returns a valid class", "[ai_classifier]")
 {
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     std::vector<float> silence(22050, 0.0f);
     // Must not throw and must return a valid enum value
     auto cls = clf.classify(silence, 44100.0);
@@ -122,9 +121,9 @@ TEST_CASE("AiContentClassifier -- kick_000.wav classified as KICK", "[ai_classif
     REQUIRE(loaded);
     REQUIRE_FALSE(samples.empty());
 
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     const auto cls = clf.classify(samples, sr);
-    REQUIRE(cls == dsp::AiContentClassifier::ContentType::KICK);
+    REQUIRE(cls == engine::analysis::AiContentClassifier::ContentType::KICK);
 }
 
 TEST_CASE("AiContentClassifier -- hihat_000.wav classified as HIHAT", "[ai_classifier]")
@@ -136,9 +135,9 @@ TEST_CASE("AiContentClassifier -- hihat_000.wav classified as HIHAT", "[ai_class
     REQUIRE(loaded);
     REQUIRE_FALSE(samples.empty());
 
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     const auto cls = clf.classify(samples, sr);
-    REQUIRE(cls == dsp::AiContentClassifier::ContentType::HIHAT);
+    REQUIRE(cls == engine::analysis::AiContentClassifier::ContentType::HIHAT);
 }
 
 TEST_CASE("AiContentClassifier -- snare_000.wav classified as SNARE", "[ai_classifier]")
@@ -150,9 +149,9 @@ TEST_CASE("AiContentClassifier -- snare_000.wav classified as SNARE", "[ai_class
     REQUIRE(loaded);
     REQUIRE_FALSE(samples.empty());
 
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     const auto cls = clf.classify(samples, sr);
-    REQUIRE(cls == dsp::AiContentClassifier::ContentType::SNARE);
+    REQUIRE(cls == engine::analysis::AiContentClassifier::ContentType::SNARE);
 }
 
 TEST_CASE("AiContentClassifier -- classify resamples 22050 Hz input", "[ai_classifier]")
@@ -169,7 +168,7 @@ TEST_CASE("AiContentClassifier -- classify resamples 22050 Hz input", "[ai_class
     for (size_t i = 0; i < samples.size(); i += 2)
         half.push_back(samples[i]);
 
-    dsp::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
+    engine::analysis::AiContentClassifier clf(CLASSIFIER_MODEL_PATH, CLASSIFIER_NORM_PATH);
     REQUIRE_NOTHROW(clf.classify(half, 22050.0));
 }
 

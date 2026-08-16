@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-#include "dsp/FeatureExtractor.h"
+
 
 #include <cmath>
 #include <future>
@@ -345,8 +345,11 @@ MainComponent::MainComponent()
     // ── Swing ─────────────────────────────────────────────────────────────────
     stepSeqPanel_.onSwingChanged = [this](float v) { stepSequencer_.setSwing(v); };
 
-    // Mise à jour des tags de type dans l'UI quand la détection est terminée
-    samplerEngine_.onTypesDetected = [this]
+    // ── Magic mix V2 (worker EngineFacade) — callback unique de fin ────────────
+    // Le worker V2 détecte les types + applique le mix d'un bloc (aucun rechargement
+    // PCM — invariant transparence) puis appelle ce callback sur le message thread.
+    // Distinction apply/revert via facade_.isMagicActive().
+    facade_.setMagicMixDoneCallback([this]
     {
         // Per-slot content-type accent colours (mirrors StepSequencerPanel::trackColour)
         static const juce::Colour kSlotColours[9] = {
@@ -357,86 +360,58 @@ MainComponent::MainComponent()
             juce::Colour { 0xFFFF6B35 },  // deep-orange (DRM)
         };
 
-        for (int i = 0; i < 9; ++i)
+        if (!facade_.isMagicActive())
         {
-            const auto type = samplerEngine_.getDetectedType(i);
-            const bool loaded = !facade_.slotFilePath(i).empty();
-            if (loaded)
-                stepSeqPanel_.setSlotContentType(
-                    i, ::dsp::SmartSamplerEngine::contentTypeName(type));
-
-            // Spatial visualization — pan/width/depth are set by SmartSamplerEngine
-            // after applyNeutronMix(); we just update the visual state here.
-            // Note: pan/width/depth are heuristic values from computeSpatialization().
-            // We reconstruct them from the sampler's stored gains for display.
-            // Simple approach: use content-type defaults (matches what was applied).
-            const ::dsp::SmartSamplerEngine::ContentType ct =
-                samplerEngine_.getDetectedType(i);
-            const auto sp = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
-            spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth,
-                                     loaded, kSlotColours[i]);
-        }
-        spatialViz_.setSaxActive(true);
-        stepSeqPanel_.setMagicActive(true);
-
-        // Active et configure le dub delay (ingé son IA — pas de manipulation manuelle)
-        // En V2, l'AutoMix (thread de mix 50 ms) pilote le bus delay depuis les rôles.
-
-        // Sync visuel du bouton ON (pas obligatoire mais cohérent)
-        juce::MessageManager::callAsync([this]
-        {
-            dubDelayEnableBtn_.setToggleState(true, juce::dontSendNotification);
-        });
-
-        mixStateDirty_ = true;
-    };
-
-    // onDone : si revert → effacer les tags, re-appliquer trim, relancer IA si reload en attente
-    samplerEngine_.onDone = [this]
-    {
-        if (!samplerEngine_.isMagicActive())
-        {
+            // Revert : effacer les tags + reset spatial viz. Le PCM n'est jamais
+            // modifié en V2 → aucun re-trim / re-reload nécessaire.
             for (int i = 0; i < 9; ++i)
                 stepSeqPanel_.setSlotContentType(i, "");
             stepSeqPanel_.setMagicActive(false);
             spatialViz_.resetAll();
-
-            // Reload déclenché pendant mix actif → relancer l'IA sur PCM propres
-            if (reloadPending_)
-            {
-                reloadPending_       = false;
-                trimAfterMixPending_ = true;  // revertToOriginals a chargé sans trim → réappliquer après mix
-                triggerAI();
-                return;
-            }
-
-            // Re-appliquer les trim points (revertToOriginals relit le fichier original)
-            reApplyCurrentSceneTrims();
         }
         else
         {
-            // Magic mix apply terminé — PCM et gains IA sont posés par applyNeutronMix.
-            if (trimAfterMixPending_)
+            // Apply : tags de type + spatial viz + dub delay ON.
+            for (int i = 0; i < 9; ++i)
             {
-                trimAfterMixPending_ = false;
-                reApplyCurrentSceneTrims();
+                const auto type   = facade_.getDetectedType(i);
+                const bool loaded = !facade_.slotFilePath(i).empty();
+                if (loaded)
+                    stepSeqPanel_.setSlotContentType(
+                        i, engine::mix::contentTypeName(type));
+
+                // pan/width/depth sont appliqués au runtime par le worker V2
+                // (setSlotMixState) ; on ne fait que refléter l'état ici.
+                const auto sp = engine::mix::spatialForType(i, type);
+                spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth,
+                                         loaded, kSlotColours[i]);
             }
-            // Appliquer les user gains sur les gains IA, mettre à jour sliders et scenes_.gains.
+            spatialViz_.setSaxActive(true);
+            stepSeqPanel_.setMagicActive(true);
+
+            // Sync visuel du bouton ON (cohérent avec le comportement V1)
+            juce::MessageManager::callAsync([this]
+            {
+                dubDelayEnableBtn_.setToggleState(true, juce::dontSendNotification);
+            });
+
+            // Appliquer les gains IA comme point de départ des faders + scènes
+            // (persistance projet). L'application runtime a déjà été faite par le
+            // worker (setSlotMixState → SlotPlayer).
             auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
             for (int i = 0; i < 9; ++i)
             {
-                const auto ms = samplerEngine_.getSlotMixState(i);
-                if (!ms.active) continue;
-                if (ms.gain <= 0.f) continue;   // ONNX retourne 0 → garder le gain existant
+                const auto ms = facade_.getSlotMixState(i);
+                if (!ms.applied) continue;
+                if (ms.gain <= 0.f) continue;   // gain 0 → garder le gain existant
                 const std::size_t idx = static_cast<std::size_t>(i);
                 sc.gains[idx]     = ms.gain;    // référence/diagnostique uniquement
                 sc.userGains[idx] = ms.gain;    // le gain IA devient le point de départ du fader
-                dspPipeline_.getSampler().setSlotGain(i, ms.gain);
                 stepSeqPanel_.setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
             }
 
             // Normalise le gain Serum vers un niveau RMS cible (≈ −14 dBFS).
-            // Déclenché une seule fois par run IA — n'écrase pas les réglages manuels hors magic mix.
+            // Déclenché une seule fois par run magic mix — n'écrase pas les réglages manuels.
             if (serumHost_.isLoaded() && serumMixFeatures_.rms > 0.01f)
             {
                 constexpr float kSerumTargetRms = 0.20f;
@@ -448,23 +423,12 @@ MainComponent::MainComponent()
         }
 
         mixStateDirty_ = true;
-    };
+    });
 
     // Override manuel du type par slot (right-click sur l'indicateur)
     stepSeqPanel_.onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
-        const std::size_t sidx = static_cast<std::size_t>(slot);
-        if (typeIndex < 0)
-        {
-            manualTypeOverride_[sidx] = false;  // retour au rôle fixe
-            samplerEngine_.clearTypeOverride(slot);
-        }
-        else
-        {
-            manualTypeOverride_[sidx] = true;   // choix manuel prioritaire
-            samplerEngine_.setTypeOverride(
-                slot, static_cast<::dsp::SmartSamplerEngine::ContentType>(typeIndex));
-        }
+        facade_.setManualTypeOverride(slot, typeIndex);
         // Re-lancer l'IA avec le nouveau type
         triggerAI();
     };
@@ -517,7 +481,6 @@ MainComponent::MainComponent()
         {
             loadSampleIntoSlot(slot, cb.filePath);
             stepSeqPanel_.setSlotFilePath(slot, cb.filePath);
-            samplerEngine_.setSlotFilePath(slot, cb.filePath);
         }
 
         // Mettre à jour la scène courante en mémoire
@@ -794,12 +757,6 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
 // ─────────────────────────────────────────────────────────────────────────────
 void MainComponent::applyMasterKey()
 {
-    ::dsp::MusicContext ctx;
-    ctx.bpm     = stepSequencer_.getBpm();
-    ctx.keyRoot  = masterKeyRoot_;
-    ctx.isMajor  = masterKeyMajor_;
-    samplerEngine_.setMusicContext(ctx);
-
     {
         const auto t = static_cast<ui::ScaleType>(scaleTypeCombo_.getSelectedId() - 1);
         scaleStaff_.setKey(masterKeyRoot_, t);  // -1 = Aucune → rebuildNoteInfos() efface la portée
@@ -967,13 +924,13 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     // ── AI mix states ─────────────────────────────────────────────────────
     for (int i = 0; i < 9; ++i)
     {
-        const auto ms = samplerEngine_.getSlotMixState(i);
+        const auto ms = facade_.getSlotMixState(i);
         auto& sm      = data.slotMix[static_cast<std::size_t>(i)];
         sm.gain    = ms.gain;
         sm.pan     = ms.pan;
         sm.width   = ms.width;
         sm.depth   = ms.depth;
-        sm.applied = ms.active;
+        sm.applied = ms.applied;
     }
 
     // ── Master key ────────────────────────────────────────────────────────
@@ -1255,7 +1212,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             const int haasSamples = static_cast<int>(
                 sm.width * 0.025 * currentSampleRate_);
             sampler.setSlotHaasDelay(i, haasSamples);
-            samplerEngine_.restoreSlotMixState(i, sm.gain, sm.pan, sm.width, sm.depth);
+            facade_.setSlotMixState(i, sm.gain, sm.pan, sm.width, sm.depth);
         }
     }
 
@@ -1361,32 +1318,15 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 //==============================================================================
 void MainComponent::triggerAI()
 {
-    if (samplerEngine_.isBusy()) return;
+    if (facade_.isMagicBusy()) return;
 
-    // Rôles fixes par piste (design intentionnel : KICK=slot2, BASS=slot1… → muscle memory live + sidechain prévisible)
-    // Remplacés par l'override manuel (clic droit) si l'utilisateur a forcé un type différent.
-    using CT = ::dsp::SmartSamplerEngine::ContentType;
-    static constexpr CT kSlotRoles[9] = {
-        CT::SYNTH,   // 0: MASTER  — loop mélodique, référence tonale
-        CT::BASS,    // 1: BASS
-        CT::KICK,    // 2: KICK
-        CT::SNARE,   // 3: SNARE
-        CT::HIHAT,   // 4: HIHAT
-        CT::PAD,     // 5: PAD
-        CT::SYNTH,   // 6: SYNTH
-        CT::PERC,    // 7: PERC
-        CT::LOOP,    // 8: DRM — drum loop complète (EQ neutre)
-    };
-    for (int i = 0; i < 9; ++i)
-        if (!manualTypeOverride_[static_cast<std::size_t>(i)])
-            samplerEngine_.setTypeOverride(i, kSlotRoles[i]);
-
-    std::array<::dsp::SmartSamplerEngine::SceneSnapshot, 8> arr {};
-    for (int si = 0; si < kMaxScenes; ++si)
-        arr[static_cast<std::size_t>(si)] = buildSceneSnapshot(si);
-    samplerEngine_.setArrangement(arr, sceneManager_.currentIdx());
-    samplerEngine_.setSerumContext(serumMixFeatures_, serumHost_.isLoaded());
-    samplerEngine_.applyMagicMix();
+    // Le moteur V2 résout les types depuis les rôles du graphe (AudioGraph::slotRole)
+    // + overrides manuels (setManualTypeOverride). Le contexte Serum (EWI/VST) est
+    // poussé avant le lancement pour la compensation de masquage.
+    facade_.setSerumContext(serumMixFeatures_.rms, serumMixFeatures_.spectralCentroid,
+                            serumMixFeatures_.midFrac, serumMixFeatures_.highFrac,
+                            serumContentTypeForMix(), serumHost_.isLoaded());
+    facade_.triggerMagicMix();
 }
 
 //==============================================================================
@@ -1515,8 +1455,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             float targetRms;
             switch (serumContentType_.load(std::memory_order_relaxed))
             {
-                case ::dsp::ContentCategory::BASS:  targetRms = 0.055f; break; // ~-25 dBFS
-                case ::dsp::ContentCategory::PAD:   targetRms = 0.063f; break; // ~-24 dBFS
+                case engine::analysis::ContentCategory::BASS:  targetRms = 0.055f; break; // ~-25 dBFS
+                case engine::analysis::ContentCategory::PAD:   targetRms = 0.063f; break; // ~-24 dBFS
                 default:                            targetRms = 0.075f; break; // ~-22 dBFS (SYNTH/lead)
             }
 
@@ -2239,7 +2179,7 @@ void MainComponent::timerCallback()
         }
         if (!serumSnapCopy_.empty())
         {
-            const auto feat = ::dsp::FeatureExtractor::extract(serumSnapCopy_, currentSampleRate_);
+            const auto feat = engine::analysis::FeatureExtractor::extract(serumSnapCopy_, currentSampleRate_);
             serumContentType_.store(feat.contentType, std::memory_order_relaxed);
             serumMixFeatures_ = feat;
             serumSnapCopy_.clear();
@@ -2267,10 +2207,10 @@ void MainComponent::timerCallback()
         applyDubDelayMorph(sceneManager_.getMorphProgress());
 
     // Mise à jour état nuage IA
-    if (samplerEngine_.isBusy())
+    if (facade_.isMagicBusy())
         aiCloud_.setState(ui::PixelCloudComponent::State::Working);
-    else if (samplerEngine_.isMagicActive())
-        aiCloud_.setState(samplerEngine_.didLastMixUseFallback()
+    else if (facade_.isMagicActive())
+        aiCloud_.setState(facade_.didLastMixUseFallback()
                               ? ui::PixelCloudComponent::State::Disabled   // rouge = fallback heuristique
                               : ui::PixelCloudComponent::State::Active);   // vert = IA réelle
     else
@@ -2439,38 +2379,6 @@ void MainComponent::updateSceneLabel()
                            juce::dontSendNotification);
 }
 
-::dsp::SmartSamplerEngine::SceneSnapshot MainComponent::buildSceneSnapshot(int si) const
-{
-    using CT = ::dsp::SmartSamplerEngine::ContentType;
-    static constexpr CT kSlotRoles[9] = {
-        CT::SYNTH, CT::BASS, CT::KICK, CT::SNARE,
-        CT::HIHAT, CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
-    };
-
-    ::dsp::SmartSamplerEngine::SceneSnapshot snap;
-    const auto& sc = sceneManager_.scene(si);
-    for (int t = 0; t < 9; ++t)
-    {
-        const std::size_t tidx = static_cast<std::size_t>(t);
-        snap.slotTypes[tidx] = kSlotRoles[t];
-
-        if (sc.mutes[tidx]) continue;
-        const int numSteps = sc.trackBarCounts[tidx] * 16;
-        for (int s = 0; s < numSteps; ++s)
-        {
-            if (sc.steps[tidx][static_cast<std::size_t>(s)])
-            {
-                snap.slotActive[tidx] = true;
-                ++snap.activeCount;
-                break;
-            }
-        }
-    }
-    snap.isBreakdown = (snap.activeCount <= 2);
-    snap.isDrop      = (snap.activeCount >= 6);
-    return snap;
-}
-
 void MainComponent::captureCurrentScene()
 {
     auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
@@ -2484,8 +2392,8 @@ void MainComponent::captureCurrentScene()
         sc.filePaths    [idx]  = stepSeqPanel_.getSlotFilePath(i);
         sc.mutes        [idx]  = sampler.isSlotMuted(i);
         {
-            const auto ms = samplerEngine_.getSlotMixState(i);
-            sc.gains    [idx]  = ms.active ? ms.gain : 1.0f;
+            const auto ms = facade_.getSlotMixState(i);
+            sc.gains    [idx]  = ms.applied ? ms.gain : 1.0f;
         }
         // sc.userGains[idx] is maintained live by onVolumeChanged — do not overwrite here
         // delaySends (persisté .saxfx) : dérivé du rôle effectif V2 (les sends
@@ -2526,32 +2434,34 @@ void MainComponent::captureCurrentScene()
 engine::SlotRole MainComponent::activeRoleForSlot(int slot) const noexcept
 {
     // Rôle analysé V2 (ImportPipeline, confiance ONNX ≥ 0.75) si fiable ;
-    // sinon détection V1 via samplerEngine_.getDetectedType.
+    // sinon type effectif du mix V2 (dernier mix ou rôle courant du slot).
     return facade_.isSlotRoleReliable(slot) ? facade_.slotRole(slot)
                                             : v2RoleForSlot(slot);
 }
 
 engine::SlotRole MainComponent::v2RoleForSlot(int slot) const noexcept
 {
-    using CT = ::dsp::SmartSamplerEngine::ContentType;
-    static constexpr CT kDefaultTypes[9] = {
-        CT::LOOP, CT::BASS, CT::KICK, CT::SNARE, CT::HIHAT,
-        CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
+    // Type effectif du mix V2 (dernier mix ou rôle courant du slot), puis
+    // conversion vers SlotRole pour AutoMixDub / delay sends.
+    using MT = engine::mix::MixContentType;
+    static constexpr MT kDefaultTypes[9] = {
+        MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+        MT::PAD,  MT::SYNTH, MT::PERC, MT::LOOP,
     };
     const auto detected = (slot >= 0 && slot < 9)
-        ? samplerEngine_.getDetectedType(slot) : CT::OTHER;
-    const auto ct = (detected != CT::OTHER) ? detected : kDefaultTypes[slot];
+        ? facade_.getDetectedType(slot) : MT::OTHER;
+    const auto mt = (detected != MT::OTHER) ? detected : kDefaultTypes[slot];
 
-    switch (ct) {
-        case CT::KICK:  return engine::SlotRole::Kick;
-        case CT::BASS:  return engine::SlotRole::Bass;
-        case CT::SNARE: return engine::SlotRole::Snare;
-        case CT::PAD:   return engine::SlotRole::Pad;
-        case CT::SYNTH: return engine::SlotRole::Melodic;
-        case CT::PERC:
-        case CT::HIHAT: return engine::SlotRole::Perc;
-        case CT::LOOP:  return engine::SlotRole::Loop;
-        case CT::OTHER:
+    switch (mt) {
+        case MT::KICK:  return engine::SlotRole::Kick;
+        case MT::BASS:  return engine::SlotRole::Bass;
+        case MT::SNARE: return engine::SlotRole::Snare;
+        case MT::PAD:   return engine::SlotRole::Pad;
+        case MT::SYNTH: return engine::SlotRole::Melodic;
+        case MT::PERC:
+        case MT::HIHAT: return engine::SlotRole::Perc;
+        case MT::LOOP:
+        case MT::OTHER:
         default:        return engine::SlotRole::Loop;
     }
 }
@@ -2577,8 +2487,8 @@ void MainComponent::syncV2Scene(int idx) noexcept
         cfg.trimStart  = sc.trimStart   [static_cast<std::size_t>(i)];
         cfg.trimEnd    = sc.trimEnd     [static_cast<std::size_t>(i)];
         // Role : priorité au rôle analysé par le moteur V2 quand fiable
-        // (ImportPipeline, confiance ONNX ≥ 0.75) ; sinon détection V1 via
-        // samplerEngine_.getDetectedType (→ position par défaut en dernier ressort).
+        // (ImportPipeline, confiance ONNX ≥ 0.75) ; sinon type effectif du mix
+        // V2 (→ position par défaut en dernier ressort).
         cfg.role       = activeRoleForSlot(i);
 
         // Actif si fichier + au moins un step dans le pattern.
@@ -2665,19 +2575,16 @@ void MainComponent::applyScene(int idx, int fromIdx)
             loadSampleIntoSlot(i, newPath, sc.trimStart[sidx], sc.trimEnd[sidx]);
             loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_.setSlotFilePath(i, newPath);
-            samplerEngine_.setSlotFilePath(i, newPath);
         }
         else if (newPath.empty() && !currentPath.empty())
         {
             // Slot doit être vidé
             dspPipeline_.getSampler().clearSlot(i);
             stepSeqPanel_.setSlotFilePath(i, "");
-            samplerEngine_.clearSlot(i);
         }
         else if (!newPath.empty())
         {
             // Même fichier déjà chargé : skip reload → pas de coupure audio
-            samplerEngine_.setSlotFilePath(i, newPath);
         }
 
         facade_.setSlotMuted(i, sc.mutes[i]);
@@ -2807,16 +2714,16 @@ void MainComponent::applyScene(int idx, int fromIdx)
             juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
             juce::Colour { 0xFFFF6B35 },
         };
-        using CT = ::dsp::SmartSamplerEngine::ContentType;
-        static constexpr CT kDefaultTypes[9] = {
-            CT::LOOP, CT::BASS, CT::KICK, CT::SNARE, CT::HIHAT,
-            CT::PAD,  CT::SYNTH, CT::PERC, CT::LOOP,
+        using MT = engine::mix::MixContentType;
+        static constexpr MT kDefaultTypes[9] = {
+            MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+            MT::PAD,  MT::SYNTH, MT::PERC, MT::LOOP,
         };
         for (int i = 0; i < 9; ++i)
         {
-            const auto detected = samplerEngine_.getDetectedType(i);
-            const auto ct       = (detected != CT::OTHER) ? detected : kDefaultTypes[i];
-            const auto sp       = ::dsp::SmartSamplerEngine::spatialForType(i, ct);
+            const auto detected = facade_.getDetectedType(i);
+            const auto mt       = (detected != MT::OTHER) ? detected : kDefaultTypes[i];
+            const auto sp       = engine::mix::spatialForType(i, mt);
             const bool loaded   = !facade_.slotFilePath(i).empty();
             spatialViz_.setSlotState(i, sp.pan, sp.width, sp.depth, loaded, kSlotColours[i]);
         }
@@ -2921,7 +2828,7 @@ void MainComponent::resetCurrentSceneFull()
     for (int i = 0; i < 9; ++i)
     {
         sampler.clearSlot(i);
-        samplerEngine_.clearSlot(i);
+        facade_.clearSlot(i);
         stepSeqPanel_.setSlotFilePath(i, "");
         stepSeqPanel_.setSlotLoaded(i, false);
     }
@@ -2982,4 +2889,19 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 
     // 3. Instant repitch
     facade_.setSlotTransposeSemitones(slot, semitones);
+}
+
+engine::mix::MixContentType MainComponent::serumContentTypeForMix() const noexcept
+{
+    switch (serumContentType_.load(std::memory_order_relaxed))
+    {
+        case engine::analysis::ContentCategory::KICK:  return engine::mix::MixContentType::KICK;
+        case engine::analysis::ContentCategory::SNARE: return engine::mix::MixContentType::SNARE;
+        case engine::analysis::ContentCategory::HIHAT: return engine::mix::MixContentType::HIHAT;
+        case engine::analysis::ContentCategory::BASS:  return engine::mix::MixContentType::BASS;
+        case engine::analysis::ContentCategory::SYNTH: return engine::mix::MixContentType::SYNTH;
+        case engine::analysis::ContentCategory::PAD:   return engine::mix::MixContentType::PAD;
+        case engine::analysis::ContentCategory::PERC:  return engine::mix::MixContentType::PERC;
+        default:                                       return engine::mix::MixContentType::OTHER;
+    }
 }

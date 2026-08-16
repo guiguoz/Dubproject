@@ -1,9 +1,9 @@
-#include "FeatureExtractor.h"
+#include "engine/Analysis/FeatureExtractor.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace dsp {
+namespace engine::analysis {
 
 static constexpr float kTwoPi = 6.283185307f;
 
@@ -167,4 +167,4 @@ MixFeatures FeatureExtractor::extract(const std::vector<float>& pcm,
     return feat;
 }
 
-} // namespace dsp
+} // namespace engine::analysis
