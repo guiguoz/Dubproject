@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <vector>
 #include <cmath>
 #include "engine/SlotPlayer.h"
@@ -247,6 +248,79 @@ TEST_CASE("T-SP1g: ONE-SHOT voice goes silent after last frame", "[slotplayer]")
 
         for (int i = 0; i < N * 2; ++i)
             REQUIRE(out[static_cast<size_t>(i)] == 0.f);
+    }
+}
+
+// ─── T-SP6 : spatialisation pan + Haas (M9 étape 6) ──────────────────────────
+//
+// V1 (Sampler) : loi égal-power gL=cos(angle), gR=sin(angle),
+// angle = (pan+1)·π/4 ; Haas appliqué au canal faible (retard width × 25 ms).
+// V2 : identité quand pan == 0 && width == 0 (transparence T-SP1).
+
+TEST_CASE("T-SP6a: pan +1 → tout à droite (égal-power, gL=0, gR=1)", "[slotplayer][spatial]") {
+    const int N = 32;
+    SlotPlayer sp;
+    sp.prepareStretchers(1, 44100.f);
+    sp.setSpatial(0, 1.0f, 0.f);
+    sp.loadSlot(0, makeMonoRamp(N), PlayMode::OneShot);
+
+    const auto ts = makeTS();
+    const EngineEvent ev = makeTrigger(0);
+
+    std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
+    sp.processBlock(ts, out.data(), N, &ev, 1);
+
+    for (int i = 0; i < N; ++i) {
+        const float expected = static_cast<float>(i + 1) * 0.001f;
+        REQUIRE(out[static_cast<size_t>(i) * 2u]     == Catch::Approx(0.f).margin(1e-6f));
+        REQUIRE(out[static_cast<size_t>(i) * 2u + 1u] == Catch::Approx(expected).margin(1e-6f));
+    }
+}
+
+TEST_CASE("T-SP6b: Haas width 0.4 → droit retardé de 441 samples (25 ms/×1)", "[slotplayer][spatial]") {
+    const int delay = 441;   // int(0.4 × 0.025 × 44100)
+    const int N = delay + 16;
+    const float v = 0.001f;  // == seuil → pas de micro-fade
+    const float gCentre = 0.70710678f;
+
+    SlotPlayer sp;
+    sp.prepareStretchers(1, 44100.f);
+    sp.setSpatial(0, 0.f, 0.4f);
+    sp.loadSlot(0, makeMono(N, v), PlayMode::OneShot);
+
+    const auto ts = makeTS();
+    const EngineEvent ev = makeTrigger(0);
+
+    std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
+    sp.processBlock(ts, out.data(), N, &ev, 1);
+
+    for (int f = 0; f < N; ++f) {
+        // Gauche jamais retardée : v × cos(π/4)
+        REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(v * gCentre).margin(1e-6f));
+        if (f < delay)
+            REQUIRE(out[static_cast<size_t>(f) * 2u + 1u] == Catch::Approx(0.f).margin(1e-6f));
+        else
+            REQUIRE(out[static_cast<size_t>(f) * 2u + 1u] == Catch::Approx(v * gCentre).margin(1e-6f));
+    }
+}
+
+TEST_CASE("T-SP6c: setSpatial(0,0) → identité bit-exact", "[slotplayer][spatial]") {
+    const int N = 24;
+    SlotPlayer sp;
+    sp.prepareStretchers(1, 44100.f);
+    sp.setSpatial(0, 0.f, 0.f);
+    sp.loadSlot(0, makeMonoRamp(N), PlayMode::OneShot);
+
+    const auto ts = makeTS();
+    const EngineEvent ev = makeTrigger(0);
+
+    std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
+    sp.processBlock(ts, out.data(), N, &ev, 1);
+
+    for (int i = 0; i < N; ++i) {
+        const float expected = static_cast<float>(i + 1) * 0.001f;
+        REQUIRE(out[static_cast<size_t>(i) * 2u]     == expected);
+        REQUIRE(out[static_cast<size_t>(i) * 2u + 1u] == expected);
     }
 }
 

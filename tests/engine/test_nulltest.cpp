@@ -196,14 +196,16 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Références committées (§11.2). Régénérer UNIQUEMENT sur changement
     // intentionnel du rendu, avec justification dans le commit.
     //
-    // Référence v2 (M8c) — les GainRamp de TransitionEngine sont désormais
-    // appliqués par SlotPlayer (fades Enter/Exit). Changement intentionnel du
-    // rendu : les transitions produisent de vrais fades de gain au lieu d'un
-    // saut. Régénéré via NULL0 (Debug == Release bit-exact, vérifié).
-    //   hashAudio = 0xcaf8b973768f00cc
-    //   hashRms   = 0xfb07aa3caefb2d3c
-    CHECK(hashAudio == 0xcaf8b973768f00ccull);
-    CHECK(hashRms   == 0xfb07aa3caefb2d3cull);
+    // Référence v3 (M9 étape 6) — spatialisation runtime pan+Haas appliquée
+    // par SlotPlayer à partir du rôle de chaque slot (dérivé dans AudioGraph :
+    // Melodic→SYNTH w=0.4, Snare→SNARE w=0.1, Perc→PERC pan=0.3, Pad→PAD
+    // w=0.8 ; KICK/BASS restent centrés). Changement INTENTIONNEL du rendu :
+    // c'est le seul point audible du portage M9. Régénéré via NULL0
+    // (Debug == Release bit-exact, vérifié).
+    //   hashAudio = 0xa00f0dd7fb70bbd0
+    //   hashRms   = 0xec5593f087458af5
+    CHECK(hashAudio == 0xa00f0dd7fb70bbd0ull);
+    CHECK(hashRms   == 0xec5593f087458af5ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

@@ -59,16 +59,9 @@ public:
     fx::MasterLimiter&      limiter()          noexcept { return limiter_; }
 
     // Rôle par slot (écrit depuis message thread, lu en audio thread).
-    // Met à jour le slot kick pour le sidechain si le rôle change.
-    void setSlotRole(int slot, SlotRole role) noexcept {
-        if (slot >= 0 && slot < kMaxSlots) {
-            roles_[slot] = role;
-            if (role == SlotRole::Kick)
-                kickSlot_ = slot;
-            else if (kickSlot_ == slot)
-                findKickSlot();
-        }
-    }
+    // Met à jour le slot kick pour le sidechain et la spatialisation pan+Haas
+    // (M9 étape 6) si le rôle change.
+    void setSlotRole(int slot, SlotRole role) noexcept;
 
     // Thread de mix : recalcule les cibles AutoMix à partir des rôles courants.
     // Appelé toutes les 50 ms (thread de mix réel ou simulation offline §11.2).

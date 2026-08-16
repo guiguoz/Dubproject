@@ -1,8 +1,48 @@
 #include "engine/AudioGraph.h"
+#include "engine/mix/MixAlgorithms.h"
 #include <cstring>
 #include <cmath>
 
 namespace engine {
+
+namespace {
+
+// Rôle V2 → type magic mix, pour la spatialisation runtime (M9 étape 6).
+mix::MixContentType roleToMixType(SlotRole role) noexcept
+{
+    using mix::MixContentType;
+    switch (role) {
+        case SlotRole::Kick:    return MixContentType::KICK;
+        case SlotRole::Bass:    return MixContentType::BASS;
+        case SlotRole::Snare:   return MixContentType::SNARE;
+        case SlotRole::Pad:     return MixContentType::PAD;
+        case SlotRole::Melodic: return MixContentType::SYNTH;
+        case SlotRole::Perc:    return MixContentType::PERC;
+        case SlotRole::Fx:      return MixContentType::OTHER;
+        case SlotRole::Loop:    return MixContentType::LOOP;
+        case SlotRole::Drum:    return MixContentType::PERC;
+        default:                return MixContentType::OTHER;
+    }
+}
+
+} // namespace
+
+void AudioGraph::setSlotRole(int slot, SlotRole role) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    roles_[slot] = role;
+
+    // Spatialisation runtime dérivée du rôle (pan + Haas). Centroid neutre
+    // (spatialForType) — le centroid réel du PCM est pris en charge par le
+    // thread de mix (étapes 7-8).
+    const auto sp = mix::spatialForType(slot, roleToMixType(role));
+    slotPlayer_.setSpatial(slot, sp.pan, sp.width);
+
+    if (role == SlotRole::Kick)
+        kickSlot_ = slot;
+    else if (kickSlot_ == slot)
+        findKickSlot();
+}
 
 void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
 {

@@ -33,6 +33,9 @@ struct SlotParams {
     std::atomic<float>     semitones {0.0f};
     std::atomic<int32_t>   loopBeats {0};      // longueur musicale en beats
     std::atomic<int64_t>   anchor    {0};      // sample transport du trigger
+    // M9 étape 6 — spatialisation runtime (pan + Haas) :
+    std::atomic<float>     pan   {0.f};  // −1 (L) … +1 (R), loi égal-power
+    std::atomic<float>     width {0.f};  // 0 = mono, 1 = max Haas (25 ms)
 };
 
 // ─── Voix (2 par slot pour les chevauchements) ───────────────────────────────
@@ -100,6 +103,21 @@ public:
     void setSemitones(int slot, float s) noexcept {
         if (slot >= 0 && slot < kSlots)
             params_[slot].semitones.store(s, std::memory_order_relaxed);
+    }
+    // Spatialisation pan + Haas (M9 étape 6) — valeurs issues du rôle (AudioGraph).
+    void setSpatial(int slot, float pan, float width) noexcept {
+        if (slot >= 0 && slot < kSlots) {
+            params_[slot].pan.store(pan,   std::memory_order_relaxed);
+            params_[slot].width.store(width, std::memory_order_relaxed);
+        }
+    }
+    float getPan(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 0.f;
+        return params_[slot].pan.load(std::memory_order_relaxed);
+    }
+    float getWidth(int slot) const noexcept {
+        if (slot < 0 || slot >= kSlots) return 0.f;
+        return params_[slot].width.load(std::memory_order_relaxed);
     }
 
     // ── Getters thread-safe ────────────────────────────────────────────────────
@@ -172,6 +190,12 @@ private:
     float rampTarget_[kSlots] = {};
     int   rampLeft_[kSlots]  = {};   // samples restants (0 = pas de rampe active)
 
+    // ── Haas — ligne de retard du canal faible (M9 étape 6) ──────────────────
+    // width ∈ [0,1] → retard 0 … 25 ms. Puissance de 2 pour le masquage.
+    static constexpr int kHaasDelayMax = 2048;
+    float haasDelay_   [kSlots][kHaasDelayMax] = {};
+    int   haasWritePos_[kSlots] = {};
+
     // Pic de sortie par slot (audio thread write, message thread read pour VU).
     float slotPeak_[kSlots] = {};
 
@@ -179,6 +203,16 @@ private:
 
     // Avance les rampes de transition de numFrames (appelé en tête de processBlock).
     void advanceRamps(int numFrames) noexcept;
+
+    // Réinitialise la ligne de retard Haas d'un slot (loadSlot/clearSlot).
+    void resetSpatialSlot(int slot) noexcept;
+
+    // Gains pan (loi égal-power V1). Identité si pan == 0 && width == 0
+    // (préserve la transparence T-SP1). haasOnLeft : le canal faible est la gauche.
+    void spatialGains(int slot, float& gL, float& gR, bool& haasOnLeft) noexcept;
+
+    // Retourne le sample retardé de width × 25 ms (0 = pas de retard).
+    float applyHaasDelay(int slot, float sample) noexcept;
 
     // Déclenche une voix sur le slot (choisit voice[0] ou voice[1]).
     void handleTrigger(int slot, int64_t transportAnchor) noexcept;

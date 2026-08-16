@@ -71,6 +71,7 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
 
     pcm_[slot] = std::move(pcm);
     params_[slot].mode.store(mode, std::memory_order_relaxed);
+    resetSpatialSlot(slot);
 
     // Rendre visible au thread audio
     loaded_[slot].store(true, std::memory_order_release);
@@ -86,6 +87,7 @@ void SlotPlayer::clearSlot(int slot) noexcept {
     rampValue_ [slot] = 1.0f;
     rampTarget_[slot] = 1.0f;
     rampLeft_  [slot] = 0;
+    resetSpatialSlot(slot);
 }
 
 // ─── advanceRamps ────────────────────────────────────────────────────────────
@@ -100,6 +102,55 @@ void SlotPlayer::advanceRamps(int numFrames) noexcept {
         if (rampLeft_[s] <= 0)
             rampValue_[s] = rampTarget_[s];
     }
+}
+
+// ─── resetSpatialSlot ─────────────────────────────────────────────────────────
+
+void SlotPlayer::resetSpatialSlot(int slot) noexcept {
+    if (slot < 0 || slot >= kSlots) return;
+    haasWritePos_[slot] = 0;
+    std::fill(haasDelay_[slot], haasDelay_[slot] + kHaasDelayMax, 0.f);
+}
+
+// ─── spatialGains ─────────────────────────────────────────────────────────────
+//
+// Loi égal-power V1 (Sampler::setSlotPan) : angle = (pan+1)·π/4 →
+// gL = cos(angle), gR = sin(angle). Le canal faible reçoit le signal Haas.
+// Si pan == 0 ET width == 0 → identité (gL = gR = 1) : préserve la transparence
+// bit-exact T-SP1 (le V1 appliquait toujours le 0.7071 de centre, ce qui
+// casserait l'invariant de transparence V2).
+
+void SlotPlayer::spatialGains(int slot, float& gL, float& gR,
+                              bool& haasOnLeft) noexcept {
+    const float pan   = params_[slot].pan.load(std::memory_order_relaxed);
+    const float width = params_[slot].width.load(std::memory_order_relaxed);
+
+    if (pan == 0.f && width == 0.f) {
+        gL = 1.f; gR = 1.f; haasOnLeft = false;
+        return;
+    }
+
+    constexpr float kPi = 3.14159265358979f;
+    const float angle = (std::clamp(pan, -1.f, 1.f) + 1.f) * 0.25f * kPi;
+    gL = std::cos(angle);
+    gR = std::sin(angle);
+    haasOnLeft = (gL < gR);
+}
+
+// ─── applyHaasDelay ───────────────────────────────────────────────────────────
+
+float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
+    const float width = params_[slot].width.load(std::memory_order_relaxed);
+    int delay = static_cast<int>(width * 0.025f * sampleRate_);
+    if (delay <= 0) return sample;
+    if (delay >= kHaasDelayMax) delay = kHaasDelayMax - 1;
+
+    auto& buf = haasDelay_[slot];
+    const int wp = haasWritePos_[slot];
+    buf[static_cast<size_t>(wp)] = sample;
+    const int rp = (wp - delay + kHaasDelayMax) & (kHaasDelayMax - 1);
+    haasWritePos_[slot] = (wp + 1) & (kHaasDelayMax - 1);
+    return buf[static_cast<size_t>(rp)];
 }
 
 // ─── handleTrigger ───────────────────────────────────────────────────────────
@@ -172,6 +223,10 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
     const bool bypass = stretchers_[slot].isBypass();
 
+    // Spatialisation pan + Haas (M9 étape 6) — gains calculés une fois par bloc.
+    float gL, gR; bool haasOnLeft;
+    spatialGains(slot, gL, gR, haasOnLeft);
+
     // Buffers temporaires planaires pour le stretch (max kCrossfadeLen + numFrames).
     // On utilise deux petits tableaux statiques locaux : pas d'allocation.
     // Taille max = kCrossfadeLen (256) << raisonnable pour la pile.
@@ -209,10 +264,17 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
                 right = pcm.data[idx + 1u];
             }
 
-            out[static_cast<size_t>(f) * 2u]      += left  * gain;
-            out[static_cast<size_t>(f) * 2u + 1u] += right * gain;
+            const float sL = left  * gain;
+            const float sR = right * gain;
+            if (haasOnLeft) {
+                out[static_cast<size_t>(f) * 2u]      += applyHaasDelay(slot, sL) * gL;
+                out[static_cast<size_t>(f) * 2u + 1u] += sR * gR;
+            } else {
+                out[static_cast<size_t>(f) * 2u]      += sL * gL;
+                out[static_cast<size_t>(f) * 2u + 1u] += applyHaasDelay(slot, sR) * gR;
+            }
 
-            const float p = std::max(std::abs(left * gain), std::abs(right * gain));
+            const float p = std::max(std::abs(sL), std::abs(sR));
             if (p > slotPeak_[slot]) slotPeak_[slot] = p;
         }
     } else {
@@ -259,13 +321,18 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
         // Mixer dans la sortie stéréo entrelacée.
         for (int f = 0; f < N; ++f) {
-            const float vL = tmpL[static_cast<size_t>(f)] * gain;
-            const float vR = tmpR[static_cast<size_t>(f)] * gain;
-            out[static_cast<size_t>(f) * 2u]      += vL;
-            out[static_cast<size_t>(f) * 2u + 1u] += vR;
+            const float sL = tmpL[static_cast<size_t>(f)] * gain;
+            const float sR = tmpR[static_cast<size_t>(f)] * gain;
+            if (haasOnLeft) {
+                out[static_cast<size_t>(f) * 2u]      += applyHaasDelay(slot, sL) * gL;
+                out[static_cast<size_t>(f) * 2u + 1u] += sR * gR;
+            } else {
+                out[static_cast<size_t>(f) * 2u]      += sL * gL;
+                out[static_cast<size_t>(f) * 2u + 1u] += applyHaasDelay(slot, sR) * gR;
+            }
 
-            float p = std::abs(vL);
-            if (std::abs(vR) > p) p = std::abs(vR);
+            float p = std::abs(sL);
+            if (std::abs(sR) > p) p = std::abs(sR);
             if (p > slotPeak_[slot]) slotPeak_[slot] = p;
         }
     }
@@ -285,6 +352,10 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                         * rampValue_[slot];
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
     const bool loop     = (mode == PlayMode::Free);
+
+    // Spatialisation pan + Haas (M9 étape 6) — gains calculés une fois par bloc.
+    float gL, gR; bool haasOnLeft;
+    spatialGains(slot, gL, gR, haasOnLeft);
 
     // Correction sample rate : si device SR ≠ sample SR, interpolation linéaire.
     // Exemple : sample 44100 Hz, device 48000 Hz → srRatio = 44100/48000 = 0.91875
@@ -367,12 +438,19 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             ++voice.readPos;
         }
 
-        const float g = vGain * gain;
-        out[static_cast<size_t>(f) * 2u]      += left  * g;
-        out[static_cast<size_t>(f) * 2u + 1u] += right * g;
+        const float g  = vGain * gain;
+        const float sL = left  * g;
+        const float sR = right * g;
+        if (haasOnLeft) {
+            out[static_cast<size_t>(f) * 2u]      += applyHaasDelay(slot, sL) * gL;
+            out[static_cast<size_t>(f) * 2u + 1u] += sR * gR;
+        } else {
+            out[static_cast<size_t>(f) * 2u]      += sL * gL;
+            out[static_cast<size_t>(f) * 2u + 1u] += applyHaasDelay(slot, sR) * gR;
+        }
 
-        // Pic de sortie du slot (VU)
-        const float p = std::max(std::abs(left * g), std::abs(right * g));
+        // Pic de sortie du slot (VU) — avant spatialisation (sémantique V1)
+        const float p = std::max(std::abs(sL), std::abs(sR));
         if (p > slotPeak_[slot]) slotPeak_[slot] = p;
 
         if (deactivateAfter) { voice.active = false; return; }
