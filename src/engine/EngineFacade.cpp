@@ -745,4 +745,20 @@ void EngineFacade::applySceneInternal(int idx) noexcept
     }
 }
 
+// ─── Playhead / séquenceur (pour l'UI) ─────────────────────────────────────
+
+int32_t EngineFacade::getCurrentStep() const noexcept
+{
+    const TransportState& ts = transport_.state();
+    if (!ts.playing) return 0;
+    return static_cast<int32_t>(stepIndexAt(ts, ts.samplePos) % kMaxSteps);
+}
+
+double EngineFacade::getCurrentPhase() const noexcept
+{
+    const TransportState& ts = transport_.state();
+    if (!ts.playing) return 0.0;
+    return beatAt(ts, ts.samplePos);
+}
+
 } // namespace engine

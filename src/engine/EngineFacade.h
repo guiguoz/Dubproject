@@ -192,6 +192,14 @@ public:
     void startMixThread() noexcept;
     void stopMixThread() noexcept;
 
+    // ── Playhead / séquenceur (pour l'UI) ──────────────────────────────────────
+    // Index du step courant (0 .. kMaxSteps-1), récupéré depuis le Transport V2.
+    // Remplace V1 StepSequencer::getCurrentStep() pour l'UI.
+    int32_t getCurrentStep() const noexcept;
+    // Phase fractionnaire du beat courant [0..∞), pour animation de playhead
+    // et détection de downbeat par LooperEngine.
+    double getCurrentPhase() const noexcept;
+
     // ── Diagnostics / debug ────────────────────────────────────────────────────
     // CPU callback budget : p99 < 50 % (§11.4)
     float getCpuLoadPercent() const noexcept { return cpuLoad_.load(); }
