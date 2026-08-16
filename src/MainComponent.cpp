@@ -1416,11 +1416,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         looperEngine_.process(sLw, sRw, sLw, sRw, numSamples, looperBeatPhase);
     }
 
-    // Step sequencer — the V2 facade's sequencer handles audio triggering, but we
-    // still advance the V1 sequencer to keep getCurrentStep() alive for the UI.
-    // No sound comes from the V1 sampler in V2 mode (PCM chargé côté SlotPlayer).
-    stepSequencer_.process(numSamples, dspPipeline_.getSampler());
-
     if (numCh >= 2)
     {
         // ── Stereo path ───────────────────────────────────────────────────────
