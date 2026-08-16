@@ -631,9 +631,15 @@ nulltest bit-exact (`0xcaf8b973768f00cc` / `0xfb07aa3caefb2d3c`) :
 - **Étape 3 ✔ `585da34`** — `src/engine/mix/MixEngine.h` :
   `processHeuristic()` = branche heuristique complète de `applyNeutronMix`
   (phases 1/2/4) sans side-effects sur un player. Tests MIX-10/11.
-- **Étape 6 ⏳** — spatialisation runtime V2 (pan + Haas dans `SlotPlayer` /
-  `AudioGraph`) : seul point audible, à valider par NULL1.
+- **Étape 6 ✔ `aaa9c56`** — spatialisation runtime V2 : pan + Haas dans
+  `SlotPlayer` (params atomiques pan/width, loi égal-power V1 + Haas width×25 ms
+  sur le canal faible, identité quand pan==width==0 pour préserver la
+  transparence T-SP1), dérivée du rôle dans `AudioGraph::setSlotRole`
+  (mapping `SlotRole`→`MixContentType` + `spatialForType`, centroid neutre).
+  Tests T-SP6a/b/c. NULL1 régénéré (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`)
+  — changement de rendu INTENTIONNEL, seul point audible du portage
+  (Debug == Release bit-exact vérifié).
 
-À venir : étapes 4 (chemin IA ONNX), 5 (revert), 6 (spatialisation runtime),
-7 (état mix persistant), 8 (façade + worker), 9 (ré-câblage MainComponent),
-11 (réduction surface V1), 12 (purge finale + recette M9).
+À venir : étapes 4 (chemin IA ONNX), 5 (revert), 7 (état mix persistant),
+8 (façade + worker), 9 (ré-câblage MainComponent), 11 (réduction surface V1),
+12 (purge finale + recette M9).
