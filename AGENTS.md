@@ -75,10 +75,11 @@ Ordre logique stéréo (résumé) :
 ## Transitions adaptatives entre scènes
 
 `SceneManager::armAdaptiveCrossfade()` remplace `armCrossfade()` dans `applyScene()`.
-L'énergie de chaque scène est calculée par `SceneManager::computeSceneEnergy(SceneData&)` :
+L'énergie de chaque scène est calculée par `engine::SceneEnergy::compute(engine::SceneData)` (`src/engine/SceneEnergy.h`, moteur V2 sans JUCE) :
 - Score 0.0–1.0 basé sur densité de pas + mutes (pas d'analyse audio)
-- Pré-calculé au chargement du projet ; invalidé à chaque `captureCurrentScene()`
+- Pré-calculé au chargement du projet (`applyProjectData`, sur le SceneStore après `syncV2Scenes()`) ; invalidé à chaque `captureCurrentScene()`
 - Seuil musical/calme : `kT = 0.15f`
+- L'ancien `dsp::SceneManager::computeSceneEnergy` n'est plus appelé depuis `MainComponent` (fonction conservée par compat mais non utilisée par l'UI).
 
 Durée et courbe du crossfade selon le delta d'énergie :
 

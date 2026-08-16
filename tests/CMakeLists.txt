@@ -95,6 +95,7 @@ add_executable(EngineTests
     engine/test_stretchconform.cpp
     engine/test_import.cpp
     engine/test_transition.cpp
+    engine/test_scene_energy.cpp
     engine/test_automix.cpp
     engine/test_nulltest.cpp
     engine/test_mono_downmix.cpp

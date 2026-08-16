@@ -1,6 +1,6 @@
 #include "MainComponent.h"
 
-
+#include "engine/SceneEnergy.h"
 
 #include <cmath>
 #include <future>
@@ -74,7 +74,7 @@ MainComponent::MainComponent()
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::WarningIcon,
             "Reset Scene",
-            "Effacer les patterns de la scene " + juce::String(sceneManager_.currentIdx() + 1) + " ?\n"
+            "Effacer les patterns de la scene " + juce::String(facade_.currentSceneIdx() + 1) + " ?\n"
             "(les samples restent charges)",
             "Reset", "Annuler", nullptr,
             juce::ModalCallbackFunction::create([this](int result)
@@ -88,7 +88,7 @@ MainComponent::MainComponent()
         juce::AlertWindow::showOkCancelBox(
             juce::AlertWindow::WarningIcon,
             "Full Reset",
-            "Effacer patterns ET samples de la scene " + juce::String(sceneManager_.currentIdx() + 1) + " ?\n"
+            "Effacer patterns ET samples de la scene " + juce::String(facade_.currentSceneIdx() + 1) + " ?\n"
             "Cette action est irreversible.",
             "Reset complet", "Annuler", nullptr,
             juce::ModalCallbackFunction::create([this](int result)
@@ -132,8 +132,7 @@ MainComponent::MainComponent()
         const float bpm = raw.getFloatValue();
         if (bpm >= 40.f && bpm <= 240.f)
         {
-            stepSequencer_.setBpm(bpm);
-            dspPipeline_.setBpm(bpm);
+            facade_.setBpm(bpm);
             serumHost_.setBpm(bpm);
             looperEngine_.setBpm(bpm);
             stepSeqPanel_->setBpm(bpm);
@@ -269,7 +268,6 @@ MainComponent::MainComponent()
     // Step toggled: stop sample immediately if the track has no more active steps
     stepSeqPanel_->onStepChanged = [this](int track, int step, bool active)
     {
-        stepSequencer_.setStep(track, step, active);  // sync pour le project save
         facade_.setStep(track, step, active);
         facade_.flipPatternBuffer();
     };
@@ -284,7 +282,6 @@ MainComponent::MainComponent()
     // BPM changed: update sequencer + DSP + sidebar label
     stepSeqPanel_->onBpmChanged = [this](float bpm)
     {
-        stepSequencer_.setBpm(bpm);
         serumHost_.setBpm(bpm);
         updateSidebarBpm(bpm);
         facade_.setBpm(bpm);
@@ -309,7 +306,7 @@ MainComponent::MainComponent()
     // Volume per slot — user fader, multiplied on top of AI normalization gain
     stepSeqPanel_->onVolumeChanged = [this](int slot, float userGain)
     {
-        auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+        auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
         sc.userGains[static_cast<std::size_t>(slot)] = userGain;
         facade_.setSlotGain(slot, userGain);
     };
@@ -320,7 +317,7 @@ MainComponent::MainComponent()
     // triggerAI() (bouton ⚡) reprendra l'état de mute courant pour recalibrer.
     stepSeqPanel_->onMutedChanged = [this](int slot, bool muted)
     {
-        const bool quantize = !muted && stepSequencer_.isPlaying();
+        const bool quantize = !muted && facade_.isPlaying();
         facade_.setSlotMuted(slot, muted, quantize);
     };
 
@@ -343,7 +340,7 @@ MainComponent::MainComponent()
     };
 
     // ── Swing ─────────────────────────────────────────────────────────────────
-    stepSeqPanel_->onSwingChanged = [this](float v) { stepSequencer_.setSwing(v); };
+    stepSeqPanel_->onSwingChanged = [this](float v) { facade_.setSwing(v); };
 
     // ── Magic mix V2 (worker EngineFacade) — callback unique de fin ────────────
     // Le worker V2 détecte les types + applique le mix d'un bloc (aucun rechargement
@@ -398,7 +395,7 @@ MainComponent::MainComponent()
             // Appliquer les gains IA comme point de départ des faders + scènes
             // (persistance projet). L'application runtime a déjà été faite par le
             // worker (setSlotMixState → SlotPlayer).
-            auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+            auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
             for (int i = 0; i < 9; ++i)
             {
                 const auto ms = facade_.getSlotMixState(i);
@@ -441,13 +438,13 @@ MainComponent::MainComponent()
     {
         auto& cb = trackClipboard_;
         cb.steps    = {};
-        const int numSteps = stepSequencer_.getTrackStepCount(slot);
+        const int numSteps = facade_.getTrackStepCount(slot);
         for (int s = 0; s < numSteps; ++s)
-            cb.steps[static_cast<std::size_t>(s)] = stepSequencer_.getStep(slot, s);
-        cb.barCount = stepSequencer_.getTrackBarCount(slot);
+            cb.steps[static_cast<std::size_t>(s)] = facade_.getStep(slot, s);
+        cb.barCount = facade_.getTrackBarCount(slot);
         cb.filePath = stepSeqPanel_->getSlotFilePath(slot);
-        cb.gain     = dspPipeline_.getSampler().getSlotGain(slot);
-        cb.muted    = dspPipeline_.getSampler().isSlotMuted(slot);
+        cb.gain     = facade_.getSlotGain(slot);
+        cb.muted    = facade_.isSlotMuted(slot);
         cb.valid    = true;
         stepSeqPanel_->hasPasteData = true;
     };
@@ -459,21 +456,19 @@ MainComponent::MainComponent()
         const auto& cb = trackClipboard_;
 
         // Pattern
-        stepSequencer_.setTrackBarCount(slot, cb.barCount);
         stepSeqPanel_->setTrackStepCount(slot, cb.barCount * 16);
         const int numSteps = cb.barCount * 16;
         facade_.setTrackBarCount(slot, cb.barCount);
         for (int s = 0; s < numSteps; ++s)
         {
-            stepSequencer_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
             stepSeqPanel_->setStepState(slot, s, cb.steps[static_cast<std::size_t>(s)]);
             facade_.setStep(slot, s, cb.steps[static_cast<std::size_t>(s)]);
         }
         facade_.flipPatternBuffer();
 
         // Gain + mute
-        dspPipeline_.getSampler().setSlotGain(slot, cb.gain);
-        dspPipeline_.getSampler().setSlotMuted(slot, cb.muted);
+        facade_.setSlotGain(slot, cb.gain);
+        facade_.setSlotMuted(slot, cb.muted);
         stepSeqPanel_->setSlotMuted(slot, cb.muted);
 
         // Sample (si différent)
@@ -484,7 +479,7 @@ MainComponent::MainComponent()
         }
 
         // Mettre à jour la scène courante en mémoire
-        auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+        auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
         for (int s = 0; s < numSteps; ++s)
             sc.steps[static_cast<std::size_t>(slot)][static_cast<std::size_t>(s)] =
                 cb.steps[static_cast<std::size_t>(s)];
@@ -503,7 +498,6 @@ MainComponent::MainComponent()
     // Changement de longueur de pattern via le menu pageLabel_
     stepSeqPanel_->onTrackBarCountChanged = [this](int track, int bars)
     {
-        stepSequencer_.setTrackBarCount(track, bars);   // sync pour le project save
         facade_.setTrackBarCount(track, bars);
         facade_.flipPatternBuffer();
     };
@@ -671,8 +665,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(spatialViz_);
 
     // Initial BPM
-    stepSequencer_.setBpm(120.f);
-    dspPipeline_.setBpm(120.f);
+    facade_.setBpm(120.f);
     serumHost_.setBpm(120.f);
     looperEngine_.setBpm(120.f);
 
@@ -748,7 +741,7 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
     stepSeqPanel_->setSlotLoaded(slot, true);
 
     {
-        auto snap = sampler.getSlotPcmSnapshot(slot);
+        auto snap = facade_.getSlotPcmSnapshot(slot);
         stepSeqPanel_->setSlotWaveform(slot, computeEnvelope(snap));
     }
 }
@@ -796,7 +789,7 @@ void MainComponent::openSampleEditor(int slot)
     const float sr     = (slotSr > 0.f) ? slotSr : static_cast<float>(currentSampleRate_);
 
     // Arrêter le morceau pour permettre d'écouter le sample en isolation
-    if (stepSequencer_.isPlaying())
+    if (facade_.isPlaying())
         stepSeqPanel_->triggerPlay();
 
     const juce::String fileName =
@@ -812,7 +805,7 @@ void MainComponent::openSampleEditor(int slot)
     // On additionne cet offset pour que trimStart/trimEnd restent toujours en
     // coordonnées fichier, quel que soit le nombre d'éditions successives.
     const int fileTrimOffset =
-        sceneManager_.scene(sceneManager_.currentIdx())
+        sceneManager_.scene(facade_.currentSceneIdx())
                      .trimStart[static_cast<std::size_t>(slot)];
 
     auto* editor = new ui::SampleEditorComponent(std::move(pcm), sr);
@@ -901,25 +894,24 @@ void MainComponent::saveProjectToFile(const juce::File& f)
 
     project::ProjectData data;
     data.projectName = "SaxFX Project";
-    data.bpm         = stepSequencer_.getBpm();
+    data.bpm         = facade_.getBpm();
 
     // ── Music context ─────────────────────────────────────────────────────
     data.musicContext.keyRoot = masterKeyRoot_;
     data.musicContext.isMajor = masterKeyMajor_;
 
     // ── Sampler slots + step patterns ─────────────────────────────────────
-    auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 9; ++i)
     {
         auto& sc    = data.samples[static_cast<std::size_t>(i)];
         sc.filePath = stepSeqPanel_->getSlotFilePath(i);
-        sc.gain     = sampler.getSlotGain(i);
+        sc.gain     = facade_.getSlotGain(i);
         sc.loop     = false;
         sc.oneShot  = true;
-        sc.muted    = sampler.isSlotMuted(i);
+        sc.muted    = facade_.isSlotMuted(i);
         sc.gridDiv  = 0;
         for (int s = 0; s < 16; ++s)
-            sc.stepPattern[s] = stepSequencer_.getStep(i, s);
+            sc.stepPattern[s] = facade_.getStep(i, s);
     }
 
     // ── AI mix states ─────────────────────────────────────────────────────
@@ -941,7 +933,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
 
     // ── Scenes ────────────────────────────────────────────────────────────
     captureCurrentScene();
-    data.currentScene = sceneManager_.currentIdx();
+    data.currentScene = facade_.currentSceneIdx();
     for (int si = 0; si < kMaxScenes; ++si)
     {
         const auto& src = sceneManager_.scene(si);
@@ -996,7 +988,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     }
 
     // ── Swing global ──────────────────────────────────────────────────────────
-    data.swing = stepSequencer_.getSwing();
+    data.swing = facade_.getSwing();
 
     // Serum preset state + name are captured per-scene in captureCurrentScene().
 
@@ -1106,9 +1098,8 @@ void MainComponent::openAudioSettings()
 
 void MainComponent::triggerPanic() noexcept
 {
-    dspPipeline_.getSampler().stopAllSlots(::dsp::Sampler::StopMode::Instant);
-    dspPipeline_.resetAllDelays();
-    stepSequencer_.setPlaying(false);
+    facade_.stopAllSlots(::dsp::Sampler::StopMode::Instant);
+    facade_.stop();
 }
 
 void MainComponent::doAutosave()
@@ -1126,7 +1117,6 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
 {
     // Restore BPM
     const float bpm = (data.bpm > 0.f) ? data.bpm : 120.f;
-    stepSequencer_.setBpm(bpm);
     serumHost_.setBpm(bpm);
     stepSeqPanel_->setBpm(bpm);
     updateSidebarBpm(bpm);
@@ -1166,11 +1156,10 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         for (int s = 0; s < 16; ++s)
         {
             const bool active = sc.stepPattern[s];
-            stepSequencer_.setStep(i, s, active);
             stepSeqPanel_->setStepState(i, s, active);
             facade_.setStep(i, s, active);
         }
-        facade_.setTrackBarCount(i, stepSequencer_.getTrackBarCount(i));
+        facade_.setTrackBarCount(i, facade_.getTrackBarCount(i));
 
         stepSeqPanel_->setSlotMuted(i, sc.muted);
         facade_.setSlotMuted(i, sc.muted);
@@ -1203,16 +1192,10 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     // ── v5 — AI mix states ────────────────────────────────────────────────────
     if (data.version >= 5)
     {
-        auto& sampler = dspPipeline_.getSampler();
         for (int i = 0; i < 9; ++i)
         {
             const auto& sm = data.slotMix[static_cast<std::size_t>(i)];
             if (!sm.applied) continue;
-            sampler.setSlotGain(i, sm.gain);
-            sampler.setSlotPan(i, sm.pan);
-            const int haasSamples = static_cast<int>(
-                sm.width * 0.025 * currentSampleRate_);
-            sampler.setSlotHaasDelay(i, haasSamples);
             facade_.setSlotMixState(i, sm.gain, sm.pan, sm.width, sm.depth);
         }
     }
@@ -1220,7 +1203,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     // ── v5 — scenes ───────────────────────────────────────────────────────────
     if (data.version >= 5)
     {
-        sceneManager_.setCurrentIdx(std::clamp(data.currentScene, 0, kMaxScenes - 1));
+        facade_.setCurrentScene(std::clamp(data.currentScene, 0, kMaxScenes - 1));
         for (int si = 0; si < kMaxScenes; ++si)
         {
             const auto& src = data.scenes[static_cast<std::size_t>(si)];
@@ -1253,17 +1236,17 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                                  [static_cast<std::size_t>(s)];
             }
         }
-        // Pré-calcul de l'énergie pour toutes les scènes (depuis les patterns chargés).
-        for (int si = 0; si < kMaxScenes; ++si)
-            sceneManager_.setSceneEnergy(si,
-                ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(si)));
-
         // Restore bar counts, step patterns and sample paths for the current scene
-        applyScene(sceneManager_.currentIdx());
+        applyScene(facade_.currentSceneIdx());
         updateSceneLabel();
 
         // Seed toutes les scènes V1 → SceneStore moteur (pour transitions/scènes).
         syncV2Scenes();
+
+        // Pré-calcul de l'énergie V2 pour toutes les scènes (après la seed du
+        // SceneStore moteur — sceneEnergy lit engine::SceneData).
+        for (int si = 0; si < kMaxScenes; ++si)
+            facade_.setSceneEnergy(si, engine::SceneEnergy::compute(facade_.scene(si)));
     }
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
@@ -1310,7 +1293,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     // Serum preset state + name are now per-scene — restored by applyScene().
 
     // ── Swing (absent dans anciens projets → 0 = straight) ───────────────────
-    stepSequencer_.setSwing(data.swing);
+    facade_.setSwing(data.swing);
     stepSeqPanel_->setSwing(data.swing);
 
     juce::Logger::writeToLog("Project loaded: " + juce::String(data.projectName));
@@ -1338,8 +1321,6 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
 {
     currentSampleRate_ = sampleRate;
     currentBufferSize_ = samplesPerBlockExpected;
-
-    stepSequencer_.prepare(sampleRate);
 
     facade_.prepare(sampleRate, samplesPerBlockExpected);
     facade_.setBpm(stepSeqPanel_->getBpm());
@@ -1403,7 +1384,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         std::copy(left, left + numSamples, v2InputScratchR_.begin());
 
     // Capture beat phase BEFORE step sequencer advances it (used by looper for bar detection)
-    const double looperBeatPhase = stepSequencer_.getCurrentPhase();
+    const double looperBeatPhase = facade_.getCurrentPhase();
 
     serumHost_.processBlock(ewiMidiBuffer_);
 
@@ -1666,7 +1647,7 @@ void MainComponent::mouseDown(const juce::MouseEvent& e)
                     else
                         serumHost_.clearManualPresetName();
                     currentPresetName_ = name;
-                    sceneManager_.scene(sceneManager_.currentIdx()).serumPresetName =
+                    sceneManager_.scene(facade_.currentSceneIdx()).serumPresetName =
                         name.toStdString();
                     if (!serumZone_.isEmpty()) repaint(serumZone_);
                 }
@@ -2145,17 +2126,17 @@ void MainComponent::timerCallback()
         --autosaveFadeTimer_;
 
     // Transition de scène quantisée : appliquée à la fin du cycle du séquenceur
-    if (sceneManager_.pendingIdx() >= 0
-        && stepSequencer_.consumeSceneEnd())
+    if (facade_.pendingSceneIdx() >= 0
+        && facade_.consumeSceneEnd())
     {
-        const int target = sceneManager_.consumePendingScene();
+        const int target = facade_.consumePendingScene();
         if (target >= 0)
         {
             // NE PAS appeler captureCurrentScene() ici : le step buffer est déjà flippé
             // vers la nouvelle scène par l'audio thread. La capture correcte a été faite
             // dans navigateScene() avant prepareStepBuffer().
-            const int oldIdx = sceneManager_.currentIdx();
-            sceneManager_.setCurrentIdx(target);
+            const int oldIdx = facade_.currentSceneIdx();
+            facade_.setCurrentScene(target);
             applyScene(target, oldIdx);
             updateSceneLabel();
         }
@@ -2198,9 +2179,9 @@ void MainComponent::timerCallback()
     }
 
     // Morphing PingPongDelay entre scènes (4 secondes)
-    sceneManager_.updateMorph();
-    if (sceneManager_.isMorphing())
-        applyDubDelayMorph(sceneManager_.getMorphProgress());
+    facade_.updateMorphing();
+    if (facade_.isMorphing())
+        applyDubDelayMorph(facade_.getMorphProgress());
 
     // Mise à jour état nuage IA
     if (facade_.isMagicBusy())
@@ -2214,7 +2195,7 @@ void MainComponent::timerCallback()
 
     // Sync play button text with sequencer state
     sidebarPlayBtn_.setButtonText(
-        stepSequencer_.isPlaying()
+        facade_.isPlaying()
             ? juce::CharPointer_UTF8("\xe2\x96\xa0")   // ■
             : juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
 
@@ -2351,7 +2332,7 @@ void MainComponent::updateSidebarBpm(float bpm)
 
 void MainComponent::reApplyCurrentSceneTrims()
 {
-    const auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+    const auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
     for (int i = 0; i < 9; ++i)
     {
         const std::size_t sidx = static_cast<std::size_t>(i);
@@ -2370,23 +2351,22 @@ void MainComponent::reApplyCurrentSceneTrims()
 
 void MainComponent::updateSceneLabel()
 {
-    sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
+    sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
                            " / " + juce::String(kMaxScenes),
                            juce::dontSendNotification);
 }
 
 void MainComponent::captureCurrentScene()
 {
-    auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
-    sc.bpm  = stepSequencer_.getBpm();
+    auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
+    sc.bpm  = facade_.getBpm();
     sc.used = true;
-    auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 9; ++i)
     {
         const std::size_t idx  = static_cast<std::size_t>(i);
-        const int numSteps     = stepSequencer_.getTrackStepCount(i);
+        const int numSteps     = facade_.getTrackStepCount(i);
         sc.filePaths    [idx]  = stepSeqPanel_->getSlotFilePath(i);
-        sc.mutes        [idx]  = sampler.isSlotMuted(i);
+        sc.mutes        [idx]  = facade_.isSlotMuted(i);
         {
             const auto ms = facade_.getSlotMixState(i);
             sc.gains    [idx]  = ms.applied ? ms.gain : 1.0f;
@@ -2396,9 +2376,9 @@ void MainComponent::captureCurrentScene()
         // temps réel sont pilotés par l'AutoMix V2 depuis les rôles).
         sc.delaySends[idx] =
             engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(i));
-        sc.trackBarCounts[idx] = stepSequencer_.getTrackBarCount(i);
+        sc.trackBarCounts[idx] = facade_.getTrackBarCount(i);
         for (int s = 0; s < numSteps; ++s)
-            sc.steps[idx][static_cast<std::size_t>(s)] = stepSequencer_.getStep(i, s);
+            sc.steps[idx][static_cast<std::size_t>(s)] = facade_.getStep(i, s);
     }
     sc.serumGain = serumUserGain_.load(std::memory_order_relaxed);
 
@@ -2420,9 +2400,9 @@ void MainComponent::captureCurrentScene()
         sc.dubDelayDrive    = dd.getDrive();
     }
 
-    // Rafraîchir le score d'énergie de la scène capturée.
-    const int ci = sceneManager_.currentIdx();
-    sceneManager_.setSceneEnergy(ci, ::dsp::SceneManager::computeSceneEnergy(sceneManager_.scene(ci)));
+    // Rafraîchir le score d'énergie V2 de la scène capturée.
+    const int ci = facade_.currentSceneIdx();
+    facade_.setSceneEnergy(ci, engine::SceneEnergy::compute(facade_.scene(ci)));
 }
 
 // ═══ Moteur V2 : sync des scènes (V1 SceneManager → engine::SceneStore) ═══════
@@ -2510,7 +2490,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // Lit slot.gain (target), pas gainSmoothed_ (audio-only) : précision suffisante.
     std::array<float, 9> gainsBeforeScene {};
     for (int i = 0; i < 9; ++i)
-        gainsBeforeScene[i] = dspPipeline_.getSampler().getSlotGain(i);
+        gainsBeforeScene[i] = facade_.getSlotGain(i);
     const float serumGainBefore = serumUserGain_.load(std::memory_order_relaxed);
 
     const auto& sc = sceneManager_.scene(idx);
@@ -2527,10 +2507,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
         for (int i = 0; i < 9; ++i)
             for (int s = 0; s < 16; ++s)
                 stepSeqPanel_->setStepState(i, s, false);
-        if (!stepSequencer_.hasPendingTransition())
-            stepSequencer_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
+        if (!facade_.hasPendingTransition())
+            facade_.prepareStepBuffer(::dsp::StepSequencer::StepBuf{});
         for (int i = 0; i < 9; ++i)
-            dspPipeline_.getSampler().setSlotGain(i, 1.0f);
+            facade_.setSlotGain(i, 1.0f);
         return;
     }
 
@@ -2575,7 +2555,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         else if (newPath.empty() && !currentPath.empty())
         {
             // Slot doit être vidé
-            dspPipeline_.getSampler().clearSlot(i);
+            facade_.clearSlot(i);
             stepSeqPanel_->setSlotFilePath(i, "");
         }
         else if (!newPath.empty())
@@ -2593,7 +2573,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
             : (gainsBeforeScene[static_cast<std::size_t>(i)] > 0.001f
                 ? gainsBeforeScene[static_cast<std::size_t>(i)]
                 : 0.5f);
-        dspPipeline_.getSampler().setSlotGain     (i, targetGain);
+        facade_.setSlotGain     (i, targetGain);
         stepSeqPanel_->setSlotMuted (i, sc.mutes[i]);
         stepSeqPanel_->setSlotVolume(i, sc.userGains[sidx]);
         for (int s = 0; s < numSteps; ++s)
@@ -2665,20 +2645,20 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // When a bar-quantized transition is armed (navigateScene pre-armed the buffer),
     // skip: the audio thread will flip at step 0. Otherwise (sequencer stopped or
     // direct applyScene call), prepare immediately for an instant flip.
-    if (!stepSequencer_.hasPendingTransition())
-        stepSequencer_.prepareStepBuffer(nextStepBuf);
+    if (!facade_.hasPendingTransition())
+        facade_.prepareStepBuffer(nextStepBuf);
 
     // Appliquer le gain Serum de la nouvelle scène — petite rampe de 250 ms pour
     // éviter un saut audible (le crossfade de gains des slots sampler est géré
     // par le moteur V2 via TransitionEngine/GainRamps ; le bus Serum lui n'est
     // pas rampe côté moteur, on garde ici une mini-rampe UI sur serumUserGain_).
     const float serumGainTarget = sc.serumGain > 0.f ? sc.serumGain : serumGainBefore;
-    if (stepSequencer_.isPlaying())
+    if (facade_.isPlaying())
     {
         serumUserGain_.store(serumGainBefore, std::memory_order_relaxed);
         serumGainRamp_ = { true, serumGainBefore, serumGainTarget, 0, 250 };
         const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
-        sceneManager_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
+        facade_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
     }
     else
     {
@@ -2729,22 +2709,22 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
 void MainComponent::navigateScene(int delta)
 {
-    const int target = juce::jlimit(0, kMaxScenes - 1, sceneManager_.currentIdx() + delta);
-    if (target == sceneManager_.currentIdx()) return;
+    const int target = juce::jlimit(0, kMaxScenes - 1, facade_.currentSceneIdx() + delta);
+    if (target == facade_.currentSceneIdx()) return;
 
-    if (!stepSequencer_.isPlaying())
+    if (!facade_.isPlaying())
     {
         // Séquenceur arrêté : changement immédiat, sans risque de coupure
-        const int oldIdx = sceneManager_.currentIdx();
+        const int oldIdx = facade_.currentSceneIdx();
         captureCurrentScene();
-        sceneManager_.setCurrentIdx(target);
+        facade_.setCurrentScene(target);
         applyScene(target, oldIdx);
         updateSceneLabel();
         return;
     }
 
     // P0.3 — bloquer si une transition quantisée est déjà en cours
-    if (stepSequencer_.hasPendingTransition())
+    if (facade_.hasPendingTransition())
     {
         return;
     }
@@ -2763,8 +2743,8 @@ void MainComponent::navigateScene(int delta)
     // pour que la détection de fin de cycle soit stable dans le thread audio.
     int sceneLen = 1;
     for (int i = 0; i < 9; ++i)
-        sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
-    stepSequencer_.setPendingTransitionLen(sceneLen);
+        sceneLen = std::max(sceneLen, facade_.getTrackStepCount(i));
+    facade_.setPendingTransitionLen(sceneLen);
 
     // Pre-arm the step buffer immediately so the audio thread can flip at exactly
     // step 0, independent of timer latency (fixes missed triggers on first step).
@@ -2779,11 +2759,11 @@ void MainComponent::navigateScene(int delta)
             for (int s = 0; s < ::dsp::StepSequencer::kMaxSteps; ++s)
                 nextBuf.steps[i][s] = nextSc.steps[sidx][static_cast<std::size_t>(s)];
         }
-        stepSequencer_.prepareStepBuffer(nextBuf);
+        facade_.prepareStepBuffer(nextBuf);
     }
 
-    sceneManager_.setPendingScene(target);
-    sceneNumLabel_.setText("Scene " + juce::String(sceneManager_.currentIdx() + 1) +
+    facade_.setPendingScene(target);
+    sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
 }
@@ -2793,16 +2773,15 @@ void MainComponent::resetCurrentScene()
     // Clear step patterns only — keep samples loaded
     for (int i = 0; i < 9; ++i)
     {
-        const int numSteps = stepSequencer_.getTrackStepCount(i);
+        const int numSteps = facade_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
         {
-            stepSequencer_.setStep(i, s, false);
             stepSeqPanel_->setStepState(i, s, false);
             facade_.setStep(i, s, false);
         }
     }
     facade_.flipPatternBuffer();
-    sceneManager_.scene(sceneManager_.currentIdx()).used = false;
+    sceneManager_.scene(facade_.currentSceneIdx()).used = false;
 }
 
 void MainComponent::resetCurrentSceneFull()
@@ -2810,25 +2789,22 @@ void MainComponent::resetCurrentSceneFull()
     // Clear patterns (all steps)
     for (int i = 0; i < 9; ++i)
     {
-        const int numSteps = stepSequencer_.getTrackStepCount(i);
+        const int numSteps = facade_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
         {
-            stepSequencer_.setStep(i, s, false);
             stepSeqPanel_->setStepState(i, s, false);
             facade_.setStep(i, s, false);
         }
     }
     facade_.flipPatternBuffer();
     // Unload all samples
-    auto& sampler = dspPipeline_.getSampler();
     for (int i = 0; i < 9; ++i)
     {
-        sampler.clearSlot(i);
         facade_.clearSlot(i);
         stepSeqPanel_->setSlotFilePath(i, "");
         stepSeqPanel_->setSlotLoaded(i, false);
     }
-    sceneManager_.scene(sceneManager_.currentIdx()).used = false;
+    sceneManager_.scene(facade_.currentSceneIdx()).used = false;
 }
 
 void MainComponent::copyCurrentSceneToNext()
@@ -2838,7 +2814,7 @@ void MainComponent::copyCurrentSceneToNext()
     int itemId = 1;
     for (int i = 0; i < kMaxScenes; ++i)
     {
-        if (i == sceneManager_.currentIdx() || !sceneManager_.scene(i).used)
+        if (i == facade_.currentSceneIdx() || !sceneManager_.scene(i).used)
             { ++itemId; continue; }
         menu.addItem(itemId, "Scene " + juce::String(i + 1));
         ++itemId;
@@ -2853,19 +2829,19 @@ void MainComponent::copyCurrentSceneToNext()
         {
             if (result <= 0) return;
             const int srcIdx = result - 1;  // itemId == sceneIndex + 1
-            sceneManager_.scene(sceneManager_.currentIdx()) =
+            sceneManager_.scene(facade_.currentSceneIdx()) =
                 sceneManager_.scene(srcIdx);
-            sceneManager_.scene(sceneManager_.currentIdx()).used = true;
-            applyScene(sceneManager_.currentIdx());
+            sceneManager_.scene(facade_.currentSceneIdx()).used = true;
+        applyScene(facade_.currentSceneIdx());
             juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
-                                     " copied into scene " + juce::String(sceneManager_.currentIdx() + 1));
+                                     " copied into scene " + juce::String(facade_.currentSceneIdx() + 1));
         });
 }
 
 void MainComponent::applyDubDelayMorph(float t)
 {
-    const auto& from = sceneManager_.getScene(sceneManager_.getMorphFromScene());
-    const auto& to   = sceneManager_.getScene(sceneManager_.getMorphToScene());
+    const auto& from = sceneManager_.getScene(facade_.getMorphFromSceneIdx());
+    const auto& to   = sceneManager_.getScene(facade_.getMorphToSceneIdx());
     auto& delay = facade_.delay();
     const auto lerp  = [](float a, float b, float x) { return a + (b - a) * x; };
     delay.setFeedback(lerp(from.dubDelayFeedback, to.dubDelayFeedback, t));
@@ -2877,7 +2853,7 @@ void MainComponent::applyDubDelayMorph(float t)
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 {
     // 1. Persist in current scene
-    auto& sc = sceneManager_.scene(sceneManager_.currentIdx());
+    auto& sc = sceneManager_.scene(facade_.currentSceneIdx());
     sc.pitchOffsets[static_cast<std::size_t>(slot)] = semitones;
 
     // 2. Update panel checkmark
