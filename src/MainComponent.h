@@ -76,10 +76,10 @@ private:
     std::vector<float>       v2InputScratchL_, v2InputScratchR_;
     std::atomic<float>       v2InputGain_ { 0.8f };
 
-    // Sync des scènes V1 → SceneStore V2 (gains, semitones, rôles, actifs) puis
-    // application au graphe (setCurrentScene) pour les scènes/transitions.
+    // Sync sceneStore_ → EngineFacade sceneStore (gains, semitones, rôles, actifs)
+    // puis application au graphe (setCurrentScene) pour les scènes/transitions.
     engine::SlotRole v2RoleForSlot(int slot) const noexcept;
-    // Rôle effectif d'un slot : analysé V2 si fiable, sinon détection V1.
+    // Rôle effectif d'un slot : analysé V2 si fiable, sinon fallback par défaut.
     engine::SlotRole activeRoleForSlot(int slot) const noexcept;
     void             syncV2Scene(int idx) noexcept;
     void             syncV2Scenes() noexcept;
@@ -111,13 +111,11 @@ private:
     juce::TextButton                    serumShowUiBtn_;
     juce::Label                         serumStatusLabel_;
     juce::TextEditor                    ewiDeviceEditor_;
-    std::unique_ptr<juce::FileChooser>  serumFileChooser_;
     std::unique_ptr<SampleEditorWindow> serumEditorWindow_;
 
     //==========================================================================
     // GUI — contrôles audio
     //==========================================================================
-    juce::TextButton audioSettingsButton_;
     juce::Label      infoLabel_;
     juce::Slider     mainMixSlider_;
     juce::Label      mainMixLabel_;
@@ -138,8 +136,6 @@ private:
 
     // ── Sampler / Step Sequencer ──────────────────────────────────────────────
     juce::Label samplerLabel_;
-    juce::TextButton loadProjectButton_;
-    juce::TextButton saveProjectButton_;
     juce::TextButton filesMenuButton_;
     std::unique_ptr<ui::StepSequencerPanel> stepSeqPanel_;
 
@@ -149,9 +145,6 @@ private:
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
-    bool                    reloadPending_       { false };
-    bool                    trimAfterMixPending_ { false };
-    std::array<bool, 9>     manualTypeOverride_ {};
 
     // ── Dub Delay global bus ───────────────────────────────────────────────────
     juce::ToggleButton dubDelayEnableBtn_;
@@ -186,7 +179,7 @@ private:
     int                     presetNameTick_ { 0 };
 
     //==========================================================================
-    // Mini-rampe Serum post-purge (remplace le crossfade V1 qui rampait les gains sampler).
+    // Mini-rampe Serum post-purge (rampait les gains sampler avant).
     struct SerumGainRamp {
         bool  active     = false;
         float from       = 1.f;
@@ -245,7 +238,6 @@ private:
     std::vector<midi::MidiLearnBinding>                midiLearnBindings_;
     int                                                 learningTarget_   { -1 };
     bool                                                midiLearnVisible_ { false };
-    bool                                                applyingMidi_     { false };
     std::array<float, midi::kNumTargets>                targetSmoothed_   {};
 
     // UI panel + controls
@@ -267,9 +259,7 @@ private:
     // Helpers
     //==========================================================================
     void ensureGrainNoise(int w, int h);
-    void loadSampleIntoSlot(int slot, const std::string& path,
-                            int trimStart = 0, int trimEnd = -1,
-                            double* outFileSr = nullptr);
+    void loadSampleIntoSlot(int slot, const std::string& path);
     void openSampleEditor(int slot);
     static std::vector<float> computeEnvelope(const std::vector<float>& pcm, int bins = 200);
     void applyProjectData(const project::ProjectData& data);

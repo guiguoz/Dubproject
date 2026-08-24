@@ -7,8 +7,8 @@ namespace engine {
 
 // Score d'énergie musicale [0,1] d'une scène V2, calculé sans analyse audio.
 //
-// Utilise les slots actifs, leur gain, ET la densité de pas (steps + trackBarCounts)
-// héritée du V1. Les mutes sont exclues du calcul.
+// Utilise les slots actifs, leur gain, ET la densité de pas (steps + trackBarCounts).
+// Les mutes sont exclues du calcul.
 class SceneEnergy {
 public:
     // Score [0,1] à partir des slots ACTIFS de la scène.

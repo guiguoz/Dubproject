@@ -117,8 +117,8 @@ void SlotPlayer::resetSpatialSlot(int slot) noexcept {
 // Loi égal-power : angle = (pan+1)·π/4 →
 // gL = cos(angle), gR = sin(angle). Le canal faible reçoit le signal Haas.
 // Si pan == 0 ET width == 0 → identité (gL = gR = 1) : préserve la transparence
-// bit-exact T-SP1 (le V1 appliquait toujours le 0.7071 de centre, ce qui
-// casserait l'invariant de transparence V2).
+// bit-exact T-SP1 (appliquer le 0.7071 de centre
+// casserait l'invariant de transparence).
 
 void SlotPlayer::spatialGains(int slot, float& gL, float& gR,
                               bool& haasOnLeft) noexcept {
@@ -449,7 +449,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             out[static_cast<size_t>(f) * 2u + 1u] += applyHaasDelay(slot, sR) * gR;
         }
 
-        // Pic de sortie du slot (VU) — avant spatialisation (sémantique V1)
+        // Pic de sortie du slot (VU) — avant spatialisation
         const float p = std::max(std::abs(sL), std::abs(sR));
         if (p > slotPeak_[slot]) slotPeak_[slot] = p;
 

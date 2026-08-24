@@ -12,8 +12,8 @@
 //
 // Zéro dépendance JUCE / dsp/ : compilable par EngineTests (C++17).
 //
-// ⚠️ Le chemin IA ONNX reste côté V1 pour l'instant (étape 4 / M9) : ce
-// module ne porte QUE la branche heuristique utilisée en fallback.
+// Le chemin IA ONNX est dans MixAi.h : ce module ne porte QUE la branche
+// heuristique utilisée en fallback.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <array>
@@ -29,9 +29,9 @@ inline constexpr int kMixSlots = 9;  // S1–S8 + Drum loop (slot 8)
 struct MixInputs
 {
     // PCM mono par slot (vide = non chargé). Les slots non actifs (mutés ou
-    // non chargés) sont ignorés par le mix — comportement V1.
+    // non chargés) sont ignorés par le mix.
     std::array<std::vector<float>, kMixSlots> pcm {};
-    // active[i] = chargé && non muté (le V1 exclut les slots mutés de l'analyse)
+    // active[i] = chargé && non muté
     std::array<bool, kMixSlots> active {};
 
     // Types détectés (pré-classification) + overrides manuels utilisateur
@@ -103,9 +103,9 @@ inline void balanceLeftRight(std::array<SpatialDecision, kMixSlots>& spatials,
     }
 }
 
-// ── Orchestrateur heuristique (équivalent V1 applyNeutronMix heuristique) ──
+// ── Orchestrateur heuristique ────────────────────────────────────────────────
 //
-// Ordre exact de la branche V1 (L1087-1183 puis Ph4 L1185-1189) :
+// Ordre du traitement :
 //   1. densityScale + bassPresent depuis la scène
 //   2. applySubOwnership (KICK/BASS 30-60 Hz)
 //   3. par slot : applyRoleEQ → kick transient → bass harmonics
@@ -123,7 +123,7 @@ inline MixOutputs processHeuristic(const MixInputs& in)
     for (int i = 0; i < kMixSlots; ++i)
         types[i] = effectiveType(in.detected[i], in.hasOverride[i], in.overrideType[i]);
 
-    // Centroïdes spectraux (recalculés ici, comme le V1)
+    // Centroïdes spectraux (recalculés ici)
     std::array<float, kMixSlots> centroids {};
     for (int i = 0; i < kMixSlots; ++i)
         if (in.active[i])
@@ -135,7 +135,7 @@ inline MixOutputs processHeuristic(const MixInputs& in)
     const float dScale = densityScale(in.scene);
     const bool  bassOn = hasActiveBass(in.scene);
 
-    // Sub ownership 30-60 Hz (types détectés bruts, comme le V1)
+    // Sub ownership 30-60 Hz (types détectés bruts)
     applySubOwnership(pcms.data(), types.data(), kMixSlots, sr);
 
     for (int i = 0; i < kMixSlots; ++i)

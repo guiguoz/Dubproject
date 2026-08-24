@@ -17,9 +17,6 @@ MainComponent::MainComponent()
     logoImage_ = juce::ImageCache::getFromMemory(
         BinaryData::logo_png, BinaryData::logo_pngSize);
 
-    // ── Audio settings button (masqué — accessible via menu FILES) ───────────
-    audioSettingsButton_.setButtonText("AUDIO SETTINGS");
-    audioSettingsButton_.onClick = [this] { openAudioSettings(); };
 
     // ── Status / info labels ──────────────────────────────────────────────────
     infoLabel_.setJustificationType(juce::Justification::centred);
@@ -236,13 +233,6 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(midiLearnBtn_);
 
-    // ── Project buttons (masqués — accessibles via menu FILES) ───────────────
-    saveProjectButton_.setButtonText("SAVE PROJECT");
-    saveProjectButton_.onClick = [this] { saveProject(); };
-
-    loadProjectButton_.setButtonText("LOAD PROJECT");
-    loadProjectButton_.onClick = [this] { doLoadProject(); };
-
     // ── Menu FILES (barre de titre) ───────────────────────────────────────────
     filesMenuButton_.setButtonText("FILES");
     filesMenuButton_.onClick = [this] { showFilesMenu(); };
@@ -369,7 +359,7 @@ MainComponent::MainComponent()
             spatialViz_.setSaxActive(true);
             stepSeqPanel_->setMagicActive(true);
 
-            // Sync visuel du bouton ON (cohérent avec le comportement V1)
+            // Sync visuel du bouton ON
             juce::MessageManager::callAsync([this]
             {
                 dubDelayEnableBtn_.setToggleState(true, juce::dontSendNotification);
@@ -676,9 +666,7 @@ MainComponent::~MainComponent()
 
 //==============================================================================
 
-void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
-                                        int /*trimStart*/, int /*trimEnd*/,
-                                        double* /*outFileSr*/)
+void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
 {
     // Cette fonction ne fait plus que signaler le slot comme chargé et mettre à
     // jour la waveform depuis le snapshot V2.
@@ -1186,7 +1174,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         applyScene(facade_.currentSceneIdx());
         updateSceneLabel();
 
-        // Seed toutes les scènes V1 → SceneStore moteur (pour transitions/scènes).
+        // Seed toutes les scènes → EngineFacade SceneStore (pour transitions/scènes).
         syncV2Scenes();
 
         // Pré-calcul de l'énergie V2 pour toutes les scènes (après la seed du
@@ -1890,10 +1878,6 @@ void MainComponent::resized()
 
         // VU meters drawn in paint() at kHeaderH+140
 
-        // Boutons projet déplacés dans le menu FILES — masqués ici
-        saveProjectButton_  .setBounds(0, 0, 0, 0);
-        loadProjectButton_  .setBounds(0, 0, 0, 0);
-        audioSettingsButton_.setBounds(0, 0, 0, 0);
         sceneTrackResetBtn_ .setBounds(0, 0, 0, 0);
 
         // Info label
@@ -2165,7 +2149,6 @@ void MainComponent::timerCallback()
 
 void MainComponent::applyMidiMappings()
 {
-    applyingMidi_ = true;
     for (int i = 0; i < midi::kNumTargets; ++i)
     {
         const auto& b = midiLearnBindings_[static_cast<std::size_t>(i)];
@@ -2173,7 +2156,6 @@ void MainComponent::applyMidiMappings()
         const float raw = midiManager_.getCcValue(b.cc);
         applyMappingValue(b.target, b.min + raw * (b.max - b.min));
     }
-    applyingMidi_ = false;
 }
 
 void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
@@ -2412,7 +2394,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     const auto& sc = sceneStore_.getScene(idx);
 
-    // Config V2 : sync SceneData V1 → SceneStore moteur puis application au graphe
+    // Config V2 : sync sceneStore_ → EngineFacade SceneStore puis application au graphe
     // (gains, modes, semitones, rôles). setCurrentScene sert aussi de point
     // de départ pour requestTransition() lors des navigations en lecture.
     syncV2Scene(idx);
@@ -2462,7 +2444,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         {
             // Nouveau fichier pour ce slot : chargement synchrone direct.
             // Le V2 est servi par facade_.importSampleAsync (async).
-            loadSampleIntoSlot(i, newPath, sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd);
+            loadSampleIntoSlot(i, newPath);
             loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_->setSlotFilePath(i, newPath);
         }
@@ -2509,7 +2491,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
                     || te != appliedTrimEnd_[static_cast<std::size_t>(i)])
                 {
                     if (!newPath.empty())
-                        loadSampleIntoSlot(i, newPath, ts, te);
+                        loadSampleIntoSlot(i, newPath);
                     appliedTrimStart_[static_cast<std::size_t>(i)] = ts;
                     appliedTrimEnd_  [static_cast<std::size_t>(i)] = te;
                 }
@@ -2526,7 +2508,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         // importSampleAsync enregistre slotPath_* immédiatement, donc les appels
         // suivants avec la même (fichier, trim) sont des no-ops. Un fichier
         // nouveau pour cette scène (ou un trim différent de celui chargé) relance
-        // un import V2 — le SlotPlayer joue le bon PCM, exactement comme le V1.
+        // un import V2 — le SlotPlayer joue le bon PCM.
         if (!newPath.empty())
         {
             if (facade_.slotFilePath(i) != newPath

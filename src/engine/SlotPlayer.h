@@ -206,7 +206,7 @@ private:
     // Réinitialise la ligne de retard Haas d'un slot (loadSlot/clearSlot).
     void resetSpatialSlot(int slot) noexcept;
 
-    // Gains pan (loi égal-power V1). Identité si pan == 0 && width == 0
+    // Gains pan (loi égal-power). Identité si pan == 0 && width == 0
     // (préserve la transparence T-SP1). haasOnLeft : le canal faible est la gauche.
     void spatialGains(int slot, float& gL, float& gR, bool& haasOnLeft) noexcept;
 

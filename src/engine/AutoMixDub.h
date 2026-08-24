@@ -62,7 +62,7 @@ public:
     float currentGainLinear(int slot)  const noexcept { return currentGainLin_[slot]; }
     float currentDelaySend(int slot)   const noexcept { return currentDelaySend_[slot]; }
 
-    // Règles statiques par rôle (pures — utilisées aussi pour la sérialisation V1).
+    // Règles statiques par rôle (pures).
     static float roleTargetDb(SlotRole role) noexcept;
     static float roleStaticDelaySend(SlotRole role) noexcept;
 

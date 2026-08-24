@@ -68,7 +68,7 @@ public:
     // ── Slots (9 slots) ────────────────────────────────────────────────────────
     // Import asynchrone : le callback est appelé sur le message thread.
     // Si trimStart/trimEnd ≥ 0 (coordonnées fichier), le PCM chargé est découpé
-    // avant le stockage (même sémantique que le reload trim de la V1).
+    // avant le stockage.
     // Fichier/trim courants exposés via slotFilePath()/slotTrim() pour que
     // l'UI ne réimporte que si la scène référence un PCM absent du SlotPlayer.
     void importSampleAsync(int slot, const std::string& filePath,
@@ -182,9 +182,8 @@ public:
     void requestTransition(int toScene) noexcept;
     SceneData& scene(int idx) noexcept  { return sceneStore_.getScene(idx); }
 
-    // ── Transitions de scène (Tier 1 — Phase 4a) ────────────────────────────────
+    // ── Transitions de scène ──────────────────────────────────────────────────
     // Accès aux transitions en attente et contrôle du morphing delay.
-    // Remplace V1 sceneManager_/stepSequencer_ pour la logique de transition.
     int  pendingSceneIdx() const noexcept;           // Index scène en attente
     void setPendingScene(int idx) noexcept;          // Marquer scène pour transition
     int  consumePendingScene() noexcept;             // Consommer & appliquer transition

@@ -37,7 +37,7 @@ struct MixAiDecision
 };
 
 // ── Compensation de masquage Serum (chemin IA) ──────────────────────────────
-// Port V1 (L930-968) : atténue le volume des slots qui partagent l'espace
+// Compense le volume des slots qui partagent l'espace
 // spectral avec Serum (proximité log2, duck graduel max 25 %) et creuse
 // l'EQ mid/high des slots SYNTH/PAD quand Serum est lui-même SYNTH/PAD.
 inline MixAiDecision serumCompensateDecision(const MixAiDecision& d,
@@ -73,7 +73,7 @@ inline MixAiDecision serumCompensateDecision(const MixAiDecision& d,
     return comp;
 }
 
-// ── Orchestrateur chemin IA (port V1 L904-1021) ─────────────────────────────
+// ── Orchestrateur chemin IA ─────────────────────────────────────────────────
 // 1. compensation Serum sur chaque décision
 // 2. par slot actif : EQ 3 bandes (DC-block 20 → shelf 100 → peak 2500 →
 //    shelf 8000 → LP 18 kHz), gains clampés ±6 dB (+1 dB air bias post-IA),
