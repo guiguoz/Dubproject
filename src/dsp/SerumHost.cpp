@@ -274,7 +274,7 @@ juce::String SerumHost::getCurrentPresetName() const
         const int idx = json.indexOf(kField);
         if (idx >= 0)
         {
-            const int start = idx + (int)(sizeof(kField) - 1);
+            const int start = idx + static_cast<int>(sizeof(kField) - 1);
             const int end   = json.indexOf(start, "\"");
             if (end > start && (end - start) <= 64)
             {

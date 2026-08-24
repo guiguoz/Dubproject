@@ -79,7 +79,8 @@ static void drawSegString(juce::Graphics& g,
 
     // Measure total width
     float tw = 0.f;
-    for (int i = 0; i < s.length(); ++i)
+    const auto len = static_cast<int>(s.length());
+    for (int i = 0; i < len; ++i)
     {
         const juce::juce_wchar c = s[i];
         tw += (c == '.') ? dotSz + sp : dw + sp;
@@ -89,12 +90,12 @@ static void drawSegString(juce::Graphics& g,
     float x = cx - tw * 0.5f;
     const float y = cy - digitH * 0.5f;
 
-    for (int i = 0; i < s.length(); ++i)
+    for (int i = 0; i < len; ++i)
     {
         const juce::juce_wchar c = s[i];
         if (c >= '0' && c <= '9')
         {
-            drawSegDigit(g, (int)(c - '0'), x, y, dw, digitH, lit, dim);
+            drawSegDigit(g, static_cast<int>(c - '0'), x, y, dw, digitH, lit, dim);
             x += dw + sp;
         }
         else if (c == '-')
