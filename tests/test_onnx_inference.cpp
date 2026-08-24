@@ -2,7 +2,7 @@
 
 #ifdef SAXFX_HAS_ONNX
 
-#include "dsp/OnnxInference.h"
+#include "engine/Analysis/OnnxInference.h"
 #include <cmath>
 #include <vector>
 

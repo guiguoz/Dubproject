@@ -10,10 +10,9 @@ Application **desktop JUCE (C++17)** de performance live **dub techno**. Marque 
 
 - **Instrument principal : AKAI EWI** (vent MIDI) branché en entrée audio/MIDI. Il n'y a **plus de saxophone** ni de clavier physique — `KeyboardSynth` et `PianoKeyboardPanel` ont été supprimés définitivement.
 - **Le sampler 9 slots est l'instrument central** : boucles, kicks, basses, pads — tout le groove vient de là. L'EffectChain traite le signal EWI en temps réel (effets modulaires).
-- **L'utilisateur ne touche pas aux paramètres delay en live.** Les gains, sends, BPM-sync et activation du bus delay sont gérés automatiquement par l'IA ingé son (`SmartSamplerEngine::onTypesDetected`, callback déclenché à chaque chargement de scene). Ne pas ajouter de contrôles manuels pour ces paramètres.
-- **`SerumHost` est un hôte VST3 générique** : `loadSerumPlugin(path)` charge n'importe quel VST3 (Serum V2, SWAM Trumpet, etc.). SWAM s'intègre dans le même bus mix et la même IA que Serum — aucun changement DSP requis.
-- **`PingPongDelay` et `DubDelay` reçoivent un bus send séparé** (`tempSendL_/R_` dans `DspPipeline`), pas le mix sampler complet. Chaque slot a un `delaySend` atomique (`Sampler::SampleSlot::delaySend`) configuré par l'IA selon le type de contenu (KICK/BASS = 0, PAD = 0.8, etc.).
-- **`processAdd` = additif, wet-only.** `dubDelay_.processAdd(sendL, sendR, outL, outR, n)` : le signal dry est déjà dans `outL/outR`, `processAdd` y ajoute uniquement le signal traité. Ne jamais remplacer (`=`) le buffer de sortie dans cette fonction.
+- **L'utilisateur ne touche pas aux paramètres delay en live.** Les gains, sends, BPM-sync et activation du bus delay sont gérés automatiquement par l'IA ingé son via `MixWorker` / `MixEngine` (callback déclenché à chaque chargement de scène). Ne pas ajouter de contrôles manuels pour ces paramètres.
+- **`SerumHost` est un hôte VST3 générique** : `loadSerumPlugin(path)` charge n'importe quel VST3 (Serum V2, SWAM Trumpet, etc.). SWAM s'intègre dans le même bus mix et la même IA que Serum — aucun changement DSP requis. Reste dans `src/dsp/SerumHost.h/.cpp` car dépend de JUCE.
+- **`PingPongDelay` et `DubDelay` reçoivent un bus send séparé** (`tempSendL_/R_` dans le pipeline audio), pas le mix sampler complet. Chaque slot a un `delaySend` dans `engine::SlotConfig` configuré par l'IA selon le type de contenu (KICK/BASS = 0, PAD = 0.8, etc.).
 - **Slot 8 (DRM)** : suit une voie heuristique (`ContentType::LOOP`) — le modèle ONNX de mix ne couvre que les slots 0-7.
 
 ## Prérequis build (Windows)
@@ -29,8 +28,9 @@ Application **desktop JUCE (C++17)** de performance live **dub techno**. Marque 
 |--------|------|
 | `SaxFXLive` | Application graphique |
 | `SaxFXTests` | Tests unitaires (Catch2), sous-dossier `tests/` |
+| `EngineTests` | Tests moteur V2 (sans JUCE/ONNX), sous-dossier `tests/engine/` |
 
-Artefacts typiques (Release) : `build/SaxFXLive_artefacts/Release/SaxFX Live.exe` (le nom exact peut varier selon `PRODUCT_NAME`).
+Artefacts typiques (Release) : `bin/SaxFX Live.exe`, `bin/SaxFXTests.exe`, `bin/EngineTests.exe`.
 
 ## Arborescence utile (hors `third_party/`)
 
@@ -38,48 +38,45 @@ Artefacts typiques (Release) : `build/SaxFXLive_artefacts/Release/SaxFX Live.exe
 |--------|------|
 | `src/Main.cpp` | Point d'entrée JUCE |
 | `src/MainComponent.h/.cpp` | Fenêtre principale, callback audio `getNextAudioBlock`, liaison UI <-> DSP |
-| `src/dsp/` | Pipeline, effets, sampler, séquenceur, YIN, ONNX, limiteur |
+| `src/dsp/SerumHost.h/.cpp` | Hôte VST3 (Serum, SWAM, etc.) — seul fichier restant dans `src/dsp/` |
+| `src/engine/` | Moteur V2 complet : `EngineFacade`, `SceneStore`, `TransitionEngine`, `SlotPlayer`, `AudioGraph`, `Sequencer`, mix (`engine/mix/`), analyse (`engine/Analysis/`), effets (`engine/fx/`) |
 | `src/ui/` | Thème neon, composants (rack d'effets, séquenceur, etc.) |
 | `src/project/` | `ProjectData`, `ProjectLoader` — sérialisation `.saxfx` |
-| `src/midi/` | MIDI |
-| `tests/` | Tests Catch2 |
+| `src/midi/` | MIDI (`MidiManager`, `MidiNoteMapper`) |
+| `tests/` | Tests Catch2 (SaxFXTests) |
+| `tests/engine/` | Tests moteur V2 (EngineTests, sans JUCE) |
 | `models/` | `.onnx` (classifieur, mix) |
-| `web/` | Compagnon navigateur (Web Audio), optionnel par rapport au binaire principal |
+| `web/` | Compagnon navigateur (Web Audio), optionnel |
 | `cmake/FindOnnxRuntime.cmake` | Intégration ONNX |
 
 ## Fil audio (à ne pas casser)
 
-Référence d'implémentation : `DspPipeline::process` (mono) et `DspPipeline::processStereo` (stéréo).
+Référence : `EngineFacade` → `AudioGraph` → `SlotPlayer` (V2).
 
-Ordre logique stéréo (résumé) :
+Ordre logique stéréo :
 
-1. Analyse **YIN** et **BPM** sur le canal **gauche** (sax) — ne modifient pas le buffer seuls.
-2. **RMS** lissé sur la gauche (VU, expression, ducking éventuel).
-3. `std::copy(left -> right)` puis **`EffectChain::processStereo(left, right)`** — vrai stéréo : `ReverbEffect` utilise `juce::dsp::Reverb::processStereo()` (Freeverb filtres peigne séparés L/R), `DelayEffect` fait le ping-pong L->R->L->R (second `RingBuffer` heap-allocated). Les effets sans override utilisent le défaut dual-mono (`process(L); process(R)`), ce qui préserve toute divergence stéréo amont.
-4. **ExpressionMapper** — peut pousser un paramètre d'effet selon le RMS.
-5. **Sampler** en stéréo (pan / Haas par slot), mixé sur L+R ; **ducking** optionnel (souvent désactivé par défaut côté engine). Bus send par slot (`delaySend` atomique) alimente les delays séparément du mix principal.
-6. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono (PA compat.). Membre `monoSubFilter_` dans `DspPipeline`.
+1. **Transport** : `engine::Transport` dérive la position (samples, beat, BPM) depuis l'horloge JUCE.
+2. **Sequencer** : `engine::Sequencer` lit le pattern (double-buffer `StepBuf`) et déclenche/stope les slots.
+3. **SlotPlayer** × 9 : lecture stéréo avec pan, Haas, trim, gain, mute par slot.
+4. **EffectChain** : effets modulaires sur le signal EWI (reverb, delay, etc.).
+5. **Mix** : `engine::mix::MixEngine` (heuristique) ou `MixAi` (inférence ONNX) calcule gain/spatial par slot.
+6. **MonoSubFilter** (1er ordre 6 dB/oct, fc=120 Hz) — force le contenu sub en mono.
 7. **MasterLimiter** sur L et R.
-
-**Slot 8 (DRM)** : modèle ONNX limité à 8 slots ; slot 8 = voie heuristique `ContentType::LOOP` uniquement.
 
 ## Threads et synchronisation
 
-- Le callback **audio** doit rester **lock-free** autant que possible : files SPSC pour MIDI -> sampler, atomiques pour flags (`std::atomic`, `memory_order` cohérent).
-- **ONNX / inference** : thread dédié (`InferenceThread` etc.) — ne pas bloquer le callback audio sur l'inférence.
+- Le callback **audio** doit rester **lock-free** autant que possible : atomiques pour flags (`std::atomic`, `memory_order` cohérent).
+- **ONNX / inference** : thread dédié — ne pas bloquer le callback audio sur l'inférence.
+- **Magic mix** : `MixWorker` s'exécute sur un thread dédié,applique l'état (`MixState`) sur le message thread.
 - Modifications de chaîne d'effets / gros états : typiquement **message thread** (GUI) + recréation `prepare()` si besoin.
-- **`Sampler::loadSample()` / `reloadSlotData()`** : n'utilisent plus `loaded=false` comme garde pendant le swap — le double-buffer garantit qu'on écrit toujours dans le buffer de fond (non lu par les voix actives). `loaded` ne passe à `true` qu'au **premier** chargement d'un slot vide. Les voix en fadeOut (`retriggering=true`) se terminent proprement sans coupure.
-- **`Sampler::stop(slot, StopMode)`** : le mode de fade-out est encodé dans `stopPending` (`atomic<int>`, 0 = rien en attente). Modes disponibles : `Normal` (350 ms), `SceneSwap` (20 ms), `Retrigger` (6 ms), `Instant` (0 ms). Consommé par `exchange(0, acq_rel)` dans `process()`/`processStereo()` pour éviter la race load/store. Callsites : `applyScene()` -> `SceneSwap`, `onPlayChanged` -> `Normal`, `onStepChanged` -> `Retrigger`.
-- **`StepSequencer::hasPendingTransition()`** : retourne `true` si `pendingTransLen_ > 0` — utilisé dans `navigateScene()` pour bloquer le spam de transitions quantisées.
 
 ## Transitions adaptatives entre scènes
 
-`SceneManager::armAdaptiveCrossfade()` remplace `armCrossfade()` dans `applyScene()`.
-L'énergie de chaque scène est calculée par `engine::SceneEnergy::compute(engine::SceneData)` (`src/engine/SceneEnergy.h`, moteur V2 sans JUCE) :
+`SceneStore::armAdaptiveCrossfade()` est appelé depuis `applyScene()` dans MainComponent.
+L'énergie de chaque scène est calculée par `engine::SceneEnergy::compute(engine::SceneData)` (`src/engine/SceneEnergy.h`) :
 - Score 0.0–1.0 basé sur densité de pas + mutes (pas d'analyse audio)
 - Pré-calculé au chargement du projet (`applyProjectData`, sur le SceneStore après `syncV2Scenes()`) ; invalidé à chaque `captureCurrentScene()`
 - Seuil musical/calme : `kT = 0.15f`
-- L'ancien `dsp::SceneManager::computeSceneEnergy` n'est plus appelé depuis `MainComponent` (fonction conservée par compat mais non utilisée par l'UI).
 
 Durée et courbe du crossfade selon le delta d'énergie :
 
@@ -92,18 +89,10 @@ Durée et courbe du crossfade selon le delta d'énergie :
 
 `armCrossfade()` (150 ms linéaire fixe) est conservé comme fallback.
 
-Gain floor –60 dB sur les slots naissants pour profils lents (Musical→Calme, Calme→Calme) :
-appliqué dans `applyScene()` avant `armAdaptiveCrossfade`.
-
-`SceneManager::chooseProfile(fromE, toE)` est **public** → testable directement sans instancier
+`SceneStore::chooseProfile(fromE, toE)` est **public** → testable directement sans instancier
 un crossfade. `CrossfadeProfile { int durationMs; CrossfadeCurve curve; }` est aussi public.
 
-Sidechain automatique kick→cibles configuré dans `onTypesDetected` :
-priorité BASS > PAD > SYNTH > LOOP, max 4 paires (`Sampler::kMaxSidechainPairs`).
-Guard dans `MainComponent` (`lastSidechainKick_` / `lastSidechainTargets_`) évite de rebuilder
-si la config n'a pas changé entre deux appels.
-
-**PingPongDelay morphing** : `SceneManager::startDubDelayMorph(from, to, 4000f)` démarre
+**PingPongDelay morphing** : `SceneStore::startDubDelayMorph(from, to, 4000f)` démarre
 un morphing de 4 s des paramètres delay (feedback, wet, tone, drive) entre deux scènes.
 `updateMorph()` avance le compteur (tick 33 ms depuis `timerCallback`). Params stockés dans `SceneData`
 et persistés dans `.saxfx` v20 (`dubDelayFeedback/Wet/Tone/Drive` par scène).
@@ -125,10 +114,11 @@ Deux panneaux ajoutés (`kInfoZoneH = 180 px`) :
 
 | Besoin | Fichiers / zones |
 |--------|-----------------|
-| Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin. Si l'effet a un comportement stéréo (L!=R), surcharger `processStereo()` ; sinon le défaut dual-mono suffit. |
-| Pipeline / ordre traitement | `DspPipeline.*`, éventuellement `MainComponent` (routing) |
-| Sampler / grille | `Sampler.*`, `StepSequencer.*`, `SmartSamplerEngine.*`, UI `StepSequencerPanel` |
-| Sauvegarde projet | `ProjectData.h`, `ProjectLoader.cpp` (migrations **version** JSON), toute UI qui sérialise |
+| Nouvel effet | `IEffect.h`, `EffectFactory`, nouvelle paire `*Effect.cpp/h`, `EffectType`, UI rack / icônes si besoin. |
+| Pipeline / ordre traitement | `AudioGraph.*`, `SlotPlayer.*`, `EngineFacade.*` |
+| Sampler / grille | `Sequencer.*`, `SlotPlayer.*`, UI `StepSequencerPanel` |
+| Mix / magic mix | `engine/mix/` (MixEngine, MixAi, MixWorker, MixState), `AutoMixDub.*` |
+| Sauvegarde projet | `ProjectData.h`, `ProjectLoader.cpp` (migrations **version** JSON), `SceneStore.h` |
 | Thème / boutons | `SaxOsLookAndFeel`, `NeonButton`, `Colours`, `SaxFXLayout` / `SaxFXFonts` |
 
 ## Format projet `.saxfx`
@@ -140,11 +130,10 @@ Deux panneaux ajoutés (`kInfoZoneH = 180 px`) :
 
 ```bash
 cmake --build build --config Release --target SaxFXTests --parallel
+cmake --build build --config Release --target EngineTests --parallel
 ```
 
-Exécuter l'exe de tests généré sous `build/tests/Release/` (ou équivalent). **204/204 tests passent** (Catch2, état courant).
-
-**Moteur V2** (`EngineTests`, sous `tests/engine/`) : sans JUCE ni ONNX, exécutable `bin/EngineTests.exe`.
+**SaxFXTests** : 35 test cases (Catch2). **EngineTests** : 86 test cases (sans JUCE/ONNX).
 
 **Null-test (§11.2)** : `renderOffline()` (`src/engine/OfflineRender.*`) rend une session déterministe complète (séquenceur + transitions + AutoMix v2.0 simulé toutes les 50 ms) sans device. Le test `[nulltest]` (NULL1) compare le rendu de la fixture (4 scènes, 6 samples, 2 transitions) bit à bit à une référence committée (hash FNV-1a + RMS par fenêtre). TOUT commit doit le passer ; un changement de rendu INTENTIONNEL régénère la référence (test caché NULL0) dans le même commit, avec justification.
 

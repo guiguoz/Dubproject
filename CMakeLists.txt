@@ -82,11 +82,6 @@ add_subdirectory(third_party/signalsmith-stretch signalsmith-stretch-main-build)
 target_sources(SaxFXLive PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
-    src/dsp/Sampler.cpp
-    src/dsp/DspPipeline.cpp
-    src/dsp/LooperEngine.cpp
-    src/dsp/BpmDetector.cpp
-    src/dsp/PingPongDelay.cpp
     src/dsp/SerumHost.cpp
     src/midi/MidiManager.cpp
     src/project/ProjectLoader.cpp

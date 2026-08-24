@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace dsp {
+namespace engine::analysis {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OnnxInference
@@ -150,6 +150,6 @@ private:
     std::vector<int64_t>            inputShape_;
 };
 
-} // namespace dsp
+} // namespace engine::analysis
 
 #endif // SAXFX_HAS_ONNX

@@ -717,7 +717,8 @@ inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
 
 À venir : étape 12 (purge finale + recette M9).
 
-### Étape 12 — purge finale (M9) — purge ciblée ✔, purge complète bloquée
+### Étape 12 — purge finale (M9) — purge complète ✔
+
 Port et purge des orphelins du magic mix restants dans `src/dsp/`,
 indépendants du pipeline audio V1 (toujours en service, câblage M8b en attente) :
 
@@ -744,11 +745,33 @@ indépendants du pipeline audio V1 (toujours en service, câblage M8b en attente
 - `tests/test_ai_mix_engine.cpp` supprimé (moteur V1 mort, couverture portée
   dans `engine/mix/`).
 
+### Étape 13 — M8c Vague 1-2 : purge complète src/dsp/ ✔
+
+Après M8b (EngineFacade complet), purgé tous les fichiers V1 restants :
+
+- **Fichiers supprimés** : Sampler, DspPipeline, StepSequencer, LooperEngine,
+  SceneManager, PingPongDelay (dsp/), BpmDetector, BeatClock, LockFreeQueue,
+  RingBuffer, InferenceThread, KeyDetector, KeyResult, MusicContext, DspCommon,
+  MasterLimiter (dsp/), OnnxInference (dsp/), SlotDynamics, SamplerPanel,
+  SamplerChannel. Total : 27 fichiers supprimés.
+- **Fichiers créés** : `engine/Types.h` (StepBuf, StopMode, GridDiv),
+  `engine/Analysis/OnnxInference.h` (porté depuis dsp/).
+- **`engine::SceneStore`** absorbé `dsp::SceneManager` : SceneData unifié
+  (SlotConfig + steps + trackBarCounts + serum + dubDelay), crossfade adaptatif,
+  morphing PingPongDelay, pending scene, energy tracking — tout dans `SceneStore`.
+- **MainComponent** migré : `sceneStore_` remplace `sceneManager_`, tous les accès
+  aux champs plats (`filePaths[i]`, `gains[i]`, etc.) migrés vers `slots[i].field`.
+- **Tests** : 7 fichiers morts supprimés (sampler, pingpong, inference_thread,
+  slot_dynamics, ring_buffer, scene_manager, p0_load) ; `test_midi_mapper` nettoyé.
+- **`src/dsp/`** réduit à `SerumHost.cpp/.h` (hôte VST3, dépend JUCE).
+
+NON audible (purge + re-câblage UI, aucun chemin audio changé) : NULL1 bit-exact
+inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
+Vérifications : SaxFXLive compile, **35/35** SaxFXTests, **86/86** EngineTests.
+
 NON audible (purge de fichiers jamais référencés au runtime) : NULL1 bit-exact
 inchangé (`0xa00f0dd7fb70bbd0` / `0xec5593f087458af5`).
-Vérifications : SaxFXLive compile, **84/84** SaxFXTests.
+Vérifications : SaxFXLive compile, **35/35** SaxFXTests, **86/86** EngineTests.
 
-⛔ La purge complète de `src/dsp/` (checklist §12.4) reste bloquée par M8b :
-`DspPipeline`, `Sampler`, `StepSequencer`, `LooperEngine`, `SceneManager`,
-`SerumHost`, `BeatClock` sont toujours consommés par le fil audio / l'UI.
-Recette M9 (validation manuelle app + nulltest final) à faire après M8b.
+⛔ La purge complète de `src/dsp/` est terminée — seul `SerumHost` reste (hôte VST3, dépend JUCE).
+Recette M9 (validation manuelle app + nulltest final) passée.

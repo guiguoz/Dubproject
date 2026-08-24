@@ -3,7 +3,7 @@
 #include "engine/EngineFacade.h"
 
 #include "engine/Analysis/FeatureExtractor.h"
-#include "dsp/SceneManager.h"
+#include "engine/SceneStore.h"
 #include "dsp/SerumHost.h"
 #include "midi/MidiManager.h"
 #include "midi/MidiLearnMap.h"
@@ -179,10 +179,10 @@ private:
     juce::TextButton sceneCopyBtn_;
 
     // ── Scene data ─────────────────────────────────────────────────────────────
-    static constexpr int kMaxScenes = ::dsp::SceneManager::kMaxScenes;
-    using SceneData = ::dsp::SceneData;
+    static constexpr int kMaxScenes = ::engine::kMaxScenes;
+    using SceneData = ::engine::SceneData;
 
-    ::dsp::SceneManager sceneManager_;
+    ::engine::SceneStore sceneStore_;
 
     // ── Info musicale (preset Serum + portée gammes) ──────────────────────────
     ui::ScaleStaffComponent scaleStaff_;

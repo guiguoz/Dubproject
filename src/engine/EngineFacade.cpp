@@ -835,7 +835,7 @@ float EngineFacade::getSceneEnergy(int idx) const noexcept
 
 // ─── Patterns / sequencer (helper) ────────────────────────────────────────────
 
-void EngineFacade::prepareStepBuffer(const ::dsp::StepSequencer::StepBuf& buf) noexcept
+void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 {
     for (int s = 0; s < kMaxSlots; ++s)
     {
@@ -847,7 +847,7 @@ void EngineFacade::prepareStepBuffer(const ::dsp::StepSequencer::StepBuf& buf) n
     graph_.sequencer().patterns().flip();
 }
 
-void EngineFacade::stopAllSlots(::dsp::Sampler::StopMode /*mode*/) noexcept
+void EngineFacade::stopAllSlots(StopMode /*mode*/) noexcept
 {
     constexpr uint16_t kAllSlots = (1u << kMaxSlots) - 1u;
     pendingStops_.fetch_or(kAllSlots, std::memory_order_release);

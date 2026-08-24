@@ -7,12 +7,8 @@ namespace engine {
 
 // Score d'énergie musicale [0,1] d'une scène V2, calculé sans analyse audio.
 //
-// NOTE : la densité de pas du V1 (steps + mutes par slot, cf. l'ancien
-// dsp::SceneManager::computeSceneEnergy) n'est PAS encore portée dans
-// SceneStore V2 — les patterns vivent côté séquenceur (TrackPattern dans
-// Sequencer.h), pas dans SceneData. Ce helper est donc le score V2
-// provisoire : il s'appuie uniquement sur les slots actifs et leur gain.
-// À enrichir quand les patterns seront portés dans SceneStore.
+// Utilise les slots actifs, leur gain, ET la densité de pas (steps + trackBarCounts)
+// héritée du V1. Les mutes sont exclues du calcul.
 class SceneEnergy {
 public:
     // Score [0,1] à partir des slots ACTIFS de la scène.

@@ -3,7 +3,7 @@
 #include "Colours.h"
 #include "NeonButton.h"
 #include "engine/EngineFacade.h"
-#include "dsp/Sampler.h"
+#include "engine/Types.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -322,7 +322,7 @@ public:
     void setTrackStepCount(int track, int count)
     {
         if (track < 0 || track >= 9) return;
-        trackStepCounts_[track] = juce::jlimit(1, ::dsp::StepSequencer::kMaxSteps, count);
+        trackStepCounts_[track] = juce::jlimit(1, engine::kMaxSteps, count);
         refreshStepButtons();
         resized();
     }
@@ -1160,7 +1160,7 @@ private:
 
     void setGlobalStepCount(int newSteps)
     {
-        const int newBars = newSteps / ::dsp::StepSequencer::kStepsPerBar;
+        const int newBars = newSteps / engine::kStepsPerBar;
         for (int t = 0; t < 9; ++t)
         {
             trackStepCounts_[t] = newSteps;
@@ -1218,9 +1218,9 @@ private:
 
     void updatePageLabel()
     {
-        const int firstBar  = viewOffsetSteps_ / ::dsp::StepSequencer::kStepsPerBar + 1;
+        const int firstBar  = viewOffsetSteps_ / engine::kStepsPerBar + 1;
         const int lastBar   = firstBar + 1; // 32 steps visible = 2 bars
-        const int totalBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+        const int totalBars = trackStepCounts_[0] / engine::kStepsPerBar;
 
         if (totalBars <= 1)
             pageLabel_.setText("Mesure 1 / 1 \xe2\x96\xbe", juce::dontSendNotification);
@@ -1232,11 +1232,11 @@ private:
     {
         juce::PopupMenu menu;
         menu.addSectionHeader("Longueur globale");
-        const int curBars = trackStepCounts_[0] / ::dsp::StepSequencer::kStepsPerBar;
+        const int curBars = trackStepCounts_[0] / engine::kStepsPerBar;
 
         for (int bars : { 1, 2, 4, 8, 16, 32 })
         {
-            const int steps = bars * ::dsp::StepSequencer::kStepsPerBar;
+            const int steps = bars * engine::kStepsPerBar;
             const bool isCurr = (curBars == bars);
             menu.addItem(steps, juce::String(bars) + (bars == 1 ? " mesure" : " mesures")
                          + "  (" + juce::String(steps) + " pas)"

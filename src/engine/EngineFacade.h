@@ -20,8 +20,7 @@
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
 #include "engine/mix/MixWorker.h"
-#include "dsp/StepSequencer.h"  // StepBuf pour prepareStepBuffer
-#include "dsp/Sampler.h"        // StopMode pour stopAllSlots
+#include "engine/Types.h"
 
 // Forward-declare SerumHost (JUCE dep, reste dans src/dsp/)
 namespace dsp { class SerumHost; }
@@ -209,10 +208,10 @@ public:
 
     // ── Patterns / Sequencer (helper) ───────────────────────────────────────────
     // Préparer le buffer de pattern pour la prochaine scène (message thread).
-    void prepareStepBuffer(const ::dsp::StepSequencer::StepBuf& buf) noexcept;
-    
+    void prepareStepBuffer(const StepBuf& buf) noexcept;
+
     // Arrêter tous les slots avec mode d'arrêt spécifié.
-    void stopAllSlots(::dsp::Sampler::StopMode mode = ::dsp::Sampler::StopMode::Normal) noexcept;
+    void stopAllSlots(StopMode mode = StopMode::Normal) noexcept;
 
     // ── DubDelay (accès direct à l'objet porté) ───────────────────────────────
     fx::PingPongDelay& delay() noexcept { return graph_.delay(); }

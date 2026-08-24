@@ -18,25 +18,14 @@ FetchContent_MakeAvailable(Catch2)
 # ─────────────────────────────────────────────────────────────────────────────
 add_executable(SaxFXTests
     test_placeholder.cpp
-    test_ring_buffer.cpp
-    test_sampler.cpp
     test_midi_mapper.cpp
     test_project.cpp
     test_onnx_inference.cpp
-    test_inference_thread.cpp
     test_onnx_benchmark.cpp
     test_ai_classifier.cpp
     test_feature_extractor.cpp
-    test_pingpongdelay.cpp
     test_ewi_filter.cpp
-    test_slot_dynamics_ab.cpp
-    test_scene_manager.cpp
-    test_p0_load.cpp
     # DSP sources (pure C++, no JUCE)
-    ../src/dsp/Sampler.cpp
-    ../src/dsp/PingPongDelay.cpp
-    ../src/dsp/DspPipeline.cpp
-    ../src/dsp/BpmDetector.cpp
     ../src/engine/Analysis/FeatureExtractor.cpp
 )
 
