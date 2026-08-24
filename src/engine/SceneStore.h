@@ -12,7 +12,7 @@ namespace engine {
 static constexpr int kMaxScenes = 8;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SlotConfig — configuration complète d'un slot (remplace dsp::SampleSlot).
+// SlotConfig — configuration complète d'un slot.
 // ─────────────────────────────────────────────────────────────────────────────
 struct SlotConfig {
     std::string filePath;
@@ -31,7 +31,7 @@ struct SlotConfig {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SceneData — snapshot complet d'une scène (remplace dsp::SceneData).
+// SceneData — snapshot complet d'une scène.
 // Combine le moteur V2 (SlotConfig) + état UI (steps, serum, dubDelay).
 // ─────────────────────────────────────────────────────────────────────────────
 struct SceneData {

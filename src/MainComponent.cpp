@@ -3,7 +3,6 @@
 #include "engine/SceneEnergy.h"
 
 #include <cmath>
-#include <future>
 #include <memory>
 
 //==============================================================================
@@ -681,7 +680,6 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
                                         int /*trimStart*/, int /*trimEnd*/,
                                         double* /*outFileSr*/)
 {
-    // Le sampler V1 n'est plus audible (chemin V2 exclusif via importSampleAsync).
     // Cette fonction ne fait plus que signaler le slot comme chargé et mettre à
     // jour la waveform depuis le snapshot V2.
     juce::ignoreUnused(path);
@@ -1507,12 +1505,6 @@ void MainComponent::loadSerumPlugin(const juce::String& vst3Path)
     }
 }
 
-void MainComponent::unloadSerumPlugin()
-{
-    serumEditorWindow_.reset();
-    serumHost_.unload();
-}
-
 void MainComponent::openSerumEditor()
 {
     if (!serumHost_.isLoaded()) return;
@@ -2266,25 +2258,6 @@ void MainComponent::updateSidebarBpm(float bpm)
                              juce::dontSendNotification);
 }
 
-void MainComponent::reApplyCurrentSceneTrims()
-{
-    const auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
-    for (int i = 0; i < 9; ++i)
-    {
-        const std::size_t sidx = static_cast<std::size_t>(i);
-        const int ts = sc.slots[sidx].trimStart;
-        const int te = sc.slots[sidx].trimEnd;
-        if (ts <= 0 && te < 0) continue;
-        auto snap = facade_.getSlotPcmSnapshot(i);
-        const int total = static_cast<int>(snap.size());
-        if (total <= 0) continue;
-        const int s2 = juce::jlimit(0, total - 1, ts);
-        const int e2 = te >= 0 ? juce::jlimit(s2 + 1, total, te) : total;
-        std::vector<float> trimmed(snap.begin() + s2, snap.begin() + e2);
-        facade_.reloadSlotPcm(i, std::move(trimmed), facade_.getSlotPcmSampleRate(i));
-    }
-}
-
 void MainComponent::updateSceneLabel()
 {
     sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
@@ -2488,10 +2461,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         if (!newPath.empty() && newPath != currentPath)
         {
             // Nouveau fichier pour ce slot : chargement synchrone direct.
-            // Le sampler V1 n'est plus audible (chemin V2 exclusif) mais reste
-            // alimenté pour l'IA V1 (détection de rôles / spaceviz depuis
-            // getSlotPcmView). Le V2, lui, est servi par facade_.importSampleAsync
-            // (async) — voir l'alignement en fin de boucle.
+            // Le V2 est servi par facade_.importSampleAsync (async).
             loadSampleIntoSlot(i, newPath, sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd);
             loadedNewFile[static_cast<std::size_t>(i)] = true;
             stepSeqPanel_->setSlotFilePath(i, newPath);

@@ -8,9 +8,7 @@
 #include "midi/MidiManager.h"
 #include "midi/MidiLearnMap.h"
 #include "project/ProjectLoader.h"
-#include "ui/NeonButton.h"
 #include "ui/SaxOsLookAndFeel.h"
-#include "ui/SaxFXLookAndFeel.h"
 #include "ui/SampleEditorComponent.h"
 #include "ui/ScaleStaffComponent.h"
 #include "ui/SpatialVisualization.h"
@@ -20,7 +18,6 @@
 #include <JuceHeader.h>
 #include <atomic>
 #include <array>
-#include <future>
 #include <vector>
 
 //==============================================================================
@@ -39,7 +36,6 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
 
     // ── EWI synth (VST3 host) ─────────────────────────────────────────────────
     void loadSerumPlugin(const juce::String& vst3Path);
-    void unloadSerumPlugin();
     void openSerumEditor();
 
     // ── Panic : coupe tous les slots + delays instantanément ─────────────────
@@ -128,7 +124,6 @@ private:
     bool             pipelineActive_ = false;
 
     // ── LookAndFeel ───────────────────────────────────────────────────────────
-    ui::SaxFXLookAndFeel laf_;
 
     // ── Spatial visualization ─────────────────────────────────────────────────
     ui::SpatialVisualization   spatialViz_;
@@ -140,7 +135,6 @@ private:
     juce::ComboBox   masterKeyCombo_;
     juce::ComboBox   masterKeyModeCombo_;
     void             applyMasterKey();
-    void             reApplyCurrentSceneTrims();
 
     // ── Sampler / Step Sequencer ──────────────────────────────────────────────
     juce::Label samplerLabel_;
