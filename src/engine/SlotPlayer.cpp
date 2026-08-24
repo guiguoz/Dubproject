@@ -114,7 +114,7 @@ void SlotPlayer::resetSpatialSlot(int slot) noexcept {
 
 // ─── spatialGains ─────────────────────────────────────────────────────────────
 //
-// Loi égal-power V1 (Sampler::setSlotPan) : angle = (pan+1)·π/4 →
+// Loi égal-power : angle = (pan+1)·π/4 →
 // gL = cos(angle), gR = sin(angle). Le canal faible reçoit le signal Haas.
 // Si pan == 0 ET width == 0 → identité (gL = gR = 1) : préserve la transparence
 // bit-exact T-SP1 (le V1 appliquait toujours le 0.7071 de centre, ce qui

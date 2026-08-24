@@ -3,11 +3,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // engine/mix/MixAi.h
 //
-// Chemin IA ONNX du magic mix (étape 4 / M9) — port de la branche
-// `useAiMix_` de SmartSamplerEngine::applyNeutronMix (EQ 3 bandes depuis les
-// décisions du modèle, compensation de masquage Serum, calibration de gain).
+// Chemin IA ONNX du magic mix (étape 4 / M9) — EQ 3 bandes depuis les
+// décisions du modèle, compensation de masquage Serum, calibration de gain.
 //
-// Le modèle ONNX lui-même (AiMixEngine, src/dsp/) reste hors du chemin par
+// Le modèle ONNX lui-même reste hors du chemin par
 // défaut (`SAXFX_HAS_ONNX` compilable, OFF — plan §7) : ce module est PURE et
 // ne voit que des décisions [volume, lowGain, midGain, highGain] déjà
 // prédites. L'inférence est fournie par l'appelant (EngineFacade / worker) ;

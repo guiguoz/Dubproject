@@ -6,8 +6,8 @@
 
 namespace engine::fx {
 
-// Ping-Pong Delay — porté depuis src/dsp/PingPongDelay (namespace engine::fx,
-// sans dépendance JUCE). API identique + morphing conservé.
+// Ping-Pong Delay — namespace engine::fx, sans dépendance JUCE.
+// API identique + morphing conservé.
 class PingPongDelay {
 public:
     PingPongDelay() = default;

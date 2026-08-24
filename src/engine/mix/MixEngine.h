@@ -4,9 +4,9 @@
 // engine/mix/MixEngine.h
 //
 // Orchestrateur hors-ligne du magic mix (étape 3 / M9) — reproduit
-// l'enchaînement complet de la branche HEURISTIQUE de
-// SmartSamplerEngine::applyNeutronMix (phase 1 detection + centroid,
-// phase 2 EQ/gain/dub-echo/serum-duck, phase 4 spatialisation + balance L/R)
+// l'enchaînement complet de la branche HEURISTIQUE
+// (phase 1 detection + centroid, phase 2 EQ/gain/dub-echo/serum-duck,
+// phase 4 spatialisation + balance L/R)
 // SANS side-effects sur un player : entrées PCM + flag de scène → sorties
 // PCM traités + gains + spatials.
 //

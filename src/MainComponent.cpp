@@ -2341,7 +2341,7 @@ void MainComponent::captureCurrentScene()
     facade_.setSceneEnergy(ci, engine::SceneEnergy::compute(facade_.scene(ci)));
 }
 
-// ═══ Moteur V2 : sync des scènes (V1 SceneManager → engine::SceneStore) ═══════
+// ═══ Moteur V2 : sync des scènes (sceneStore_ → EngineFacade.sceneStore_) ════
 
 engine::SlotRole MainComponent::activeRoleForSlot(int slot) const noexcept
 {

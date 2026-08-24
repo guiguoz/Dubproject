@@ -18,7 +18,7 @@ namespace ui {
 //
 // Each slot is drawn as a filled circle:
 //   • Radius  = 7 + width * 18  (px)
-//   • Colour  = content-type accent colour (passed from SmartSamplerEngine)
+//   • Colour  = content-type accent colour (from mix engine)
 //   • Dimmed  when slot is not active (not loaded or not playing)
 //
 // The live saxophone is always drawn as a red dot at (pan ≈ +0.2, depth = 0).

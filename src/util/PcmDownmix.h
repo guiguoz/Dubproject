@@ -7,7 +7,7 @@
 
 namespace util {
 
-/// Downmix interleaved PCM to mono — matches MainComponent / SmartSamplerEngine (L+R)*0.5.
+/// Downmix interleaved PCM to mono — (L+R)*0.5.
 inline std::vector<float> downmixInterleavedToMono(const float* interleaved,
                                                    int numFrames,
                                                    int numChannels)

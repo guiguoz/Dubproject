@@ -2,9 +2,9 @@
 // ─── EngineFacade — pont entre l'UI existante et le moteur V2 ────────────────
 // SerumHost est injecté via setSerumHost() (reste dans src/dsp/, dépendances JUCE).
 
-// JuceHeader d'abord : dsp/StepSequencer.h et dsp/Sampler.h utilisent juce
-// (jlimit, etc.) dans des membres inline — ce header doit rester auto-suffisant
-// quel que soit l'ordre des includes du TU appelant.
+// JuceHeader d'abord : engine utilise juce (jlimit, etc.) dans des membres
+// inline — ce header doit rester auto-suffisant quel que soit l'ordre des
+// includes du TU appelant.
 #include <JuceHeader.h>
 
 #include <functional>
@@ -116,7 +116,7 @@ public:
     // n'embarque que le post-traitement pur.
     void triggerAiMagicMix(const std::array<engine::mix::MixAiDecision, 8>& decisions) noexcept;
     // Toggle ⚡ (étape 5 / M9) : applique si le magic mix n'est pas actif,
-    // revert sinon — sémantique V1 SmartSamplerEngine::toggleMagicMix.
+    // revert sinon.
     void toggleMagicMix() noexcept;
     // Revert du magic mix (étape 5 / M9) : remet gain 1 + spatial neutre sur
     // tous les slots (le PCM n'est jamais modifié — invariant), efface l'état
@@ -231,10 +231,8 @@ public:
 
     // ── Playhead / séquenceur (pour l'UI) ──────────────────────────────────────
     // Index du step courant (0 .. kMaxSteps-1), récupéré depuis le Transport V2.
-    // Remplace V1 StepSequencer::getCurrentStep() pour l'UI.
     int32_t getCurrentStep() const noexcept;
-    // Phase fractionnaire du beat courant [0..∞), pour animation de playhead
-    // et détection de downbeat par LooperEngine.
+    // Phase fractionnaire du beat courant [0..∞), pour animation de playhead.
     double getCurrentPhase() const noexcept;
 
     // ── Diagnostics / debug ────────────────────────────────────────────────────

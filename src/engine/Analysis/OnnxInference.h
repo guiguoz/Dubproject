@@ -18,8 +18,8 @@ namespace engine::analysis {
 // Loads a .onnx model and runs synchronous inference on float tensors.
 //
 // Thread safety: one instance per thread (ORT session is not thread-safe
-// when sharing the same Run call).  For the audio pipeline, use a dedicated
-// inference thread + LockFreeQueue.
+// when sharing the same Run call). For the audio pipeline, use a dedicated
+// inference thread.
 //
 // Usage:
 //   OnnxInference model("model.onnx");

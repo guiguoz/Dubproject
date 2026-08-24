@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // engine/mix/MixAlgorithms.h
 //
-// Helpers DSP purs portés depuis le magic mix V1 (SmartSamplerEngine) — M9.
+// Helpers DSP purs du magic mix — M9.
 // Zéro dépendance JUCE / dsp/ : compilable tel quel par EngineTests (C++17).
 // Comportement identique aux originaux (recette M9, nulltest inchangé tant que
 // le rendu V2 ne les consomme pas encore).
@@ -79,7 +79,7 @@ inline float targetGainForType(MixContentType type) noexcept
     }
 }
 
-// ── MixContentType → MixCategory (presets SlotDynamics) ──────────────────────
+// ── MixContentType → MixCategory ─────────────────────────────────────────────
 
 inline MixCategory contentTypeToDynamicsCategory(MixContentType t) noexcept
 {

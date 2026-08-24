@@ -12,8 +12,7 @@ namespace ui
 // ─────────────────────────────────────────────────────────────────────────────
 // SamplerMagicButton
 //
-// Hexagonal neon button (accent or) pour le sampler — même style que MagicButton
-// mais dédié au SmartSamplerEngine.
+// Hexagonal neon button (accent or) pour le sampler — magic mix V2.
 //
 //   Clic gauche  → onAutoMix()               (gain staging + key sync)
 //   Clic droit   → menu preset (Balanced / Punch / Lo-Fi)

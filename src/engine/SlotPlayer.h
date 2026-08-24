@@ -79,9 +79,8 @@ public:
     void prepareStretchers(int channels, float sampleRate) noexcept;
 
     // ── Snapshot PCM (lecture message thread — légère race OK, voir §11.1) ──
-    // Retourne un downmix mono du PCM chargé (sémantique Sampler V1
-    // getSlotPcmSnapshot) — utilisé par l'UI pour les waveforms et l'éditeur.
-    // Vide si le slot n'est pas chargé ou n'a aucun PCM.
+    // Retourne un downmix mono du PCM chargé — utilisé par l'UI pour les
+    // waveforms et l'éditeur. Vide si le slot n'est pas chargé ou n'a aucun PCM.
     std::vector<float> getPcmSnapshot(int slot) const noexcept;
 
     // SR du PCM chargé (0 si slot vide) — pour re-trim côté UI.

@@ -3,8 +3,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // engine/mix/MixDecisions.h
 //
-// Décisions pures du magic mix (étape 2 / M9) — portées depuis la branche
-// heuristique de SmartSamplerEngine::applyNeutronMix (phase 2 et duck Serum).
+// Décisions pures du magic mix (étape 2 / M9) — branche heuristique
+// (phase 2 et duck Serum).
 // Zéro dépendance JUCE / dsp/ : compilable par EngineTests (C++17).
 //
 // Contenu :
@@ -23,7 +23,7 @@
 
 namespace engine::mix {
 
-// ── Vue de scène (port de SmartSamplerEngine::SceneSnapshot) ────────────────
+// ── Vue de scène ────────────────────────────────────────────────────────────
 
 struct SceneSnapshot
 {

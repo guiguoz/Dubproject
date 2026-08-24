@@ -3,8 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // engine/mix/MixState.h
 //
-// État de mix persistant par slot (étape 7 / M9) — équivalent V2 de
-// SmartSamplerEngine::getSlotMixState / restoreSlotMixState et du schéma
+// État de mix persistant par slot (étape 7 / M9) — aligné sur le schéma
 // projet v5 (SlotMixData : gain/pan/width/depth/applied).
 //
 // Un slot traité par le magic mix produit un SlotMixState persistable :
@@ -77,9 +76,8 @@ inline SlotMixState slotMixState(const MixStateArray& states, int slot) noexcept
 }
 
 /// Revert du magic mix (étape 5 / M9) : remet TOUT l'état persistant aux
-/// défauts (gain 1, spatial neutre, applied=false). Équivalent V2 de
-/// SmartSamplerEngine::revertToOriginals (le PCM n'étant jamais modifié, il
-/// n'y a rien à recharger). L'application au runtime (gain 1 + spatial neutre
+/// défauts (gain 1, spatial neutre, applied=false). Le PCM n'étant jamais
+/// modifié, il n'y a rien à recharger. L'application au runtime (gain 1 + spatial neutre
 /// SlotPlayer) reste à la charge de l'appelant.
 inline void resetMixState(MixStateArray& states) noexcept
 {

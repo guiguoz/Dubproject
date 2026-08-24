@@ -14,7 +14,7 @@ namespace ui {
 // projection), amplitude on Y. Renders 48 log-spaced bands × 52 history frames
 // via painter's algorithm at 30 Hz. Color: cyan (front) → violet (back).
 //
-// Data flow: DspPipeline writes audio to a ring buffer; GUI copies 1024 samples
+// Data flow: AudioGraph writes audio to a ring buffer; GUI copies 1024 samples
 // per frame, computes a 1024-point FFT (Hann windowed), maps to kBands.
 //
 // Transparent to mouse, z-ordered behind all sampler controls.
@@ -46,7 +46,7 @@ public:
     // Called from StepSequencerPanel::timerCallback at 30 Hz (GUI thread)
     void update(const float levels[9], float /*inputRms*/, float /*bpm*/) noexcept
     {
-        // 1. Pull audio samples from DspPipeline ring buffer
+        // 1. Pull audio samples from audio ring buffer
         float raw[kFFTSize] {};
         if (audioProvider_)
             audioProvider_(raw, kFFTSize);

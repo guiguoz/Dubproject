@@ -4,7 +4,7 @@
 
 namespace engine::fx {
 
-// Soft-clipper/limiteur master — porté depuis src/dsp/MasterLimiter.
+// Soft-clipper/limiteur master — namespace engine::fx.
 // Traite les deux canaux stéréo séparément, suit la réduction de gain
 // pour la règle 6 de l'AutoMix.
 class MasterLimiter {
