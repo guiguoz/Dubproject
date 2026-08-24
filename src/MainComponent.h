@@ -2,12 +2,9 @@
 
 #include "engine/EngineFacade.h"
 
-#include "dsp/DspPipeline.h"
 #include "engine/Analysis/FeatureExtractor.h"
-#include "dsp/LooperEngine.h"
 #include "dsp/SceneManager.h"
 #include "dsp/SerumHost.h"
-#include "dsp/StepSequencer.h"
 #include "midi/MidiManager.h"
 #include "midi/MidiLearnMap.h"
 #include "project/ProjectLoader.h"
@@ -94,11 +91,11 @@ private:
     //==========================================================================
     // DSP + MIDI
     //==========================================================================
-    ::dsp::DspPipeline        dspPipeline_;
     ::dsp::SerumHost          serumHost_;
-    ::dsp::StepSequencer      stepSequencer_;
-    ::dsp::LooperEngine       looperEngine_;
-    midi::MidiManager         midiManager_{dspPipeline_.getMidiEventQueue()};
+    midi::MidiManager         midiManager_{ [this](int slot, bool noteOn) {
+        if (noteOn) facade_.triggerSlot(slot);
+        else        facade_.stopSlot(slot);
+    } };
     juce::MidiBuffer          ewiMidiBuffer_;
 
     // ── Serum gain rider (audio thread only) ─────────────────────────────────

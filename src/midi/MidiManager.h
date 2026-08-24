@@ -1,11 +1,11 @@
 #pragma once
 
 #include "MidiNoteMapper.h"
-#include "../dsp/LockFreeQueue.h"
 
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
+#include <functional>
 
 namespace midi {
 
@@ -13,7 +13,7 @@ namespace midi {
 // MidiManager
 //
 // Listens to all active MIDI input devices via JUCE.
-// Routes note-on/off to the sampler via a lock-free queue.
+// Routes note-on/off to the sampler via a callback (`onSamplerNote`).
 // Routes EWI events (all messages from the designated EWI device) via
 // AbstractFifo — lock-free between the MIDI system thread and the audio thread.
 //
@@ -26,7 +26,7 @@ namespace midi {
 class MidiManager : private juce::MidiInputCallback
 {
 public:
-    explicit MidiManager(::dsp::LockFreeQueue<::dsp::SamplerEvent, 64>& eventQueue) noexcept;
+    explicit MidiManager(std::function<void(int slot, bool noteOn)> onSamplerNote) noexcept;
     ~MidiManager() override;
 
     // Attach to the shared AudioDeviceManager and start receiving MIDI.
@@ -74,7 +74,7 @@ private:
 
     bool isEwiDevice(const juce::String& deviceName) const noexcept;
 
-    ::dsp::LockFreeQueue<::dsp::SamplerEvent, 64>& eventQueue_;
+    std::function<void(int slot, bool noteOn)> onSamplerNote_;
     MidiNoteMapper                                  mapper_;
     juce::AudioDeviceManager*                       deviceManager_ { nullptr };
 

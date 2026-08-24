@@ -1,9 +1,11 @@
 #include "MidiManager.h"
 
+#include <utility>
+
 namespace midi {
 
-MidiManager::MidiManager(::dsp::LockFreeQueue<::dsp::SamplerEvent, 64>& eventQueue) noexcept
-    : eventQueue_(eventQueue)
+MidiManager::MidiManager(std::function<void(int slot, bool noteOn)> onSamplerNote) noexcept
+    : onSamplerNote_(std::move(onSamplerNote))
 {
 }
 
@@ -122,13 +124,13 @@ void MidiManager::handleIncomingMidiMessage(juce::MidiInput* source,
     {
         const int slot = mapper_.getSlot(message.getNoteNumber());
         if (slot >= 0)
-            eventQueue_.tryPush(::dsp::SamplerEvent{ slot, true });
+            if (onSamplerNote_) onSamplerNote_(slot, true);
     }
     else if (message.isNoteOff())
     {
         const int slot = mapper_.getSlot(message.getNoteNumber());
         if (slot >= 0)
-            eventQueue_.tryPush(::dsp::SamplerEvent{ slot, false });
+            if (onSamplerNote_) onSamplerNote_(slot, false);
     }
 }
 

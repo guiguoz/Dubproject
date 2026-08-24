@@ -134,7 +134,6 @@ MainComponent::MainComponent()
         {
             facade_.setBpm(bpm);
             serumHost_.setBpm(bpm);
-            looperEngine_.setBpm(bpm);
             stepSeqPanel_->setBpm(bpm);
             updateSidebarBpm(bpm);
         }
@@ -323,21 +322,6 @@ MainComponent::MainComponent()
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
     stepSeqPanel_->onMagicButtonPressed = nullptr;
-
-    // ── Looper ────────────────────────────────────────────────────────────────
-    stepSeqPanel_->onLooperPress        = [this] { looperEngine_.pressButton(); };
-    stepSeqPanel_->onLooperClear        = [this] { looperEngine_.clear(); };
-    stepSeqPanel_->onLooperModeChanged  = [this](bool tape)
-    {
-        looperEngine_.setOverdubMode(tape ? ::dsp::LooperEngine::OverdubMode::Tape
-                                          : ::dsp::LooperEngine::OverdubMode::Replace);
-    };
-    stepSeqPanel_->getLooperState  = [this] { return static_cast<int>(looperEngine_.getState()); };
-    stepSeqPanel_->getLooperBars   = [this] { return looperEngine_.getLoopBars(); };
-    stepSeqPanel_->getLooperIsTape = [this]
-    {
-        return looperEngine_.getOverdubMode() == ::dsp::LooperEngine::OverdubMode::Tape;
-    };
 
     // ── Swing ─────────────────────────────────────────────────────────────────
     stepSeqPanel_->onSwingChanged = [this](float v) { facade_.setSwing(v); };
@@ -667,7 +651,6 @@ MainComponent::MainComponent()
     // Initial BPM
     facade_.setBpm(120.f);
     serumHost_.setBpm(120.f);
-    looperEngine_.setBpm(120.f);
 
     // Auto-lancement IA au démarrage (après init audio)
     juce::MessageManager::callAsync([this] { triggerAI(); });
@@ -695,48 +678,13 @@ MainComponent::~MainComponent()
 //==============================================================================
 
 void MainComponent::loadSampleIntoSlot(int slot, const std::string& path,
-                                        int trimStart, int trimEnd,
-                                        double* outFileSr)
+                                        int /*trimStart*/, int /*trimEnd*/,
+                                        double* /*outFileSr*/)
 {
-    juce::AudioFormatManager fmt;
-    fmt.registerBasicFormats();
-
-    const juce::File file { juce::String(path) };
-    std::unique_ptr<juce::AudioFormatReader> reader(fmt.createReaderFor(file));
-    if (!reader) return;
-
-    const int numSamples = static_cast<int>(reader->lengthInSamples);
-    if (numSamples <= 0) return;
-
-    const int numCh = std::max(1, static_cast<int>(reader->numChannels));
-    juce::AudioBuffer<float> buf(numCh, numSamples);
-    reader->read(&buf, 0, numSamples, 0, true, numCh > 1);
-    std::vector<float> pcm(numSamples);
-    if (numCh > 1) {
-        const float* left = buf.getReadPointer(0);
-        const float* right = buf.getReadPointer(1);
-        for (int i = 0; i < numSamples; ++i) pcm[i] = (left[i] + right[i]) * 0.5f;
-    } else {
-        std::copy(buf.getReadPointer(0), buf.getReadPointer(0) + numSamples, pcm.begin());
-    }
-
-    const double fileSr = reader->sampleRate;
-    if (outFileSr) *outFileSr = fileSr;
-
-    // Apply trim inline so that only one loadSample() call is made per scene
-    // transition — avoids a second reloadSlotData() write that would race with
-    // a voice still reading the background buffer during its fadeOut.
-    const int start = juce::jlimit(0, numSamples - 1, trimStart);
-    const int end   = (trimEnd >= 0)
-                      ? juce::jlimit(start + 1, numSamples, trimEnd)
-                      : numSamples;
-
-    static constexpr bool kSlotLoop[9] = { true, true, false, false, false, true, true, false, true };
-    auto& sampler = dspPipeline_.getSampler();
-    sampler.loadSample(slot, pcm.data() + start, end - start, fileSr);
-    sampler.setSlotOneShot(slot, true);
-    if (slot >= 0 && slot < 9)
-        sampler.setSlotLoop(slot, kSlotLoop[slot]);
+    // Le sampler V1 n'est plus audible (chemin V2 exclusif via importSampleAsync).
+    // Cette fonction ne fait plus que signaler le slot comme chargé et mettre à
+    // jour la waveform depuis le snapshot V2.
+    juce::ignoreUnused(path);
 
     stepSeqPanel_->setSlotLoaded(slot, true);
 
@@ -1383,19 +1331,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     else
         std::copy(left, left + numSamples, v2InputScratchR_.begin());
 
-    // Capture beat phase BEFORE step sequencer advances it (used by looper for bar detection)
-    const double looperBeatPhase = facade_.getCurrentPhase();
-
     serumHost_.processBlock(ewiMidiBuffer_);
-
-    // Looper: process Serum output in-place (mixes loop playback, records input)
-    if (serumHost_.isLoaded())
-    {
-        auto& sb = serumHost_.getOutputBuffer();
-        float* sLw = sb.getWritePointer(0);
-        float* sRw = sb.getWritePointer(1);
-        looperEngine_.process(sLw, sRw, sLw, sRw, numSamples, looperBeatPhase);
-    }
 
     if (numCh >= 2)
     {
