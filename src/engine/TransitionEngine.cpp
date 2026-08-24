@@ -123,11 +123,21 @@ void TransitionEngine::compilePlan(EventScheduler& scheduler,
         }
 
         case SlotAction::Replace: {
-            // Mute immédiat + Trigger à la frontière
+            // Fade-out voix existante → silence à la frontière
             {
                 EngineEvent ev{};
                 ev.time = boundary;
-                ev.type = EventType::Mute;
+                ev.type = EventType::GainRamp;
+                ev.slot = slot;
+                ev.a    = kFadeOutDur;
+                ev.b    = 0.0f;
+                scheduler.push(ev);
+            }
+            // Trigger + fade-in juste après le fade-out terminé
+            {
+                EngineEvent ev{};
+                ev.time = boundary + static_cast<int64_t>(kFadeOutDur);
+                ev.type = EventType::Trigger;
                 ev.slot = slot;
                 ev.a    = 0.0f;
                 ev.b    = 0.0f;
@@ -135,11 +145,11 @@ void TransitionEngine::compilePlan(EventScheduler& scheduler,
             }
             {
                 EngineEvent ev{};
-                ev.time = boundary;
-                ev.type = EventType::Trigger;
+                ev.time = boundary + static_cast<int64_t>(kFadeOutDur);
+                ev.type = EventType::GainRamp;
                 ev.slot = slot;
-                ev.a    = 0.0f;
-                ev.b    = 0.0f;
+                ev.a    = kFadeInStart;
+                ev.b    = 1.0f;
                 scheduler.push(ev);
             }
             break;

@@ -7,7 +7,7 @@ namespace engine {
 void AudioGraph::setSlotRole(int slot, SlotRole role) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
-    roles_[slot] = role;
+    roles_[slot].store(role, std::memory_order_relaxed);
 
     // Spatialisation runtime dérivée du rôle (pan + Haas). Centroid neutre
     // (spatialForType) — le centroid réel du PCM est pris en charge par le
@@ -24,10 +24,11 @@ void AudioGraph::setSlotRole(int slot, SlotRole role) noexcept
 void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
 {
     maxBlock_ = maxBlockSize;
-    slotPlayer_.prepareStretchers(2, static_cast<float>(sampleRate));
+    slotPlayer_.prepareStretchers(2, static_cast<float>(sampleRate), maxBlockSize);
     autoMix_.prepare(static_cast<float>(sampleRate));
     delay_.prepare(sampleRate, maxBlockSize);
     limiter_.prepare(sampleRate);
+    monoSubFilter_.prepare(sampleRate);
 
     mixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     mixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
@@ -35,6 +36,7 @@ void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
     slotMixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     delayInL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     delayInR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    interleavedScratch_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);
 
     for (int s = 0; s < kMaxSlots; ++s) {
         slotBufL_[s].assign(static_cast<size_t>(maxBlockSize), 0.f);
@@ -47,7 +49,7 @@ void AudioGraph::findKickSlot() noexcept
 {
     kickSlot_ = -1;
     for (int s = 0; s < kMaxSlots; ++s)
-        if (roles_[s] == SlotRole::Kick) { kickSlot_ = s; return; }
+        if (roles_[s].load(std::memory_order_relaxed) == SlotRole::Kick) { kickSlot_ = s; return; }
 }
 
 void AudioGraph::processBlock(const TransportState& ts,
@@ -73,23 +75,18 @@ void AudioGraph::processBlock(const TransportState& ts,
 
     // ─ 2. SlotPlayer → buffer entrelacé → séparer L/R ────────────────────────
     // Buffer entrelacé temporaire (alloué en prepare, réutilisé chaque bloc
-    // via mixL_/mixR_ qui sont de toute façon effacés ci-dessus).
-    // Astuce : utiliser slotBufL_[0] comme scratch entrelacé (taille = maxBlock_).
-    // On le réutilise — il sera réécrit avant usage.
-    static thread_local std::vector<float> interleavedScratch;
-    if (static_cast<int>(interleavedScratch.size()) < numFrames * 2)
-        interleavedScratch.assign(static_cast<size_t>(numFrames * 2), 0.f);
-    std::fill(interleavedScratch.begin(),
-              interleavedScratch.begin() + numFrames * 2, 0.f);
+    // via interleavedScratch_ qui est de toute façon effacé ci-dessus).
+    std::fill(interleavedScratch_.begin(),
+              interleavedScratch_.begin() + numFrames * 2, 0.f);
 
-    slotPlayer_.processBlock(ts, interleavedScratch.data(), numFrames,
+    slotPlayer_.processBlock(ts, interleavedScratch_.data(), numFrames,
                              events, numEvents);
 
     // SlotMix : contribution des slots (utilisée pour le bus send delay).
     // Le mix final (mixL_/R_) reçoit aussi les entrées externes plus bas.
     for (int i = 0; i < numFrames; ++i) {
-        mixL_[i] = interleavedScratch[static_cast<size_t>(i * 2)];
-        mixR_[i] = interleavedScratch[static_cast<size_t>(i * 2 + 1)];
+        mixL_[i] = interleavedScratch_[static_cast<size_t>(i * 2)];
+        mixR_[i] = interleavedScratch_[static_cast<size_t>(i * 2 + 1)];
     }
     slotMixL_.assign(mixL_.begin(), mixL_.begin() + numFrames);
     slotMixR_.assign(mixR_.begin(), mixR_.begin() + numFrames);
@@ -107,7 +104,7 @@ void AudioGraph::processBlock(const TransportState& ts,
 
         for (int s = 0; s < kMaxSlots; ++s) {
             if (s == kickSlot_) continue;
-            autoMix_.applySidechain(s, roles_[s], kickEnv,
+            autoMix_.applySidechain(s, roles_[s].load(std::memory_order_relaxed), kickEnv,
                                     mixL_.data(), mixR_.data(), numFrames);
         }
     }
@@ -130,7 +127,7 @@ void AudioGraph::processBlock(const TransportState& ts,
     //      sans envoyer en loop dans le délai (send 0 pour ces bus). ───────────
     {
         // Dry EWI : entrée stéréo centrée avec inputGain_.
-        const float ig = inputGain_;
+        const float ig = inputGain_.load(std::memory_order_relaxed);
         if (extInL != nullptr && extInR != nullptr && ig > 0.001f) {
             for (int i = 0; i < numFrames; ++i) {
                 mixL_[static_cast<size_t>(i)] += extInL[i] * ig;
@@ -168,6 +165,10 @@ void AudioGraph::processBlock(const TransportState& ts,
 
     delay_.processAdd(delayInL_.data(), delayInR_.data(),
                       mixL_.data(), mixR_.data(), numFrames);
+
+    // ─ 5b. MonoSubFilter : forcer le sub-bass (< 120 Hz) en mono ─────────────
+    // Évite les annulations de phase sur systèmes mono/bsub.
+    monoSubFilter_.process(mixL_.data(), mixR_.data(), numFrames);
 
     // ─ 6. MasterLimiter → sortie entrelacée ──────────────────────────────────
     limiter_.process(mixL_.data(), mixR_.data(), numFrames);

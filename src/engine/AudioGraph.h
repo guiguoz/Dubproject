@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include <vector>
 #include "engine/Transport.h"
 #include "engine/EventScheduler.h"
@@ -11,6 +12,36 @@
 #include "engine/mix/MixAlgorithms.h"
 
 namespace engine {
+
+// ─── MonoSubFilter ────────────────────────────────────────────────────────────
+// 1er ordre Butterworth LP (6 dB/oct) à fc = 120 Hz — force le sub-bass en mono.
+// Stereo in-place : même état pour L et R (analyse mono sur la somme L+R).
+// Coefficient pré-calculé en prepare(), état audio-thread uniquement.
+struct MonoSubFilter {
+    float a1 = 0.f;
+    float sL = 0.f;   // état du filtre LP sur le canal L
+    float sR = 0.f;   // état du filtre LP sur le canal R
+
+    void prepare(double sampleRate) noexcept {
+        // Butterworth 1er ordre : a1 = -(1 - 2π·fc/fs) / (1 + 2π·fc/fs)
+        const float wc = static_cast<float>(2.0 * 3.14159265 * 120.0 / sampleRate);
+        a1 = -(1.f - wc) / (1.f + wc);
+    }
+
+    void process(float* L, float* R, int numFrames) noexcept {
+        for (int i = 0; i < numFrames; ++i) {
+            // LP sur chaque canal → sub-bass
+            sL = L[i] + a1 * sL;
+            sR = R[i] + a1 * sR;
+            const float monoSub = (sL + sR) * 0.5f;
+            // Remplacer le sub-bass stéréo par la version mono
+            L[i] += monoSub - sL;
+            R[i] += monoSub - sR;
+        }
+    }
+
+    void reset() noexcept { sL = 0.f; sR = 0.f; }
+};
 
 // Rôle V2 → type magic mix (spatialisation runtime M9 étape 6 + worker M9
 // étape 8). Centralisé ici pour un mapping unique façade/graphe.
@@ -65,8 +96,8 @@ public:
                       float serumGain  = 0.f) noexcept;
 
     // Gain du bus d'entrée dry (EWI/sax), 0 = silence.
-    void setInputGain(float g) noexcept { inputGain_ = g; }
-    float getInputGain() const noexcept { return inputGain_; }
+    void setInputGain(float g) noexcept { inputGain_.store(g, std::memory_order_relaxed); }
+    float getInputGain() const noexcept { return inputGain_.load(std::memory_order_relaxed); }
 
     // Accès aux sous-systèmes (pour configuration depuis le message thread).
     SlotPlayer&             slotPlayer()       noexcept { return slotPlayer_; }
@@ -83,11 +114,16 @@ public:
     // (M9 étape 6) si le rôle change.
     void setSlotRole(int slot, SlotRole role) noexcept;
     // Rôle courant du slot (write side / message thread) — pour le worker magic mix.
-    SlotRole slotRole(int slot) const noexcept { return roles_[slot]; }
+    SlotRole slotRole(int slot) const noexcept { return roles_[slot].load(std::memory_order_relaxed); }
 
     // Thread de mix : recalcule les cibles AutoMix à partir des rôles courants.
     // Appelé toutes les 50 ms (thread de mix réel ou simulation offline §11.2).
-    void updateAutoMixTargets() noexcept { autoMix_.computeTargets(roles_); }
+    void updateAutoMixTargets() noexcept {
+        SlotRole snapshot[kMaxSlots];
+        for (int i = 0; i < kMaxSlots; ++i)
+            snapshot[i] = roles_[i].load(std::memory_order_relaxed);
+        autoMix_.computeTargets(snapshot);
+    }
 
 private:
     SlotPlayer        slotPlayer_;
@@ -96,11 +132,12 @@ private:
     TransitionEngine  transition_;
     fx::PingPongDelay delay_;
     fx::MasterLimiter limiter_;
+    MonoSubFilter     monoSubFilter_;
 
-    SlotRole roles_[kMaxSlots] = {};
+    std::atomic<SlotRole> roles_[kMaxSlots] = {};
 
     // Gain du bus d'entrée dry (EWI/sax), appliqué en audio thread.
-    float inputGain_ = 0.8f;
+    std::atomic<float> inputGain_ {0.8f};
 
     // Buffers pré-alloués (zéro allocation en audio callback)
     int maxBlock_ = 0;
@@ -109,6 +146,7 @@ private:
     std::vector<float> mixL_, mixR_;
     std::vector<float> slotMixL_, slotMixR_;   // contribution slots (bus delay)
     std::vector<float> delayInL_, delayInR_;
+    std::vector<float> interleavedScratch_;    // scratch entrelacé (maxBlock × 2)
 
     // Kick slot (−1 si non déterminé)
     int kickSlot_ = -1;

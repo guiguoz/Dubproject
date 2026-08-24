@@ -32,10 +32,15 @@ float SlotPlayer::getPcmSampleRate(int slot) const noexcept {
 
 // ─── prepareStretchers ───────────────────────────────────────────────────────
 
-void SlotPlayer::prepareStretchers(int channels, float sampleRate) noexcept {
+void SlotPlayer::prepareStretchers(int channels, float sampleRate, int maxBlockSize) noexcept {
     sampleRate_ = sampleRate;
     for (int s = 0; s < kSlots; ++s)
         stretchers_[s].prepare(channels, sampleRate);
+    // Pré-allouer les buffers temporaires (zéro allocation en audio thread).
+    tmpL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    tmpR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
+    srcL_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);   // x2 pour timeRatio > 1
+    srcR_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);
 }
 
 // ─── armLoopSync ─────────────────────────────────────────────────────────────
@@ -57,8 +62,10 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
     if (slot < 0 || slot >= kSlots) return;
 
     // Arrêter les voix actives immédiatement
-    for (int v = 0; v < 2; ++v)
+    for (int v = 0; v < 2; ++v) {
         voices_[slot][v] = Voice{};
+        voiceActive_[slot][v].store(false, std::memory_order_relaxed);
+    }
 
     // Rampe de transition neutre (pas de fade résiduel sur un nouveau PCM)
     rampValue_ [slot] = 1.0f;
@@ -82,8 +89,10 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
 void SlotPlayer::clearSlot(int slot) noexcept {
     if (slot < 0 || slot >= kSlots) return;
     loaded_[slot].store(false, std::memory_order_release);
-    for (int v = 0; v < 2; ++v)
+    for (int v = 0; v < 2; ++v) {
         voices_[slot][v] = Voice{};
+        voiceActive_[slot][v].store(false, std::memory_order_relaxed);
+    }
     rampValue_ [slot] = 1.0f;
     rampTarget_[slot] = 1.0f;
     rampLeft_  [slot] = 0;
@@ -167,6 +176,7 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     Voice& voice = voices_[slot][vIdx];
     voice = Voice{};
     voice.active = true;
+    voiceActive_[slot][vIdx].store(true, std::memory_order_relaxed);
 
     // Pour LOOP SYNC : mémoriser l'anchor dans les params.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
@@ -227,14 +237,10 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
     float gL, gR; bool haasOnLeft;
     spatialGains(slot, gL, gR, haasOnLeft);
 
-    // Buffers temporaires planaires pour le stretch (max kCrossfadeLen + numFrames).
-    // On utilise deux petits tableaux statiques locaux : pas d'allocation.
-    // Taille max = kCrossfadeLen (256) << raisonnable pour la pile.
-    static thread_local std::vector<float> tmpL;
-    static thread_local std::vector<float> tmpR;
+    // Buffers temporaires planaires pour le stretch (pré-alloués en prepare).
     const int N = numFrames;
-    if (static_cast<int>(tmpL.size()) < N) tmpL.resize(static_cast<size_t>(N), 0.f);
-    if (static_cast<int>(tmpR.size()) < N) tmpR.resize(static_cast<size_t>(N), 0.f);
+    if (static_cast<int>(tmpL_.size()) < N) tmpL_.resize(static_cast<size_t>(N), 0.f);
+    if (static_cast<int>(tmpR_.size()) < N) tmpR_.resize(static_cast<size_t>(N), 0.f);
 
     // Calculer la position source frame-par-frame depuis le transport.
     // Pour le chemin bypass, on lit directement depuis le PCM.
@@ -275,7 +281,8 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
             }
 
             const float p = std::max(std::abs(sL), std::abs(sR));
-            if (p > slotPeak_[slot]) slotPeak_[slot] = p;
+            if (p > slotPeak_[slot].load(std::memory_order_relaxed))
+                slotPeak_[slot].store(p, std::memory_order_relaxed);
         }
     } else {
         // ── Chemin stretch ────────────────────────────────────────────────
@@ -292,28 +299,26 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
         double phaseRaw0 = elapsed0 / loopLenProject;
         phaseRaw0 -= std::floor(phaseRaw0);
         int64_t srcPos0 = static_cast<int64_t>(phaseRaw0 * durOrig);
-
         // Construire le buffer source planaire (mono ou stéréo).
-        static thread_local std::vector<float> srcL;
-        static thread_local std::vector<float> srcR;
-        if (static_cast<int>(srcL.size()) < inputFrames) srcL.resize(static_cast<size_t>(inputFrames), 0.f);
-        if (static_cast<int>(srcR.size()) < inputFrames) srcR.resize(static_cast<size_t>(inputFrames), 0.f);
+        if (static_cast<int>(srcL_.size()) < inputFrames) srcL_.resize(static_cast<size_t>(inputFrames), 0.f);
+        if (static_cast<int>(srcR_.size()) < inputFrames) srcR_.resize(static_cast<size_t>(inputFrames), 0.f);
 
         for (int f = 0; f < inputFrames; ++f) {
             const int64_t sp = (srcPos0 + static_cast<int64_t>(f))
                                % static_cast<int64_t>(pcm.numFrames);
+
             if (pcm.numChannels == 1) {
-                const float s  = pcm.data[static_cast<size_t>(sp)];
-                srcL[static_cast<size_t>(f)] = s;
-                srcR[static_cast<size_t>(f)] = s;
+                const float s = pcm.data[static_cast<size_t>(sp)];
+                srcL_[static_cast<size_t>(f)] = s;
+                srcR_[static_cast<size_t>(f)] = s;
             } else {
-                srcL[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u];
-                srcR[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u + 1u];
+                srcL_[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u];
+                srcR_[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u + 1u];
             }
         }
 
-        float* inPtrs[2]  = { srcL.data(), srcR.data() };
-        float* outPtrs[2] = { tmpL.data(), tmpR.data() };
+        float* inPtrs[2]  = { srcL_.data(), srcR_.data() };
+        float* outPtrs[2] = { tmpL_.data(), tmpR_.data() };
 
         stretchers_[slot].process(
             const_cast<const float* const*>(inPtrs), inputFrames,
@@ -321,8 +326,8 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
         // Mixer dans la sortie stéréo entrelacée.
         for (int f = 0; f < N; ++f) {
-            const float sL = tmpL[static_cast<size_t>(f)] * gain;
-            const float sR = tmpR[static_cast<size_t>(f)] * gain;
+            const float sL = tmpL_[static_cast<size_t>(f)] * gain;
+            const float sR = tmpR_[static_cast<size_t>(f)] * gain;
             if (haasOnLeft) {
                 out[static_cast<size_t>(f) * 2u]      += applyHaasDelay(slot, sL) * gL;
                 out[static_cast<size_t>(f) * 2u + 1u] += sR * gR;
@@ -333,7 +338,8 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
 
             float p = std::abs(sL);
             if (std::abs(sR) > p) p = std::abs(sR);
-            if (p > slotPeak_[slot]) slotPeak_[slot] = p;
+            if (p > slotPeak_[slot].load(std::memory_order_relaxed))
+                slotPeak_[slot].store(p, std::memory_order_relaxed);
         }
     }
 }
@@ -366,7 +372,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
     for (int f = 0; f < numFrames; ++f) {
         if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
             if (loop) { voice.readPos = 0; voice.readFrac = 0.f; }
-            else       { voice.active = false; return; }
+            else       { deactivateVoice(slot, v); return; }
         }
 
         // Fade-out (stop transport) ou fade-in (attaque initiale)
@@ -381,7 +387,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 if (voice.fadeLeft == 0)
                     deactivateAfter = true;  // sortir après ce frame
             } else {
-                voice.active = false;
+                deactivateVoice(slot, v);
                 return;
             }
         } else if (voice.fadeLeft > 0) {
@@ -421,7 +427,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 ++voice.readPos;
                 if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
                     if (loop) { voice.readPos = 0; voice.readFrac = 0.f; }
-                    else       { voice.active = false; return; }
+                    else       { deactivateVoice(slot, v); return; }
                     break;
                 }
             }
@@ -451,9 +457,10 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
 
         // Pic de sortie du slot (VU) — avant spatialisation
         const float p = std::max(std::abs(sL), std::abs(sR));
-        if (p > slotPeak_[slot]) slotPeak_[slot] = p;
+        if (p > slotPeak_[slot].load(std::memory_order_relaxed))
+            slotPeak_[slot].store(p, std::memory_order_relaxed);
 
-        if (deactivateAfter) { voice.active = false; return; }
+        if (deactivateAfter) { deactivateVoice(slot, v); return; }
     }
 }
 
@@ -514,7 +521,7 @@ void SlotPlayer::processBlock(const TransportState& ts,
     // Avancer les rampes de transition + reset des pics de sortie.
     advanceRamps(numFrames);
     for (int slot = 0; slot < kSlots; ++slot)
-        slotPeak_[slot] = 0.f;
+        slotPeak_[slot].store(0.f, std::memory_order_relaxed);
 
     // Rendre tous les slots actifs
     for (int slot = 0; slot < kSlots; ++slot) {
@@ -536,8 +543,8 @@ void SlotPlayer::processBlock(const TransportState& ts,
             if (vc0.fadingOut) {
                 if (vc0.fadeLeft <= 0) {
                     // Fade terminé — désactiver sans rien rendre
-                    voices_[slot][0] = Voice{};
-                    voices_[slot][1] = Voice{};
+                    deactivateVoice(slot, 0);
+                    deactivateVoice(slot, 1);
                     continue;
                 }
                 fadeScale = vc0.fadeGain;
@@ -547,8 +554,8 @@ void SlotPlayer::processBlock(const TransportState& ts,
                                              / static_cast<float>(vc0.fadeLeft);
                 vc0.fadeLeft -= consumed;
                 if (vc0.fadeLeft <= 0) {
-                    vc0.active       = false;
-                    voices_[slot][1] = Voice{};
+                    deactivateVoice(slot, 0);
+                    deactivateVoice(slot, 1);
                 }
             }
             renderLoopSync(slot, output, numFrames, ts, fadeScale);

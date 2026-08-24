@@ -199,13 +199,13 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Référence v3 (M9 étape 6) — spatialisation runtime pan+Haas appliquée
     // par SlotPlayer à partir du rôle de chaque slot (dérivé dans AudioGraph :
     // Melodic→SYNTH w=0.4, Snare→SNARE w=0.1, Perc→PERC pan=0.3, Pad→PAD
-    // w=0.8 ; KICK/BASS restent centrés). Changement INTENTIONNEL du rendu :
-    // c'est le seul point audible du portage M9. Régénéré via NULL0
-    // (Debug == Release bit-exact, vérifié).
-    //   hashAudio = 0xa00f0dd7fb70bbd0
-    //   hashRms   = 0xec5593f087458af5
-    CHECK(hashAudio == 0xa00f0dd7fb70bbd0ull);
-    CHECK(hashRms   == 0xec5593f087458af5ull);
+    // w=0.8 ; KICK/BASS restent centrés). + MonoSubFilter (1er ordre Butterworth
+    // LP 120 Hz, force le sub-bass en mono). Changement INTENTIONNEL du rendu.
+    // Régénéré via NULL0 (Debug == Release bit-exact, vérifié).
+    //   hashAudio = 0x880bbfc42d304326
+    //   hashRms   = 0xb111cdaf25efeeb1
+    CHECK(hashAudio == 0x880bbfc42d304326ull);
+    CHECK(hashRms   == 0xb111cdaf25efeeb1ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

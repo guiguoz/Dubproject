@@ -75,8 +75,8 @@ public:
     void armLoopSync(int slot, int loopBeats, float timeRatio, float semitones,
                      int64_t anchorSample) noexcept;
 
-    // Appelé une fois au changement de device (prépare les stretchers).
-    void prepareStretchers(int channels, float sampleRate) noexcept;
+    // Appelé une fois au changement de device (prépare les stretchers + buffers).
+    void prepareStretchers(int channels, float sampleRate, int maxBlockSize = 2048) noexcept;
 
     // ── Snapshot PCM (lecture message thread — légère race OK, voir §11.1) ──
     // Retourne un downmix mono du PCM chargé — utilisé par l'UI pour les
@@ -150,18 +150,19 @@ public:
     }
     bool isVoiceActive(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots) return false;
-        return voices_[slot][0].active || voices_[slot][1].active;
+        return voiceActive_[slot][0].load(std::memory_order_relaxed)
+            || voiceActive_[slot][1].load(std::memory_order_relaxed);
     }
 
     // Pic de sortie du slot pour le bloc courant (VU — lu depuis message thread).
     float getSlotPeak(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots) return 0.f;
-        return slotPeak_[slot];
+        return slotPeak_[slot].load(std::memory_order_relaxed);
     }
     float playheadRatio(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots || pcm_[slot].numFrames == 0) return 0.f;
         for (int v = 0; v < 2; ++v) {
-            if (voices_[slot][v].active)
+            if (voiceActive_[slot][v].load(std::memory_order_relaxed))
                 return static_cast<float>(voices_[slot][v].readPos) /
                        static_cast<float>(pcm_[slot].numFrames);
         }
@@ -182,6 +183,10 @@ private:
     // Indique si le slot a un PCM chargé (écrit message thread, lu audio thread).
     std::atomic<bool> loaded_[kSlots] {};
 
+    // Flag cross-thread pour voices_[].active : l'audio thread écrit (relaxed),
+    // le message thread lit (relaxed). Pas de stale critique pour un VU/état UI.
+    std::atomic<bool> voiceActive_[kSlots][2] = {};
+
     // ── Rampe de gain de transition (EventType::GainRamp) ─────────────────────
     // Multiplicateur appliqué au-dessus du gain du slot. 1.0 = neutre.
     // Utilisé pour les fades Enter/Exit de TransitionEngine.
@@ -196,7 +201,11 @@ private:
     int   haasWritePos_[kSlots] = {};
 
     // Pic de sortie par slot (audio thread write, message thread read pour VU).
-    float slotPeak_[kSlots] = {};
+    std::atomic<float> slotPeak_[kSlots] = {};
+
+    // Buffers temporaires pré-alloués pour renderLoopSync (zéro allocation audio).
+    std::vector<float> tmpL_, tmpR_;      // sortie stéréo (numFrames)
+    std::vector<float> srcL_, srcR_;      // buffer source (inputFrames)
 
     float sampleRate_ = 44100.f;
 
@@ -215,6 +224,12 @@ private:
 
     // Déclenche une voix sur le slot (choisit voice[0] ou voice[1]).
     void handleTrigger(int slot, int64_t transportAnchor) noexcept;
+
+    // Désactive une voix (écrit voice.active + voiceActive_ atomique).
+    void deactivateVoice(int slot, int v) noexcept {
+        voices_[slot][v].active = false;
+        voiceActive_[slot][v].store(false, std::memory_order_relaxed);
+    }
 
     // Rend une voix dans le buffer stéréo de sortie.
     void renderVoice(int slot, int v, float* out, int numFrames,
