@@ -68,6 +68,18 @@ static EngineEvent makeTrigger(int slot) {
     return ev;
 }
 
+// Wrap un EngineEvent en EventWithOffset (offset 0 par défaut).
+static EventWithOffset wrap(const EngineEvent& ev, int32_t offset = 0) {
+    return { offset, ev };
+}
+
+// Wrap un tableau d'EngineEvent en EventWithOffset.
+static void wrapAll(const EngineEvent* src, int count,
+                    EventWithOffset* dst) {
+    for (int i = 0; i < count; ++i)
+        dst[i] = { 0, src[i] };
+}
+
 // ─── T-SP1a : ONE-SHOT mono → sortie bit-identique au PCM (gain 1.0) ─────────
 TEST_CASE("T-SP1a: ONE-SHOT mono output is bit-identical to PCM (no fade)", "[slotplayer]") {
     // Valeur frame 0 = 0.001f (== threshold, pas de fade)
@@ -79,7 +91,7 @@ TEST_CASE("T-SP1a: ONE-SHOT mono output is bit-identical to PCM (no fade)", "[sl
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     // Vérifier chaque frame : L == R == pcm[i]
     for (int i = 0; i < N; ++i) {
@@ -99,7 +111,7 @@ TEST_CASE("T-SP1b: ONE-SHOT stereo output is bit-identical to PCM", "[slotplayer
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     for (int i = 0; i < N; ++i) {
         const float expL =  static_cast<float>(i + 1) * 0.001f;
@@ -119,7 +131,7 @@ TEST_CASE("T-SP1c: FREE mode output matches PCM for first N frames", "[slotplaye
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     for (int i = 0; i < N; ++i) {
         const float expected = static_cast<float>(i + 1) * 0.001f;
@@ -141,7 +153,9 @@ TEST_CASE("T-SP1d: muted slot produces zero output", "[slotplayer]") {
     evs[1].time = 0; evs[1].type = EventType::Trigger;  evs[1].slot = 0;
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, evs, 2);
+    EventWithOffset wrappedEvs[2];
+    wrapAll(evs, 2, wrappedEvs);
+    sp.processBlock(ts, out.data(), N, wrappedEvs, 2);
 
     for (int i = 0; i < N * 2; ++i)
         REQUIRE(out[static_cast<size_t>(i)] == 0.f);
@@ -160,7 +174,7 @@ TEST_CASE("T-SP1e: overlapping triggers sum two voices", "[slotplayer]") {
     {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), N, &ev, 1);
+        sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
         // La voix avance de N frames (readPos = N → inactive pour ONE-SHOT)
     }
 
@@ -173,14 +187,14 @@ TEST_CASE("T-SP1e: overlapping triggers sum two voices", "[slotplayer]") {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> dummy(static_cast<size_t>(N / 2) * 2u, 0.f);
         // Rendre seulement N/2 frames : voice[0] a readPos = N/2 (toujours active)
-        sp.processBlock(ts, dummy.data(), N / 2, &ev, 1);
+        sp.processBlock(ts, dummy.data(), N / 2, &wrap(ev), 1);
     }
 
     // Trigger 2 : lance voice[1] (voice[0] encore active)
     {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> out(static_cast<size_t>(N / 2) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), N / 2, &ev, 1);
+        sp.processBlock(ts, out.data(), N / 2, &wrap(ev), 1);
 
         // voice[0] est à readPos = N/2, voice[1] est à readPos = 0
         // frame f : voice[0] → (N/2 + f + 1)*0.001f, voice[1] → (f + 1)*0.001f
@@ -205,7 +219,7 @@ TEST_CASE("T-SP1f: micro-fade applies to first 16 frames when first sample > 0.0
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     // Pendant les 16 premiers frames, le gain va de 0 → 1 (linéaire, step = 1/16).
     // frame 0 : fadeGain=0 → g=0, puis fadeGain += 1/16
@@ -238,7 +252,7 @@ TEST_CASE("T-SP1g: ONE-SHOT voice goes silent after last frame", "[slotplayer]")
     {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), N, &ev, 1);
+        sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
     }
 
     // Deuxième bloc : sans événement → sortie doit être zéro
@@ -268,7 +282,7 @@ TEST_CASE("T-SP6a: pan +1 → tout à droite (égal-power, gL=0, gR=1)", "[slotp
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     for (int i = 0; i < N; ++i) {
         const float expected = static_cast<float>(i + 1) * 0.001f;
@@ -292,7 +306,7 @@ TEST_CASE("T-SP6b: Haas width 0.4 → droit retardé de 441 samples (25 ms/×1)"
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     for (int f = 0; f < N; ++f) {
         // Gauche jamais retardée : v × cos(π/4)
@@ -315,7 +329,7 @@ TEST_CASE("T-SP6c: setSpatial(0,0) → identité bit-exact", "[slotplayer][spati
     const EngineEvent ev = makeTrigger(0);
 
     std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-    sp.processBlock(ts, out.data(), N, &ev, 1);
+    sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
 
     for (int i = 0; i < N; ++i) {
         const float expected = static_cast<float>(i + 1) * 0.001f;
@@ -360,7 +374,7 @@ TEST_CASE("T-SP2: SR 44.1→48 kHz correction — pitch-correct duration", "[slo
 
         std::vector<float> out(static_cast<size_t>(kOut48k) * 2u, 0.f);
         const EngineEvent ev = makeTrigger(0);
-        sp.processBlock(ts, out.data(), kOut48k, &ev, 1);
+        sp.processBlock(ts, out.data(), kOut48k, &wrap(ev), 1);
 
         // Le PCM doit être entièrement consommé : voix inactive.
         REQUIRE_FALSE(sp.isVoiceActive(0));
@@ -383,7 +397,7 @@ TEST_CASE("T-SP2: SR 44.1→48 kHz correction — pitch-correct duration", "[slo
 
         std::vector<float> out(static_cast<size_t>(kPcmFrames) * 2u, 0.f);
         const EngineEvent ev = makeTrigger(0);
-        sp.processBlock(ts, out.data(), kPcmFrames, &ev, 1);
+        sp.processBlock(ts, out.data(), kPcmFrames, &wrap(ev), 1);
 
         // 441 output frames @48 kHz → 441 × 0.91875 ≈ 405 PCM frames consommées.
         // La voix NE DOIT PAS être éteinte ici (ce serait la régression).
@@ -399,7 +413,7 @@ TEST_CASE("T-SP2: SR 44.1→48 kHz correction — pitch-correct duration", "[slo
 
         std::vector<float> out(static_cast<size_t>(kPcmFrames + 1) * 2u, 0.f);
         const EngineEvent ev = makeTrigger(0);
-        sp.processBlock(ts, out.data(), kPcmFrames + 1, &ev, 1);
+        sp.processBlock(ts, out.data(), kPcmFrames + 1, &wrap(ev), 1);
 
         REQUIRE_FALSE(sp.isVoiceActive(0));
         // Frame 441 (index kPcmFrames) = silence : PCM épuisé au bon moment.

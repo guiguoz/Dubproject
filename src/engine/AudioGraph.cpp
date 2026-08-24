@@ -29,6 +29,7 @@ void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
     delay_.prepare(sampleRate, maxBlockSize);
     limiter_.prepare(sampleRate);
     monoSubFilter_.prepare(sampleRate);
+    monoSubFilter_.reset();
 
     mixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     mixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
@@ -53,7 +54,7 @@ void AudioGraph::findKickSlot() noexcept
 }
 
 void AudioGraph::processBlock(const TransportState& ts,
-                               const EngineEvent* events, int numEvents,
+                               const EventWithOffset* events, int numEvents,
                                float* output, int numFrames,
                                const float* extInL, const float* extInR,
                                const float* serumL, const float* serumR,
@@ -61,7 +62,8 @@ void AudioGraph::processBlock(const TransportState& ts,
 {
     if (numFrames <= 0 || numFrames > maxBlock_) {
         // Sortie silencieuse si le bloc est invalide
-        std::memset(output, 0, static_cast<size_t>(numFrames) * 2 * sizeof(float));
+        const int safeFrames = std::min(numFrames, maxBlock_);
+        std::memset(output, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
         return;
     }
 

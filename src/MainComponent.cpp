@@ -105,6 +105,10 @@ MainComponent::MainComponent()
     addAndMakeVisible(sceneCopyBtn_);
     updateSceneLabel();
 
+    // Initialize StepSequencerPanel early — lambdas below dereference it.
+    stepSeqPanel_ = std::make_unique<ui::StepSequencerPanel>(&facade_);
+    addAndMakeVisible(stepSeqPanel_.get());
+
     // ── Sidebar lower: transport (▶/■, TAP, BPM, ⚡) ─────────────────────────
     sidebarPlayBtn_.setButtonText(juce::CharPointer_UTF8("\xe2\x96\xb6"));  // ▶
     // Keep accent-green text for semantic play identity, LAF handles background
@@ -643,10 +647,6 @@ MainComponent::MainComponent()
 
     // Auto-lancement IA au démarrage (après init audio)
     juce::MessageManager::callAsync([this] { triggerAI(); });
-
-    // Initialize StepSequencerPanel with facade reference (after facade construction)
-    stepSeqPanel_ = std::make_unique<ui::StepSequencerPanel>(&facade_);
-    addAndMakeVisible(stepSeqPanel_.get());
 
     setSize(1280, 900);
     setAudioChannels(1, 2);

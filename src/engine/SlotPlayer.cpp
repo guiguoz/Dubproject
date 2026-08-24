@@ -468,60 +468,85 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
 
 void SlotPlayer::processBlock(const TransportState& ts,
                               float* output, int32_t numFrames,
-                              const EngineEvent* events, int numEvents) noexcept {
-    // Traiter les événements pour ce bloc (triés chronologiquement)
-    for (int i = 0; i < numEvents; ++i) {
-        const EngineEvent& ev = events[i];
-        const int slot = static_cast<int>(ev.slot);
-        if (slot < 0 || slot >= kSlots) continue;
-
-        switch (ev.type) {
-            case EventType::Trigger:
-                if (loaded_[slot].load(std::memory_order_acquire))
-                    handleTrigger(slot, ts.blockStart);
-                break;
-            case EventType::Release: {
-                // Fade-out court (~10 ms) pour éviter les clics au stop transport.
-                // Ne ré-arme pas si déjà en cours de fade-out.
-                const int fadeLen = std::max(1, static_cast<int>(sampleRate_ * 0.01f));
-                for (int vi = 0; vi < 2; ++vi) {
-                    Voice& vc = voices_[slot][vi];
-                    if (!vc.active || vc.fadingOut) continue;
-                    vc.fadingOut = true;
-                    vc.fadeLeft  = fadeLen;
-                    // fadeGain conserve sa valeur courante (1.0 en régime, <1 si attaque)
-                }
-                break;
-            }
-            case EventType::Mute:
-                params_[slot].muted.store(true, std::memory_order_relaxed);
-                break;
-            case EventType::Unmute:
-                params_[slot].muted.store(false, std::memory_order_relaxed);
-                break;
-            case EventType::GainRamp: {
-                // Fade de transition Enter/Exit : a = durée en samples, b = cible.
-                // La valeur courante (rampValue_) est conservée comme point de départ.
-                const int dur = static_cast<int>(ev.a);
-                if (dur <= 0) {
-                    rampValue_ [slot] = ev.b;
-                    rampTarget_[slot] = ev.b;
-                    rampLeft_  [slot] = 0;
-                } else {
-                    rampTarget_[slot] = ev.b;
-                    rampLeft_  [slot] = dur;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
+                              const EventWithOffset* events, int numEvents) noexcept {
     // Avancer les rampes de transition + reset des pics de sortie.
     advanceRamps(numFrames);
     for (int slot = 0; slot < kSlots; ++slot)
         slotPeak_[slot].store(0.f, std::memory_order_relaxed);
+
+    // Dispatch temporel : traiter les events et renderer en sous-blocs
+    // aux frontières d'events pour un timing sub-bloc correct.
+    int evIdx = 0;
+    int renderPos = 0;
+
+    while (renderPos < numFrames) {
+        // Trouver le prochain event dans ce sous-bloc
+        int nextEventPos = numFrames;  // par défaut, renderer jusqu'à la fin
+        if (evIdx < numEvents) {
+            nextEventPos = events[evIdx].offset;
+            if (nextEventPos > numFrames) nextEventPos = numFrames;
+        }
+
+        // Traiter les events à cette position
+        while (evIdx < numEvents && events[evIdx].offset == nextEventPos) {
+            const EngineEvent& ev = events[evIdx].ev;
+            const int slot = static_cast<int>(ev.slot);
+            if (slot >= 0 && slot < kSlots) {
+                switch (ev.type) {
+                    case EventType::Trigger:
+                        if (loaded_[slot].load(std::memory_order_acquire))
+                            handleTrigger(slot, ts.blockStart);
+                        break;
+                    case EventType::Release: {
+                        const int fadeLen = std::max(1, static_cast<int>(sampleRate_ * 0.01f));
+                        for (int vi = 0; vi < 2; ++vi) {
+                            Voice& vc = voices_[slot][vi];
+                            if (!vc.active || vc.fadingOut) continue;
+                            vc.fadingOut = true;
+                            vc.fadeLeft  = fadeLen;
+                        }
+                        break;
+                    }
+                    case EventType::Mute:
+                        params_[slot].muted.store(true, std::memory_order_relaxed);
+                        break;
+                    case EventType::Unmute:
+                        params_[slot].muted.store(false, std::memory_order_relaxed);
+                        break;
+                    case EventType::GainRamp: {
+                        const int dur = static_cast<int>(ev.a);
+                        if (dur <= 0) {
+                            rampValue_ [slot] = ev.b;
+                            rampTarget_[slot] = ev.b;
+                            rampLeft_  [slot] = 0;
+                        } else {
+                            rampTarget_[slot] = ev.b;
+                            rampLeft_  [slot] = dur;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+            ++evIdx;
+        }
+
+        // Renderer le sous-bloc [renderPos, nextEventPos)
+        const int subLen = nextEventPos - renderPos;
+        if (subLen > 0) {
+            float* subOut = output + static_cast<size_t>(renderPos) * 2u;
+            renderSlots(ts, subOut, subLen, ts.blockStart + renderPos);
+        }
+        renderPos = nextEventPos;
+    }
+}
+
+// ─── renderSlots (extrait de l'ancien processBlock) ──────────────────────────
+
+void SlotPlayer::renderSlots(const TransportState& ts,
+                             float* output, int32_t numFrames,
+                             int64_t blockStart) noexcept {
 
     // Rendre tous les slots actifs
     for (int slot = 0; slot < kSlots; ++slot) {

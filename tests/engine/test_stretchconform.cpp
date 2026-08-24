@@ -8,6 +8,11 @@
 
 using namespace engine;
 
+// Wrap un EngineEvent en EventWithOffset (offset 0 par défaut).
+static EventWithOffset wrap(const EngineEvent& ev, int32_t offset = 0) {
+    return { offset, ev };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 static constexpr float kSampleRate = 44100.f;
@@ -129,7 +134,7 @@ TEST_CASE("T-SP2: LOOP SYNC drift — downbeat stays within ±2 ms over 1000 cyc
             std::vector<float> out(static_cast<size_t>(blk) * 2u, 0.f);
 
             if (!triggered) {
-                sp.processBlock(ts, out.data(), blk, &ev, 1);
+                sp.processBlock(ts, out.data(), blk, &wrap(ev), 1);
                 triggered = true;
             } else {
                 sp.processBlock(ts, out.data(), blk, nullptr, 0);

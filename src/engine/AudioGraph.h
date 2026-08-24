@@ -18,21 +18,22 @@ namespace engine {
 // Stereo in-place : même état pour L et R (analyse mono sur la somme L+R).
 // Coefficient pré-calculé en prepare(), état audio-thread uniquement.
 struct MonoSubFilter {
-    float a1 = 0.f;
+    float aLP = 0.f;  // coeff LP Butterworth 1er ordre : exp(-2π·fc/fs)
     float sL = 0.f;   // état du filtre LP sur le canal L
     float sR = 0.f;   // état du filtre LP sur le canal R
 
     void prepare(double sampleRate) noexcept {
-        // Butterworth 1er ordre : a1 = -(1 - 2π·fc/fs) / (1 + 2π·fc/fs)
+        // Butterworth 1er ordre LP : a = exp(-2π·fc/fs), fc = 120 Hz
         const float wc = static_cast<float>(2.0 * 3.14159265 * 120.0 / sampleRate);
-        a1 = -(1.f - wc) / (1.f + wc);
+        aLP = std::exp(-wc);
     }
 
     void process(float* L, float* R, int numFrames) noexcept {
+        const float oneMinusA = 1.f - aLP;
         for (int i = 0; i < numFrames; ++i) {
-            // LP sur chaque canal → sub-bass
-            sL = L[i] + a1 * sL;
-            sR = R[i] + a1 * sR;
+            // LP sur chaque canal → sub-bass (< 120 Hz)
+            sL = oneMinusA * L[i] + aLP * sL;
+            sR = oneMinusA * R[i] + aLP * sR;
             const float monoSub = (sL + sR) * 0.5f;
             // Remplacer le sub-bass stéréo par la version mono
             L[i] += monoSub - sL;
@@ -89,7 +90,7 @@ public:
     // extInL/extInR : entrée dry (EWI/sax) à centrer, + inputGain_ (nul si nullptr).
     // serumL/serumR : sortie Serum post-proc, multipliée par serumGain (nul si nullptr).
     void processBlock(const TransportState& ts,
-                      const EngineEvent* events, int numEvents,
+                      const EventWithOffset* events, int numEvents,
                       float* output, int numFrames,
                       const float* extInL = nullptr, const float* extInR = nullptr,
                       const float* serumL = nullptr, const float* serumR = nullptr,

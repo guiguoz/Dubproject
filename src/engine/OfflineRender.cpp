@@ -104,11 +104,17 @@ std::vector<float> renderOffline(const OfflineSession& session, int64_t numSampl
             nextMixAt = ts.blockStart + mixInterval;
         }
 
-        // ── Events → graphe ───────────────────────────────────────────────────
-        EngineEvent evBuf[256];
-        const int evCount = std::min(scheduler.size(), 256);
-        for (int i = 0; i < evCount; ++i)
-            evBuf[i] = scheduler.at(i);
+        // ── Events → graphe (dispatch temporel) ──────────────────────────────
+        EventWithOffset evBuf[256];
+        int evCount = 0;
+        scheduler.processBlock(ts.blockStart, n,
+            [&evBuf, &evCount](int32_t offset, const EngineEvent& ev) {
+                if (evCount < 256) {
+                    evBuf[evCount].offset = offset;
+                    evBuf[evCount].ev     = ev;
+                    ++evCount;
+                }
+            });
 
         graph.processBlock(ts, evBuf, evCount, interleaved.data(), n);
         scheduler.clear();

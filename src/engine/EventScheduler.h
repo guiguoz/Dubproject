@@ -27,6 +27,13 @@ struct EngineEvent {
     float     a, b;   // params selon type
 };
 
+// EngineEvent avec offset en samples depuis le début du bloc courant.
+// Utilisé par SlotPlayer pour le dispatch temporel sub-bloc.
+struct EventWithOffset {
+    int32_t   offset;  // position dans le bloc (0 = début)
+    EngineEvent ev;
+};
+
 // File d'événements triée par time, capacité fixe 256 — ZÉRO allocation.
 // Overflow : drop silencieux + compteur debug.
 // Thread-model : appelé depuis le thread audio uniquement (pas de lock).

@@ -113,11 +113,19 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     graph_.sequencer().generateEvents(ts, blockStart, numSamples,
                                       swingFactor_, scheduler_);
 
-    // ── Extraire les events → buffer stack (pas d'allocation) ────────────────
-    EngineEvent evBuf[256];
-    const int evCount = std::min(scheduler_.size(), 256);
-    for (int i = 0; i < evCount; ++i)
-        evBuf[i] = scheduler_.at(i);
+    // ── Dispatch temporel : events avec offset dans le bloc ───────────────────
+    // Utilise EventScheduler::processBlock() qui filtre par time et calcule
+    // l'offset en samples depuis le début du bloc pour chaque event.
+    EventWithOffset evBuf[256];
+    int evCount = 0;
+    scheduler_.processBlock(blockStart, numSamples,
+        [&evBuf, &evCount](int32_t offset, const EngineEvent& ev) {
+            if (evCount < 256) {
+                evBuf[evCount].offset = offset;
+                evBuf[evCount].ev     = ev;
+                ++evCount;
+            }
+        });
 
     // ── Flush delay si stop demandé depuis message thread ────────────────────
     if (delayResetPending_.exchange(false, std::memory_order_acq_rel))

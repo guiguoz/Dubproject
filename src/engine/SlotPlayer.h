@@ -62,10 +62,10 @@ public:
     // Traite un bloc pour tous les slots actifs.
     // output : buffer stéréo entrelacé [L0,R0,L1,R1,...], numFrames frames.
     // Contenu AJOUTÉ (+=) au buffer — wet-only additif.
-    // events : EngineEvents triés chronologiquement pour ce bloc.
+    // events : events avec offset temporel dans le bloc (triés par offset croissant).
     void processBlock(const TransportState& ts,
                       float* output, int32_t numFrames,
-                      const EngineEvent* events, int numEvents) noexcept;
+                      const EventWithOffset* events, int numEvents) noexcept;
 
     // Active/désactive le mode LOOP SYNC pour un slot (message thread).
     // loopBeats : durée de la loop en beats (ex. 8 = 2 mesures 4/4).
@@ -239,6 +239,11 @@ private:
     // fadeScale : multiplicateur appliqué au gain de sortie (1.0 = normal, 0.0 = silence).
     void renderLoopSync(int slot, float* out, int numFrames,
                         const TransportState& ts, float fadeScale = 1.0f) noexcept;
+
+    // Rend tous les slots actifs dans le buffer de sortie (appelé par processBlock en sous-blocs).
+    void renderSlots(const TransportState& ts,
+                     float* output, int32_t numFrames,
+                     int64_t blockStart) noexcept;
 };
 
 } // namespace engine
