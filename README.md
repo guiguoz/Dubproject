@@ -84,7 +84,7 @@ without retraining. Slot 8 uses a heuristic path: `ContentType::LOOP` EQ preset
 - **Playhead animation**: white vertical line tracking sample read position in real time
 - VU meter with exponential smoothing (attack 0.3, release 0.05)
 - Per-slot button accent colours: Load=green, Edit=cyan, Mute=red, Solo=amber
-- `SaxFXFonts` / `SaxFXLayout` / `AnimatedValue` design system files
+- `SaxFXLayout` / `AnimatedValue` design system files
 - Inter font family, uppercase tracking labels
 
 ### Sample Editor
@@ -202,7 +202,6 @@ Dubproject/   (nom du dossier local peut varier)
 │   │   ├── SaxOsLookAndFeel      Neon dark theme
 │   │   ├── SaxFXLookAndFeel      Original theme
 │   │   ├── Colours.h             Palette + per-effect accents
-│   │   ├── SaxFXFonts.h          Typography scale (xxs→huge, mono/sans/bold)
 │   │   ├── SaxFXLayout.h         Spacing, radius, border constants
 │   │   ├── AnimatedValue.h       Cubic-out interpolator for smooth UI transitions
 │   │   ├── NeonButton.h          TextButton + glow + configurable hover animation (setFadeOutMs)
@@ -456,7 +455,7 @@ AKAI EWI USB (MIDI in) + Focusrite Scarlett (audio in optionnel)
 | NeonButton | Custom `TextButton` subclass with 3-layer glow + cubic-out hover (80 ms in, configurable out via `setFadeOutMs`); per-type accent: Load=green, Edit=cyan, Mute=red, Solo=amber; Edit/Mute/Solo snap off instantly |
 | Waveform preview | 200-bin peak envelope drawn in each slot LCD zone; gradient cyan→green, symmetric bars |
 | Playhead animation | `Sampler::getSlotPlayheadRatio()` feeds a white vertical line that tracks sample read position at 30 fps |
-| Design system | `SaxFXFonts.h` (mono/sans/bold scale), `SaxFXLayout.h` (spacing, radii, borders), `AnimatedValue.h` (cubic-out helper) |
+| Design system | `SaxFXLayout.h` (spacing, radii, borders), `AnimatedValue.h` (cubic-out helper) |
 | Sample editor | `[ED]` button per slot opens waveform + trim dialog: draggable IN/OUT markers, Play/Stop preview, Apply reloads trimmed PCM |
 | Solo per slot | Toggle mutes all other slots via `Sampler::setSoloSlot()`; amber glow on active solo button |
 | Project save v5 | AI mix state, all 8 scenes, master key persisted in `.saxfx` JSON |
