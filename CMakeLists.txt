@@ -17,6 +17,19 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_SOURCE_DIR}/bin")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ThreadSanitizer (optionnel, Linux uniquement)
+# Usage : cmake -DSAXFX_ENABLE_TSAN=ON -DCMAKE_CXX_COMPILER=clang++ ..
+#         cmake --build . --target EngineTests
+#         ./bin/EngineTests
+# ─────────────────────────────────────────────────────────────────────────────
+option(SAXFX_ENABLE_TSAN "Enable ThreadSanitizer (requires Clang/GCC on Linux)" OFF)
+if(SAXFX_ENABLE_TSAN)
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=thread)
+    message(STATUS "ThreadSanitizer ENABLED")
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # JUCE — via submodule dans third_party/JUCE
 # ─────────────────────────────────────────────────────────────────────────────
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/JUCE/CMakeLists.txt")
