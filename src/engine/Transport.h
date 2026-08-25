@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 
@@ -50,12 +51,41 @@ inline int64_t nextBoundary(const TransportState& ts, int64_t stepsPerCycle) noe
     return sampleOfStep(ts, nextStep);
 }
 
+// ─── Spinlock non-récursif (basé sur atomic_flag) ──────────────────────────
+// Object lock-free pour proteger des sections critiques courtes.
+// Contention quasi-nulle dans notre cas (message thread lit ~60 Hz, audio écrit 1x/bloc).
+class SpinLock {
+public:
+    struct ScopedLockType {
+        explicit ScopedLockType(SpinLock& sl) noexcept : lock_(sl) { lock_.lock(); }
+        ~ScopedLockType() noexcept { lock_.unlock(); }
+        ScopedLockType(const ScopedLockType&) = delete;
+        ScopedLockType& operator=(const ScopedLockType&) = delete;
+    private:
+        SpinLock& lock_;
+    };
+
+    void lock() noexcept {
+        while (flag_.test_and_set(std::memory_order_acquire))
+            ; // spin
+    }
+    bool try_lock() noexcept {
+        return !flag_.test_and_set(std::memory_order_acquire);
+    }
+    void unlock() noexcept {
+        flag_.clear(std::memory_order_release);
+    }
+private:
+    std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+};
+
 // ─── Classe Transport ────────────────────────────────────────────────────────
 
 class Transport {
 public:
     // Appelé au changement de device ou au démarrage.
     // Remet samplePos à 0 et recalcule les dérivés.
+    // Pas de lock nécessaire : appelé avant le démarrage audio.
     void prepare(double sampleRate, double bpm) noexcept {
         state_.sampleRate     = sampleRate;
         state_.bpm            = bpm;
@@ -68,6 +98,7 @@ public:
 
     // Démarre la lecture depuis 0 (départ propre).
     void play() noexcept {
+        SpinLock::ScopedLockType scoped(spinlock_);
         state_.samplePos  = 0;
         state_.blockStart = 0;
         state_.playing    = true;
@@ -75,12 +106,14 @@ public:
 
     // Stop — l'arrêt audio (fades) est géré par le scheduler, pas ici.
     void stop() noexcept {
+        SpinLock::ScopedLockType scoped(spinlock_);
         state_.playing = false;
     }
 
     // Change le BPM sans reset de samplePos ni de playing.
     void setBpm(double bpm) noexcept {
         if (bpm <= 0.0) return;
+        SpinLock::ScopedLockType scoped(spinlock_);
         state_.bpm            = bpm;
         state_.samplesPerBeat = state_.sampleRate * 60.0 / bpm;
         state_.samplesPerStep = state_.samplesPerBeat / 4.0;
@@ -91,6 +124,7 @@ public:
     // blockStart est figé au DÉBUT du bloc courant (avant l'avancement) :
     // le snapshot décrit donc le bloc [blockStart, samplePos).
     const TransportState& advance(int32_t numSamples) noexcept {
+        SpinLock::ScopedLockType scoped(spinlock_);
         if (state_.playing) {
             state_.blockStart = state_.samplePos;
             state_.samplePos += static_cast<int64_t>(numSamples);
@@ -98,10 +132,18 @@ public:
         return state_;
     }
 
+    // Audio thread only — retourne la ref interne (pas de lock).
     const TransportState& state() const noexcept { return state_; }
+
+    // Thread-safe : copie du snapshot pour le message thread.
+    TransportState snapshot() const noexcept {
+        SpinLock::ScopedLockType scoped(spinlock_);
+        return state_;
+    }
 
 private:
     TransportState state_;
+    mutable SpinLock spinlock_;
 };
 
 } // namespace engine

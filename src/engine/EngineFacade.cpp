@@ -22,7 +22,7 @@ void EngineFacade::prepare(double sampleRate, int maxBlockSize) noexcept
     sampleRate_   = sampleRate;
     maxBlockSize_ = maxBlockSize;
 
-    const double bpm = (transport_.state().bpm > 0.0) ? transport_.state().bpm : 120.0;
+    const double bpm = (transport_.snapshot().bpm > 0.0) ? transport_.snapshot().bpm : 120.0;
     transport_.prepare(sampleRate, bpm);
     graph_.prepare(sampleRate, maxBlockSize);
 
@@ -111,7 +111,7 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
         pendingTransLen_.store(0, std::memory_order_release);
     }
     graph_.sequencer().generateEvents(ts, blockStart, numSamples,
-                                      swingFactor_, scheduler_);
+                                      swingFactor_.load(std::memory_order_relaxed), scheduler_);
 
     // ── Dispatch temporel : events avec offset dans le bloc ───────────────────
     // Utilise EventScheduler::processBlock() qui filtre par time et calcule
@@ -285,7 +285,7 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
 
         // Publier le rôle analysé (fiabilité = confiance ONNX suffisante et rôle
         // non indéterminé). Lecture sur message thread via release/acquire.
-        slotRoleAnalyzed_[slot]  = mapRole(result.role);
+        slotRoleAnalyzed_[slot].store(mapRole(result.role), std::memory_order_release);
         const bool reliable = (result.roleConfidence >= 0.75f &&
                                result.role != SlotRoleV2::Unknown);
         slotRoleReliable_[slot].store(reliable, std::memory_order_release);
@@ -344,7 +344,7 @@ void EngineFacade::clearSlot(int slot) noexcept
     slotPath_[slot].clear();
     slotTrimStart_[slot] = 0;
     slotTrimEnd_[slot]   = -1;
-    slotRoleAnalyzed_[slot] = SlotRole::Loop;
+    slotRoleAnalyzed_[slot].store(SlotRole::Loop, std::memory_order_relaxed);
     slotRoleReliable_[slot].store(false, std::memory_order_release);
 }
 
@@ -465,7 +465,7 @@ void EngineFacade::triggerMagicMix() noexcept
     magicMixBusy_.store(true, std::memory_order_release);
 
     // ── Snapshot runtime (message thread) ────────────────────────────────────
-    const SceneData& sc = sceneStore_.getScene(currentScene_);
+    const SceneData& sc = sceneStore_.getScene(currentScene_.load(std::memory_order_relaxed));
     mix::MixWorkerInputs in = captureMixSnapshot(
         sc, graph_, slotLoaded_, getBpm(), sampleRate_,
         serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
@@ -499,7 +499,7 @@ void EngineFacade::triggerAiMagicMix(
     if (magicMixBusy_.load(std::memory_order_acquire)) return;
     magicMixBusy_.store(true, std::memory_order_release);
 
-    const SceneData& sc = sceneStore_.getScene(currentScene_);
+    const SceneData& sc = sceneStore_.getScene(currentScene_.load(std::memory_order_relaxed));
     mix::MixWorkerInputs in = captureMixSnapshot(
         sc, graph_, slotLoaded_, getBpm(), sampleRate_,
         serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
@@ -625,7 +625,7 @@ void EngineFacade::setSlotRole(int slot, SlotRole role) noexcept
 engine::SlotRole EngineFacade::slotRole(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return SlotRole::Loop;
-    return slotRoleAnalyzed_[static_cast<std::size_t>(slot)];
+    return slotRoleAnalyzed_[static_cast<std::size_t>(slot)].load(std::memory_order_acquire);
 }
 
 bool EngineFacade::isSlotRoleReliable(int slot) const noexcept
@@ -739,7 +739,7 @@ void EngineFacade::reloadSlotPcm(int slot, std::vector<float> mono, float sample
 void EngineFacade::setCurrentScene(int idx) noexcept
 {
     if (idx < 0 || idx >= kMaxScenes) return;
-    currentScene_ = idx;
+    currentScene_.store(idx, std::memory_order_relaxed);
     applySceneInternal(idx);
 }
 
@@ -747,7 +747,7 @@ void EngineFacade::requestTransition(int toScene) noexcept
 {
     if (toScene < 0 || toScene >= kMaxScenes) return;
     transition_.requestTransition(currentScene_, toScene,
-                                  sceneStore_, transport_.state());
+                                   sceneStore_, transport_.snapshot());
 }
 
 void EngineFacade::applySceneInternal(int idx) noexcept
@@ -865,14 +865,14 @@ void EngineFacade::stopAllSlots(StopMode /*mode*/) noexcept
 
 int32_t EngineFacade::getCurrentStep() const noexcept
 {
-    const TransportState& ts = transport_.state();
+    const TransportState ts = transport_.snapshot();
     if (!ts.playing) return 0;
     return static_cast<int32_t>(stepIndexAt(ts, ts.samplePos) % kMaxSteps);
 }
 
 double EngineFacade::getCurrentPhase() const noexcept
 {
-    const TransportState& ts = transport_.state();
+    const TransportState ts = transport_.snapshot();
     if (!ts.playing) return 0.0;
     return beatAt(ts, ts.samplePos);
 }

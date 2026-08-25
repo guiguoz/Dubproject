@@ -59,11 +59,11 @@ public:
     // ── Transport ──────────────────────────────────────────────────────────────
     void play() noexcept;
     void stop() noexcept;
-    bool isPlaying() const noexcept { return transport_.state().playing; }
+    bool isPlaying() const noexcept { return transport_.snapshot().playing; }
     void setBpm(float bpm) noexcept;
-    float getBpm() const noexcept { return static_cast<float>(transport_.state().bpm); }
-    void setSwing(float swing) noexcept { swingFactor_ = swing; }
-    float getSwing() const noexcept { return swingFactor_; }
+    float getBpm() const noexcept { return static_cast<float>(transport_.snapshot().bpm); }
+    void setSwing(float swing) noexcept { swingFactor_.store(swing, std::memory_order_relaxed); }
+    float getSwing() const noexcept { return swingFactor_.load(std::memory_order_relaxed); }
 
     // ── Slots (9 slots) ────────────────────────────────────────────────────────
     // Import asynchrone : le callback est appelé sur le message thread.
@@ -177,7 +177,7 @@ public:
     void flipPatternBuffer() noexcept; // flip atomique après modification
 
     // ── Scènes ─────────────────────────────────────────────────────────────────
-    int  currentSceneIdx() const noexcept { return currentScene_; }
+    int  currentSceneIdx() const noexcept { return currentScene_.load(std::memory_order_relaxed); }
     void setCurrentScene(int idx) noexcept;
     void requestTransition(int toScene) noexcept;
     SceneData& scene(int idx) noexcept  { return sceneStore_.getScene(idx); }
@@ -247,11 +247,11 @@ private:
     ImportPipeline   importPipeline_;
     EventScheduler   scheduler_;
 
-    // État
+    // État — thread-safe : écrit par message thread, lu par audio thread.
     double sampleRate_    = 44100.0;
     int    maxBlockSize_  = 512;
-    float  swingFactor_   = 0.f;
-    int    currentScene_  = 0;
+    std::atomic<float> swingFactor_ {0.f};
+    std::atomic<int>   currentScene_ {0};
 
     // SerumHost (non porté — reste JUCE)
     ::dsp::SerumHost* serumHost_ = nullptr;
@@ -270,7 +270,7 @@ private:
 
     // Rôle analysé par le V2 au dernier import (worker → message thread via le
     // flag slotRoleReliable_, motif release/acquire).
-    SlotRole           slotRoleAnalyzed_ [kMaxSlots] { SlotRole::Loop };
+    std::atomic<SlotRole> slotRoleAnalyzed_[kMaxSlots];
     std::atomic<bool>  slotRoleReliable_ [kMaxSlots] { false };
 
     // État de mix persistant par slot (étape 7 / M9) — message thread.

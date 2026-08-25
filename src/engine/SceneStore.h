@@ -172,10 +172,12 @@ public:
     // ── Énergie des scènes ───────────────────────────────────────────────────
 
     void  setSceneEnergy(int idx, float e) noexcept {
+        if (idx < 0 || idx >= kMaxScenes) return;
         sceneEnergy_[static_cast<std::size_t>(idx)] = e;
     }
 
     float getSceneEnergy(int idx) const noexcept {
+        if (idx < 0 || idx >= kMaxScenes) return 0.f;
         return sceneEnergy_[static_cast<std::size_t>(idx)];
     }
 

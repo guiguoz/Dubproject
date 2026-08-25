@@ -123,13 +123,13 @@ void MidiManager::handleIncomingMidiMessage(juce::MidiInput* source,
     if (message.isNoteOn())
     {
         const int slot = mapper_.getSlot(message.getNoteNumber());
-        if (slot >= 0)
+        if (slot >= 0 && slot < 9)
             if (onSamplerNote_) onSamplerNote_(slot, true);
     }
     else if (message.isNoteOff())
     {
         const int slot = mapper_.getSlot(message.getNoteNumber());
-        if (slot >= 0)
+        if (slot >= 0 && slot < 9)
             if (onSamplerNote_) onSamplerNote_(slot, false);
     }
 }

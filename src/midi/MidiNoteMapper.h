@@ -15,6 +15,7 @@ class MidiNoteMapper
 {
 public:
     static constexpr int kNumNotes   = 128;
+    static constexpr int kNumSlots   = 9;   // sampler slots 0-8
     static constexpr int kUnmapped   = -1;
 
     MidiNoteMapper() noexcept { noteToSlot_.fill(kUnmapped); }
@@ -23,6 +24,7 @@ public:
     void setMapping(int midiNote, int slotIndex) noexcept
     {
         if (midiNote < 0 || midiNote >= kNumNotes) return;
+        if (slotIndex < 0 || slotIndex >= kNumSlots) slotIndex = kUnmapped;
         noteToSlot_[static_cast<std::size_t>(midiNote)] = slotIndex;
     }
 

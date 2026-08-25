@@ -99,6 +99,7 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
         if (roles[s] == SlotRole::Kick && features_[s].rms > 0.f)
             kickRms = features_[s].rms;
 
+    SpinLock::ScopedLockType scoped(targetsLock_);
     for (int s = 0; s < kMaxSlots; ++s) {
         // ─ Règle 1 : gain staging
         float targetDb = roleTargetDb(roles[s]) + globalTrimDb_;
@@ -167,7 +168,11 @@ float AutoMixDub::advanceGainRamp(int slot, int numFrames) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 1.f;
 
-    const float targetLin = std::pow(10.f, targets_.gainDb[slot] / 20.f);
+    float targetLin;
+    {
+        SpinLock::ScopedLockType scoped(targetsLock_);
+        targetLin = std::pow(10.f, targets_.gainDb[slot] / 20.f);
+    }
     // Rampe exponentielle : coef^numFrames pour avancer d'un bloc
     const float alpha = std::pow(gainTauCoef_, static_cast<float>(numFrames));
     currentGainLin_[slot] = alpha * currentGainLin_[slot]
@@ -180,9 +185,13 @@ float AutoMixDub::advanceDelayRamp(int slot, int numFrames) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;
 
-    const float targetLin = (targets_.delayDb[slot] > -110.f)
-        ? std::pow(10.f, targets_.delayDb[slot] / 20.f)
-        : 0.f;
+    float targetLin;
+    {
+        SpinLock::ScopedLockType scoped(targetsLock_);
+        targetLin = (targets_.delayDb[slot] > -110.f)
+            ? std::pow(10.f, targets_.delayDb[slot] / 20.f)
+            : 0.f;
+    }
     const float alpha = std::pow(delayTauCoef_, static_cast<float>(numFrames));
     currentDelaySend_[slot] = alpha * currentDelaySend_[slot]
                             + (1.f - alpha) * targetLin;

@@ -16,8 +16,8 @@ void AudioGraph::setSlotRole(int slot, SlotRole role) noexcept
     slotPlayer_.setSpatial(slot, sp.pan, sp.width);
 
     if (role == SlotRole::Kick)
-        kickSlot_ = slot;
-    else if (kickSlot_ == slot)
+        kickSlot_.store(slot, std::memory_order_relaxed);
+    else if (kickSlot_.load(std::memory_order_relaxed) == slot)
         findKickSlot();
 }
 
@@ -48,9 +48,9 @@ void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
 
 void AudioGraph::findKickSlot() noexcept
 {
-    kickSlot_ = -1;
+    kickSlot_.store(-1, std::memory_order_relaxed);
     for (int s = 0; s < kMaxSlots; ++s)
-        if (roles_[s].load(std::memory_order_relaxed) == SlotRole::Kick) { kickSlot_ = s; return; }
+        if (roles_[s].load(std::memory_order_relaxed) == SlotRole::Kick) { kickSlot_.store(s, std::memory_order_relaxed); return; }
 }
 
 void AudioGraph::processBlock(const TransportState& ts,
@@ -62,8 +62,9 @@ void AudioGraph::processBlock(const TransportState& ts,
 {
     if (numFrames <= 0 || numFrames > maxBlock_) {
         // Sortie silencieuse si le bloc est invalide
-        const int safeFrames = std::min(numFrames, maxBlock_);
-        std::memset(output, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
+        const int safeFrames = std::clamp(numFrames, 0, maxBlock_);
+        if (safeFrames > 0)
+            std::memset(output, 0, static_cast<size_t>(safeFrames) * 2 * sizeof(float));
         return;
     }
 
@@ -105,7 +106,7 @@ void AudioGraph::processBlock(const TransportState& ts,
             kickEnv = autoMix_.advanceKickEnv(mixL_[i] + mixR_[i]);
 
         for (int s = 0; s < kMaxSlots; ++s) {
-            if (s == kickSlot_) continue;
+            if (s == kickSlot_.load(std::memory_order_relaxed)) continue;
             autoMix_.applySidechain(s, roles_[s].load(std::memory_order_relaxed), kickEnv,
                                     mixL_.data(), mixR_.data(), numFrames);
         }

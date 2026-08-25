@@ -149,8 +149,8 @@ private:
     std::vector<float> delayInL_, delayInR_;
     std::vector<float> interleavedScratch_;    // scratch entrelacé (maxBlock × 2)
 
-    // Kick slot (−1 si non déterminé)
-    int kickSlot_ = -1;
+    // Kick slot (−1 si non déterminé) — lu par audio thread, écrit par message thread.
+    std::atomic<int> kickSlot_{-1};
 
     void findKickSlot() noexcept;
 };

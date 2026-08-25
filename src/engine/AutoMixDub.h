@@ -3,6 +3,7 @@
 #include <atomic>
 #include "engine/SlotPlayer.h"   // SlotRole
 #include "engine/Sequencer.h"   // kMaxSlots
+#include "engine/Transport.h"   // SpinLock
 
 namespace engine {
 
@@ -94,6 +95,9 @@ private:
     // Accumulateur RMS (rolling)
     float rmsAccum_ [kMaxSlots] = {};
     int   rmsSamples_[kMaxSlots] = {};
+
+    // Spinlock protégeant targets_ ( écrit par mix thread, lu par audio thread )
+    mutable SpinLock targetsLock_;
 
     // Coefficients d'un pole-1 LP
     static float tauToCoef(float tauMs, float sr) noexcept {
