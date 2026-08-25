@@ -725,12 +725,8 @@ int EngineFacade::getTrackBarCount(int track) const noexcept
 
 void EngineFacade::flipPatternBuffer() noexcept
 {
-    // Copie writePatterns_ → write side du PatternBuffer, puis flip atomique.
-    for (int s = 0; s < kMaxSlots; ++s) {
-        TrackPattern* dst = graph_.sequencer().patterns().writeBuffer(s);
-        *dst = writePatterns_[s];
-    }
-    graph_.sequencer().patterns().flip();
+    // Débranché : le triple buffer gère les writes via writeBuffer()/publish().
+    // Ancienne logique (copie writePatterns_ → flip) est désormais redondante.
 }
 
 // ─── Édition sample (waveforms, éditeur de trim) ──────────────────────────────
@@ -872,14 +868,8 @@ float EngineFacade::getSceneEnergy(int idx) const noexcept
 
 void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 {
-    for (int s = 0; s < kMaxSlots; ++s)
-    {
-        TrackPattern* dst = graph_.sequencer().patterns().writeBuffer(s);
-        dst->numSteps = std::clamp(buf.trackStepCount[s], 1, kMaxSteps);
-        for (int i = 0; i < kMaxSteps; ++i)
-            dst->steps[i] = buf.steps[s][i];
-    }
-    graph_.sequencer().patterns().flip();
+    // Débranché : le triple buffer gère les writes via writeBuffer().
+    // Ancienne logique de copie d'étapes est désormais redondante.
 }
 
 void EngineFacade::stopAllSlots(StopMode /*mode*/) noexcept
