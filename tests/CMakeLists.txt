@@ -91,6 +91,7 @@ add_executable(EngineTests
     engine/test_mix_algorithms.cpp
     engine/test_audiograph.cpp
     engine/test_dispatch.cpp
+    engine/test_monosub.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp

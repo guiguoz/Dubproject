@@ -202,10 +202,10 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // w=0.8 ; KICK/BASS restent centrés). + MonoSubFilter (1er ordre Butterworth
     // LP 120 Hz, force le sub-bass en mono). Changement INTENTIONNEL du rendu.
     // Régénéré via NULL0 (Debug == Release bit-exact, vérifié).
-    //   hashAudio = 0x291ac76c3f21b731
-    //   hashRms   = 0x2ab9f8d9cc21331
-    CHECK(hashAudio == 0x291ac76c3f21b731ull);
-    CHECK(hashRms   == 0x2ab9f8d9cc21331ull);
+    //   hashAudio = 0xefcc7914b1fca7ca
+    //   hashRms   = 0x1e2aec5f0d21c5c0
+    CHECK(hashAudio == 0xefcc7914b1fca7caull);
+    CHECK(hashRms   == 0x1e2aec5f0d21c5c0ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

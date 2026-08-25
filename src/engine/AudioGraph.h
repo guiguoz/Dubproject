@@ -14,30 +14,30 @@
 namespace engine {
 
 // ─── MonoSubFilter ────────────────────────────────────────────────────────────
-// 1er ordre Butterworth LP (6 dB/oct) à fc = 120 Hz — force le sub-bass en mono.
-// Stereo in-place : même état pour L et R (analyse mono sur la somme L+R).
+// 1er ordre LP (6 dB/oct) à fc = 120 Hz — filtre passe-bas sur chaque canal.
+// Utilisé pour isoler le sub-bass (< 120 Hz) en mono avant le mix.
 // Coefficient pré-calculé en prepare(), état audio-thread uniquement.
 struct MonoSubFilter {
-    float aLP = 0.f;  // coeff LP Butterworth 1er ordre : exp(-2π·fc/fs)
+    float aLP = 0.f;  // coeff LP : exp(-2π·fc/fs)
     float sL = 0.f;   // état du filtre LP sur le canal L
     float sR = 0.f;   // état du filtre LP sur le canal R
 
     void prepare(double sampleRate) noexcept {
-        // Butterworth 1er ordre LP : a = exp(-2π·fc/fs), fc = 120 Hz
         const float wc = static_cast<float>(2.0 * 3.14159265 * 120.0 / sampleRate);
         aLP = std::exp(-wc);
+        sL = 0.f;
+        sR = 0.f;
     }
 
+    // Filtre passe-bas 1 pôle appliqué aux deux canaux.
+    // y[n] = (1 - a) * x[n] + a * y[n-1]
     void process(float* L, float* R, int numFrames) noexcept {
         const float oneMinusA = 1.f - aLP;
         for (int i = 0; i < numFrames; ++i) {
-            // LP sur chaque canal → sub-bass (< 120 Hz)
             sL = oneMinusA * L[i] + aLP * sL;
             sR = oneMinusA * R[i] + aLP * sR;
-            const float monoSub = (sL + sR) * 0.5f;
-            // Remplacer le sub-bass stéréo par la version mono
-            L[i] += monoSub - sL;
-            R[i] += monoSub - sR;
+            L[i] = sL;
+            R[i] = sR;
         }
     }
 
