@@ -252,6 +252,12 @@ private:
     ImportPipeline   importPipeline_;
     EventScheduler   scheduler_;
 
+    // Buffer d'événements préalloué (évite l'allocation pile dans le callback audio).
+    // Dimensionné au maximum de EventScheduler (256 events).
+    static constexpr int kMaxEvBuf = 256;
+    EventWithOffset     evBuf_[kMaxEvBuf];
+    int                 evCount_ = 0;
+
     // État — thread-safe : écrit par message thread, lu par audio thread.
     double sampleRate_    = 44100.0;
     int    maxBlockSize_  = 512;

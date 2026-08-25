@@ -123,14 +123,14 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     // ── Dispatch temporel : events avec offset dans le bloc ───────────────────
     // Utilise EventScheduler::processBlock() qui filtre par time et calcule
     // l'offset en samples depuis le début du bloc pour chaque event.
-    EventWithOffset evBuf[256];
-    int evCount = 0;
+    // evBuf_ est un membre préalloué (pas d'allocation pile dans le callback).
+    evCount_ = 0;
     scheduler_.processBlock(blockStart, numSamples,
-        [&evBuf, &evCount](int32_t offset, const EngineEvent& ev) {
-            if (evCount < 256) {
-                evBuf[evCount].offset = offset;
-                evBuf[evCount].ev     = ev;
-                ++evCount;
+        [this](int32_t offset, const EngineEvent& ev) {
+            if (evCount_ < kMaxEvBuf) {
+                evBuf_[evCount_].offset = offset;
+                evBuf_[evCount_].ev     = ev;
+                ++evCount_;
             }
         });
 
@@ -141,7 +141,7 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     // ── AudioGraph ────────────────────────────────────────────────────────────
     std::fill(interleavedOut_.begin(),
               interleavedOut_.begin() + numSamples * 2, 0.f);
-    graph_.processBlock(ts, evBuf, evCount, interleavedOut_.data(), numSamples,
+    graph_.processBlock(ts, evBuf_, evCount_, interleavedOut_.data(), numSamples,
                         extInL, extInR, serumL, serumR, serumGain);
     scheduler_.clear();
 
