@@ -170,6 +170,19 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 // ─── handleTrigger ───────────────────────────────────────────────────────────
 
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
+    // En mode Free avec boucle interne, la voix ne s'arrête jamais (se réinitialise
+    // elle-même). Donc si voice[0] est active en mode Free, on DOIT l'arrêter avant
+    // de déclencher une nouvelle voix, sinon on a deux voix simultanées.
+    const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
+    
+    if (mode == PlayMode::Free && voices_[slot][0].active.load(std::memory_order_relaxed)) {
+        // Arrêter voice[0] : la marquer fadingOut pour qu'elle s'éteigne graduellement
+        // plutôt que de disparaître brutalement.
+        voices_[slot][0].fadingOut = true;
+        voices_[slot][0].fadeGain = 1.0f;
+        voices_[slot][0].fadeLeft = kFadeLen;
+    }
+
     // Choisir la voix inactive. Si les deux sont actives, prendre voice[1]
     // (la plus ancienne est voice[0]).
     int vIdx = 0;
@@ -189,7 +202,6 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     voiceActive_[slot][vIdx].store(true, std::memory_order_relaxed);
 
     // Pour LOOP SYNC : mémoriser l'anchor dans les params.
-    const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
     if (mode == PlayMode::LoopSync) {
         params_[slot].anchor.store(transportAnchor, std::memory_order_relaxed);
         stretchers_[slot].setParams(
