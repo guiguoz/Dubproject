@@ -15,6 +15,13 @@ EngineFacade::EngineFacade()
     }
 }
 
+EngineFacade::~EngineFacade()
+{
+    // Invalide toutes les WeakReference outstanding → les callAsync callbacks
+    //Checkera ref.get() == nullptr et ne déréférencera pas this.
+    weakRefMaster_.clear();
+}
+
 // ─── Cycle de vie ─────────────────────────────────────────────────────────────
 
 void EngineFacade::prepare(double sampleRate, int maxBlockSize) noexcept
@@ -239,7 +246,8 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
     slotTrimStart_[slot] = trimStart;
     slotTrimEnd_[slot]   = trimEnd;
 
-    std::thread([this, slot, filePath, cb, trimStart, trimEnd]() {
+    auto alive = std::make_shared<std::atomic<bool>>(true);
+    std::thread([this, slot, filePath, cb, trimStart, trimEnd, alive]() {
         juce::AudioFormatManager fmtMgr;
         fmtMgr.registerBasicFormats();
 
@@ -280,6 +288,9 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         AnalysisResult result = importPipeline_.analyzeSync(
             mono.data(), numFrames, 1, sr, projectBpm);
 
+        // Si l'objet a été détruit pendant l'analyse, abandonner.
+        if (!alive->load(std::memory_order_acquire)) return;
+
         // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
         graph_.setSlotRole(slot, mapRole(result.role));
 
@@ -318,19 +329,22 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         }
 
         // ── Garde-fou data race : attente de 3 blocs audio complets ──────────────
-        // Le Release event sera traité dans le bloc N (prochain callback audio).
-        // Après N+1 le fade est terminé (kFadeLen=16 ≪ taille de bloc).
-        // N+2 donne une marge supplémentaire : garanti par construction que
-        // voices_[slot][v].active == false avant l'écriture du nouveau PCM.
-        stopSlot(slot, true);
-        const int64_t targetBlock = audioBlockCounter_.load(std::memory_order_acquire) + 3;
-        while (audioBlockCounter_.load(std::memory_order_acquire) < targetBlock)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Mutex par slot : sérialise stopSlot → loadSlot pour éviter
+        // que deux imports simultanés sur le même slot corrompent le PCM.
+        {
+            std::lock_guard<std::mutex> lock(importSlotMutex_[slot]);
+            // Vérifier la viabilité une dernière fois avant d'accéder à this.
+            if (!alive->load(std::memory_order_acquire)) return;
+            stopSlot(slot, true);
+            const int64_t targetBlock = audioBlockCounter_.load(std::memory_order_acquire) + 3;
+            while (audioBlockCounter_.load(std::memory_order_acquire) < targetBlock)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-        // Chargement dans le SlotPlayer (message thread / worker thread — pas audio)
-        const PlayMode mode = modeForResult(result, slot);
-        graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
-        slotLoaded_[slot].store(true, std::memory_order_release);
+            // Chargement dans le SlotPlayer (worker thread — pas audio)
+            const PlayMode mode = modeForResult(result, slot);
+            graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
+            slotLoaded_[slot].store(true, std::memory_order_release);
+        }
 
         if (cb) cb(slot, result);
     }).detach();
@@ -472,23 +486,32 @@ void EngineFacade::triggerMagicMix() noexcept
         serumContentType_, manualOverrides_, manualOverrideActive_);
 
     // ── Lancement du worker ──────────────────────────────────────────────────
-    std::thread([this, in = std::move(in)]() mutable {
+    // shared_ptr<alive> : garde la vie du flag même si EngineFacade est détruit
+    // pendant que le thread tourne. Le lambda captured par value le shared_ptr.
+    auto alive = std::make_shared<std::atomic<bool>>(true);
+    std::thread([this, in = std::move(in), alive]() mutable {
         const mix::MixStateArray state = mix::runHeuristicMix(in);
 
         // Application + callback sur le message thread (l'état persistant n'est
         // jamais écrit depuis un thread de travail).
-        juce::MessageManager::callAsync([this, in = std::move(in), state]() {
+        // WeakReference protège contre le use-after-free si ~EngineFacade() est
+        // appelé entre le début du thread et l'exécution du callAsync.
+        juce::WeakReference<EngineFacade> ref(this);
+        juce::MessageManager::callAsync([ref, alive, in = std::move(in), state]() {
+            if (!alive->load(std::memory_order_acquire)) return;
+            auto* self = ref.get();
+            if (!self) return;
             for (int s = 0; s < kMaxSlots; ++s) {
                 const mix::SlotMixState st = mix::slotMixState(state, s);
                 if (st.applied)
-                    setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
-                detectedTypes_[s] = in.types[s];
+                    self->setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
+                self->detectedTypes_[s] = in.types[s];
             }
-            magicMixBusy_.store(false, std::memory_order_release);
-            magicMixActive_.store(true, std::memory_order_release);
-            lastMixUsedFallback_.store(true, std::memory_order_release);
-            if (magicMixDoneCb_)
-                magicMixDoneCb_();
+            self->magicMixBusy_.store(false, std::memory_order_release);
+            self->magicMixActive_.store(true, std::memory_order_release);
+            self->lastMixUsedFallback_.store(true, std::memory_order_release);
+            if (self->magicMixDoneCb_)
+                self->magicMixDoneCb_();
         });
     }).detach();
 }
@@ -505,21 +528,26 @@ void EngineFacade::triggerAiMagicMix(
         serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
         serumContentType_, manualOverrides_, manualOverrideActive_);
 
-    std::thread([this, in = std::move(in), decisions]() mutable {
+    auto alive = std::make_shared<std::atomic<bool>>(true);
+    std::thread([this, in = std::move(in), decisions, alive]() mutable {
         const mix::MixStateArray state = mix::runAiMix(in, decisions);
 
-        juce::MessageManager::callAsync([this, in = std::move(in), state]() {
+        juce::WeakReference<EngineFacade> ref(this);
+        juce::MessageManager::callAsync([ref, alive, in = std::move(in), state]() {
+            if (!alive->load(std::memory_order_acquire)) return;
+            auto* self = ref.get();
+            if (!self) return;
             for (int s = 0; s < kMaxSlots; ++s) {
                 const mix::SlotMixState st = mix::slotMixState(state, s);
                 if (st.applied)
-                    setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
-                detectedTypes_[s] = in.types[s];
+                    self->setSlotMixState(s, st.gain, st.pan, st.width, st.depth);
+                self->detectedTypes_[s] = in.types[s];
             }
-            magicMixBusy_.store(false, std::memory_order_release);
-            magicMixActive_.store(true, std::memory_order_release);
-            lastMixUsedFallback_.store(false, std::memory_order_release);
-            if (magicMixDoneCb_)
-                magicMixDoneCb_();
+            self->magicMixBusy_.store(false, std::memory_order_release);
+            self->magicMixActive_.store(true, std::memory_order_release);
+            self->lastMixUsedFallback_.store(false, std::memory_order_release);
+            if (self->magicMixDoneCb_)
+                self->magicMixDoneCb_();
         });
     }).detach();
 }

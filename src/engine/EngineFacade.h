@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include "engine/AudioGraph.h"
 #include "engine/Transport.h"
@@ -34,7 +35,11 @@ using ImportCallback = std::function<void(int slot, const AnalysisResult&)>;
 class EngineFacade {
 public:
     EngineFacade();
-    ~EngineFacade() = default;
+    ~EngineFacade();
+
+    // WeakReference master : invalidé dans le destructeur pour protéger
+    // les callAsync callbacks contre le use-after-free.
+    juce::WeakReferenceMaster weakRefMaster_;
 
     // ── Cycle de vie ───────────────────────────────────────────────────────────
     // Appelé depuis prepareToPlay (message thread).
@@ -267,6 +272,10 @@ private:
     std::string        slotPath_  [kMaxSlots];
     int                slotTrimStart_[kMaxSlots] { 0 };
     int                slotTrimEnd_  [kMaxSlots] { -1 };
+
+    // Mutex par slot : sérialise la phase critique d'import (stopSlot → loadSlot)
+    // pour éviter que deux imports simultanés sur le même slot corrompent le PCM.
+    std::mutex         importSlotMutex_[kMaxSlots];
 
     // Rôle analysé par le V2 au dernier import (worker → message thread via le
     // flag slotRoleReliable_, motif release/acquire).
