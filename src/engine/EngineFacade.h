@@ -37,9 +37,7 @@ public:
     EngineFacade();
     ~EngineFacade();
 
-    // WeakReference master : invalidé dans le destructeur pour protéger
-    // les callAsync callbacks contre le use-after-free.
-    juce::WeakReferenceMaster weakRefMaster_;
+    JUCE_DECLARE_WEAK_REFERENCEABLE(EngineFacade)
 
     // ── Cycle de vie ───────────────────────────────────────────────────────────
     // Appelé depuis prepareToPlay (message thread).

@@ -17,9 +17,8 @@ EngineFacade::EngineFacade()
 
 EngineFacade::~EngineFacade()
 {
-    // Invalide toutes les WeakReference outstanding → les callAsync callbacks
-    //Checkera ref.get() == nullptr et ne déréférencera pas this.
-    weakRefMaster_.clear();
+    // weakRefMaster_ est automatiquement clear() par le destructeur
+    // de JUCE_DECLARE_WEAK_REFERENCEABLE.
 }
 
 // ─── Cycle de vie ─────────────────────────────────────────────────────────────
