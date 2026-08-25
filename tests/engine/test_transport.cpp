@@ -12,7 +12,7 @@ TEST_CASE("T-TR1: samplePos strictly monotone while playing", "[transport]") {
 
     int64_t prev = t.state().samplePos;
     for (int i = 0; i < 1000; ++i) {
-        const auto& s = t.advance(512);
+        const auto s = t.advance(512);
         REQUIRE(s.samplePos > prev);
         prev = s.samplePos;
     }

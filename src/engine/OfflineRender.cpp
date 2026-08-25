@@ -81,7 +81,7 @@ std::vector<float> renderOffline(const OfflineSession& session, int64_t numSampl
     while (processed < numSamples) {
         const int64_t remain = numSamples - processed;
         const int n = static_cast<int>(std::min<int64_t>(blockSize, remain));
-        const auto& ts = transport.advance(n);
+        const auto ts = transport.advance(n);
 
         // ── Transitions demandées dans ce bloc ────────────────────────────────
         // Le diff est calculé au moment de la requête (comportement EngineFacade).

@@ -41,7 +41,7 @@ struct SlotParams {
 // ─── Voix (2 par slot pour les chevauchements) ───────────────────────────────
 
 struct Voice {
-    bool    active    = false;
+    std::atomic<bool> active{false};
     bool    fadingOut = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
     int64_t readPos   = 0;      // en frames (pas en samples entrelacés)
     float   readFrac  = 0.f;    // partie fractionnaire pour correction SR
@@ -160,11 +160,13 @@ public:
         return slotPeak_[slot].load(std::memory_order_relaxed);
     }
     float playheadRatio(int slot) const noexcept {
-        if (slot < 0 || slot >= kSlots || pcm_[slot].numFrames == 0) return 0.f;
+        if (slot < 0 || slot >= kSlots) return false;
+        const auto& pcm = activePcm(slot);
+        if (pcm.numFrames == 0) return 0.f;
         for (int v = 0; v < 2; ++v) {
             if (voiceActive_[slot][v].load(std::memory_order_relaxed))
                 return static_cast<float>(voices_[slot][v].readPos) /
-                       static_cast<float>(pcm_[slot].numFrames);
+                       static_cast<float>(pcm.numFrames);
         }
         return 0.f;
     }
@@ -175,7 +177,8 @@ private:
     static constexpr float kFadeThreshold = 0.001f; // −60 dB
     static constexpr int   kCrossfadeLen  = 256;    // micro-crossfade recalage §10.2
 
-    SlotPcm         pcm_[kSlots];
+    SlotPcm         pcmBuffers_[2][kSlots];     // double-buffer PCM
+    std::atomic<int> activePcmIdx_[kSlots] = {}; // index du buffer actif (0 ou 1)
     Voice           voices_[kSlots][2];
     SlotParams      params_[kSlots];
     StretchConform  stretchers_[kSlots];
@@ -192,7 +195,7 @@ private:
     // Utilisé pour les fades Enter/Exit de TransitionEngine.
     float rampValue_[kSlots] = {};
     float rampTarget_[kSlots] = {};
-    int   rampLeft_[kSlots]  = {};   // samples restants (0 = pas de rampe active)
+    std::atomic<int> rampLeft_[kSlots] = {};   // samples restants (0 = pas de rampe active)
 
     // ── Haas — ligne de retard du canal faible (M9 étape 6) ──────────────────
     // width ∈ [0,1] → retard 0 … 25 ms. Puissance de 2 pour le masquage.
@@ -212,6 +215,11 @@ private:
     // Avance les rampes de transition de numFrames (appelé en tête de processBlock).
     void advanceRamps(int numFrames) noexcept;
 
+    // Retourne le PCM actif du slot (thread audio — lecture atomique de l'index).
+    const SlotPcm& activePcm(int slot) const noexcept {
+        return pcmBuffers_[activePcmIdx_[slot].load(std::memory_order_acquire)][slot];
+    }
+
     // Réinitialise la ligne de retard Haas d'un slot (loadSlot/clearSlot).
     void resetSpatialSlot(int slot) noexcept;
 
@@ -227,7 +235,7 @@ private:
 
     // Désactive une voix (écrit voice.active + voiceActive_ atomique).
     void deactivateVoice(int slot, int v) noexcept {
-        voices_[slot][v].active = false;
+        voices_[slot][v].active.store(false, std::memory_order_relaxed);
         voiceActive_[slot][v].store(false, std::memory_order_relaxed);
     }
 

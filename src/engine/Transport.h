@@ -120,10 +120,10 @@ public:
     }
 
     // Appelé UNE fois en tête de chaque callback audio.
-    // Avance samplePos et retourne le snapshot const pour ce bloc.
+    // Avance samplePos et retourne une copie snapshot pour ce bloc.
     // blockStart est figé au DÉBUT du bloc courant (avant l'avancement) :
     // le snapshot décrit donc le bloc [blockStart, samplePos).
-    const TransportState& advance(int32_t numSamples) noexcept {
+    TransportState advance(int32_t numSamples) noexcept {
         SpinLock::ScopedLockType scoped(spinlock_);
         if (state_.playing) {
             state_.blockStart = state_.samplePos;

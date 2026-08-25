@@ -8,11 +8,23 @@
 namespace engine {
 
 struct SlotFeatures {
-    float rms       = 0.f;
-    float peak      = 0.f;
+    std::atomic<float> rms       {0.f};
+    std::atomic<float> peak      {0.f};
     float energyLow = 0.f;  // biquad Linkwitz-Riley < 100 Hz
     float energyMid = 0.f;  // 100 Hz – 2.5 kHz
     float energyHigh= 0.f;  // > 2.5 kHz
+
+    SlotFeatures() = default;
+    SlotFeatures(const SlotFeatures& o) noexcept
+        : rms(o.rms.load(std::memory_order_relaxed))
+        , peak(o.peak.load(std::memory_order_relaxed))
+        , energyLow(o.energyLow), energyMid(o.energyMid), energyHigh(o.energyHigh) {}
+    SlotFeatures& operator=(const SlotFeatures& o) noexcept {
+        rms.store(o.rms.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        peak.store(o.peak.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        energyLow = o.energyLow; energyMid = o.energyMid; energyHigh = o.energyHigh;
+        return *this;
+    }
 };
 
 struct MixTargets {
@@ -57,7 +69,15 @@ public:
     // Informe AutoMix de la réduction de gain du limiteur (Règle 6).
     void notifyLimiterReduction(float gainReductionDb) noexcept;
 
-    const SlotFeatures& features(int slot) const noexcept { return features_[slot]; }
+    SlotFeatures features(int slot) const noexcept {
+        SlotFeatures s;
+        s.rms       = features_[slot].rms.load(std::memory_order_relaxed);
+        s.peak      = features_[slot].peak.load(std::memory_order_relaxed);
+        s.energyLow = features_[slot].energyLow;
+        s.energyMid = features_[slot].energyMid;
+        s.energyHigh= features_[slot].energyHigh;
+        return s;
+    }
     const MixTargets&   targets()          const noexcept { return targets_; }
 
     float currentGainLinear(int slot)  const noexcept { return currentGainLin_[slot]; }
@@ -89,8 +109,8 @@ private:
     float lastDecisionDb_[kMaxSlots] = {};
 
     // Règle 6 : protection limiteur
-    float limiterAccumSec_  = 0.f;  // secondes d'accumulation > 3 dB GR
-    float globalTrimDb_     = 0.f;
+    std::atomic<float> limiterAccumSec_  {0.f};  // secondes d'accumulation > 3 dB GR
+    std::atomic<float> globalTrimDb_     {0.f};
 
     // Accumulateur RMS (rolling)
     float rmsAccum_ [kMaxSlots] = {};

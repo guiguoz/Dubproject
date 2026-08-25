@@ -47,11 +47,13 @@ void AutoMixDub::prepare(float sampleRate) noexcept
     releaseCoef_  = tauToCoef(120.f, sampleRate);
 
     kickEnv_        = 0.f;
-    globalTrimDb_   = 0.f;
-    limiterAccumSec_= 0.f;
+    globalTrimDb_.store(0.f, std::memory_order_relaxed);
+    limiterAccumSec_.store(0.f, std::memory_order_relaxed);
 
     for (int s = 0; s < kMaxSlots; ++s) {
-        features_[s]          = {};
+        features_[s].rms.store(0.f, std::memory_order_relaxed);
+        features_[s].peak.store(0.f, std::memory_order_relaxed);
+        features_[s].energyLow = 0.f;
         currentGainLin_[s]    = 1.f;
         currentDelaySend_[s]  = 0.f;
         lastDecisionDb_[s]    = 0.f;
@@ -83,11 +85,12 @@ void AutoMixDub::updateFeatures(int slot,
     rmsAccum_[slot]   += sumSq;
     rmsSamples_[slot] += numFrames;
     if (rmsSamples_[slot] >= kWindow) {
-        features_[slot].rms  = std::sqrt(rmsAccum_[slot] / static_cast<float>(rmsSamples_[slot]));
+        features_[slot].rms.store(std::sqrt(rmsAccum_[slot] / static_cast<float>(rmsSamples_[slot])),
+                                  std::memory_order_relaxed);
         rmsAccum_[slot]   = 0.f;
         rmsSamples_[slot] = 0;
     }
-    features_[slot].peak = peak;
+    features_[slot].peak.store(peak, std::memory_order_relaxed);
 }
 
 // ─── computeTargets (thread de mix, 50 ms) ────────────────────────────────
@@ -95,18 +98,21 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
 {
     // Chercher le kick pour la référence 0 dB
     float kickRms = -1.f;
-    for (int s = 0; s < kMaxSlots; ++s)
-        if (roles[s] == SlotRole::Kick && features_[s].rms > 0.f)
-            kickRms = features_[s].rms;
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const float sRms = features_[s].rms.load(std::memory_order_relaxed);
+        if (roles[s] == SlotRole::Kick && sRms > 0.f)
+            kickRms = sRms;
+    }
 
     SpinLock::ScopedLockType scoped(targetsLock_);
     for (int s = 0; s < kMaxSlots; ++s) {
         // ─ Règle 1 : gain staging
-        float targetDb = roleTargetDb(roles[s]) + globalTrimDb_;
+        float targetDb = roleTargetDb(roles[s]) + globalTrimDb_.load(std::memory_order_relaxed);
 
-        if (kickRms > 0.f && features_[s].rms > 0.f) {
+        const float sRms = features_[s].rms.load(std::memory_order_relaxed);
+        if (kickRms > 0.f && sRms > 0.f) {
             // Correction pour atteindre la cible relative
-            const float currentRelDb = 20.f * std::log10(features_[s].rms / kickRms);
+            const float currentRelDb = 20.f * std::log10(sRms / kickRms);
             const float error        = targetDb - currentRelDb;
             // Borner ±9 dB
             const float corrDb = std::clamp(error, -9.f, 9.f);
@@ -204,16 +210,20 @@ void AutoMixDub::notifyLimiterReduction(float gainReductionDb) noexcept
     const float kFrameSec = static_cast<float>(512) / sampleRate_;  // ≈ bloc
 
     if (gainReductionDb > 3.f) {
-        limiterAccumSec_ += kFrameSec;
-        if (limiterAccumSec_ > 2.f) {
-            globalTrimDb_    -= 1.f;
-            limiterAccumSec_  = 0.f;
+        float accum = limiterAccumSec_.load(std::memory_order_relaxed) + kFrameSec;
+        if (accum > 2.f) {
+            float trim = globalTrimDb_.load(std::memory_order_relaxed) - 1.f;
+            globalTrimDb_.store(trim, std::memory_order_relaxed);
+            accum = 0.f;
         }
+        limiterAccumSec_.store(accum, std::memory_order_relaxed);
     } else {
-        limiterAccumSec_ = 0.f;
+        limiterAccumSec_.store(0.f, std::memory_order_relaxed);
     }
     // Limiter le trim global (pas de sur-compensation)
-    globalTrimDb_ = std::clamp(globalTrimDb_, -12.f, 0.f);
+    float trim = globalTrimDb_.load(std::memory_order_relaxed);
+    trim = std::clamp(trim, -12.f, 0.f);
+    globalTrimDb_.store(trim, std::memory_order_relaxed);
 }
 
 } // namespace engine
