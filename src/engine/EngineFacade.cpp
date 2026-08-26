@@ -245,15 +245,16 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
     slotTrimStart_[slot] = trimStart;
     slotTrimEnd_[slot]   = trimEnd;
 
+    juce::WeakReference<EngineFacade> weakThis(this);
     auto alive = std::make_shared<std::atomic<bool>>(true);
-    std::thread([this, slot, filePath, cb, trimStart, trimEnd, alive]() {
+    std::thread([weakThis, slot, filePath, cb, trimStart, trimEnd, alive]() {
         juce::AudioFormatManager fmtMgr;
         fmtMgr.registerBasicFormats();
 
         const auto file = juce::File(juce::String(filePath));
         std::unique_ptr<juce::AudioFormatReader> reader(fmtMgr.createReaderFor(file));
         if (!reader) {
-            if (cb) cb(slot, AnalysisResult{});
+            if (auto* self = weakThis.get(); self && cb) cb(slot, AnalysisResult{});
             return;
         }
 
@@ -262,7 +263,7 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         const float sr        = static_cast<float>(reader->sampleRate);
 
         if (numFrames <= 0) {
-            if (cb) cb(slot, AnalysisResult{});
+            if (auto* self = weakThis.get(); self && cb) cb(slot, AnalysisResult{});
             return;
         }
 
@@ -283,22 +284,26 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         }
 
         // Analyse synchrone (BPM, rôle, key, autoLoopSync)
-        const float projectBpm = getBpm();
-        AnalysisResult result = importPipeline_.analyzeSync(
+        // getBpm() nécessite self ; on ne peut pas analyser si self détruit.
+        auto* selfForAnalyze = weakThis.get();
+        if (!selfForAnalyze || !alive->load(std::memory_order_acquire)) return;
+        const float projectBpm = selfForAnalyze->getBpm();
+        AnalysisResult result = selfForAnalyze->importPipeline_.analyzeSync(
             mono.data(), numFrames, 1, sr, projectBpm);
 
         // Si l'objet a été détruit pendant l'analyse, abandonner.
-        if (!alive->load(std::memory_order_acquire)) return;
+        auto* self = weakThis.get();
+        if (!self || !alive->load(std::memory_order_acquire)) return;
 
         // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
-        graph_.setSlotRole(slot, mapRole(result.role));
+        self->graph_.setSlotRole(slot, mapRole(result.role));
 
         // Publier le rôle analysé (fiabilité = confiance ONNX suffisante et rôle
         // non indéterminé). Lecture sur message thread via release/acquire.
-        slotRoleAnalyzed_[slot].store(mapRole(result.role), std::memory_order_release);
+        self->slotRoleAnalyzed_[slot].store(mapRole(result.role), std::memory_order_release);
         const bool reliable = (result.roleConfidence >= 0.75f &&
                                result.role != SlotRoleV2::Unknown);
-        slotRoleReliable_[slot].store(reliable, std::memory_order_release);
+        self->slotRoleReliable_[slot].store(reliable, std::memory_order_release);
 
         // Construction du SlotPcm (conserve la stéréo si disponible).
         // Trim optionnel (coordonnées fichier) : découpe AVANT stockage pour que
@@ -331,21 +336,26 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         // Mutex par slot : sérialise stopSlot → loadSlot pour éviter
         // que deux imports simultanés sur le même slot corrompent le PCM.
         {
-            std::lock_guard<std::mutex> lock(importSlotMutex_[slot]);
-            // Vérifier la viabilité une dernière fois avant d'accéder à this.
-            if (!alive->load(std::memory_order_acquire)) return;
-            stopSlot(slot, true);
-            const int64_t targetBlock = audioBlockCounter_.load(std::memory_order_acquire) + 3;
-            while (audioBlockCounter_.load(std::memory_order_acquire) < targetBlock)
+            auto* selfLocked = weakThis.get();
+            if (!selfLocked || !alive->load(std::memory_order_acquire)) return;
+            std::lock_guard<std::mutex> lock(selfLocked->importSlotMutex_[slot]);
+            // Re-vérifier après prise du verrou (weakThis peut avoir expiré).
+            selfLocked = weakThis.get();
+            if (!selfLocked || !alive->load(std::memory_order_acquire)) return;
+            selfLocked->stopSlot(slot, true);
+            const int64_t targetBlock = selfLocked->audioBlockCounter_.load(std::memory_order_acquire) + 3;
+            while (selfLocked->audioBlockCounter_.load(std::memory_order_acquire) < targetBlock) {
+                if (weakThis.wasObjectDeleted()) return;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
 
             // Chargement dans le SlotPlayer (worker thread — pas audio)
             const PlayMode mode = modeForResult(result, slot);
-            graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
-            slotLoaded_[slot].store(true, std::memory_order_release);
+            selfLocked->graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
+            selfLocked->slotLoaded_[slot].store(true, std::memory_order_release);
         }
 
-        if (cb) cb(slot, result);
+        if (auto* selfCb = weakThis.get(); selfCb && cb) cb(slot, result);
     }).detach();
 }
 
@@ -485,17 +495,15 @@ void EngineFacade::triggerMagicMix() noexcept
         serumContentType_, manualOverrides_, manualOverrideActive_);
 
     // ── Lancement du worker ──────────────────────────────────────────────────
-    // shared_ptr<alive> : garde la vie du flag même si EngineFacade est détruit
-    // pendant que le thread tourne. Le lambda captured par value le shared_ptr.
+    // ref créé sur le message thread (avant detach) pour éviter la race entre
+    // runHeuristicMix() et ~EngineFacade() lors de la construction de WeakReference.
+    juce::WeakReference<EngineFacade> ref(this);
     auto alive = std::make_shared<std::atomic<bool>>(true);
-    std::thread([this, in = std::move(in), alive]() mutable {
+    std::thread([ref, in = std::move(in), alive]() mutable {
         const mix::MixStateArray state = mix::runHeuristicMix(in);
 
         // Application + callback sur le message thread (l'état persistant n'est
         // jamais écrit depuis un thread de travail).
-        // WeakReference protège contre le use-after-free si ~EngineFacade() est
-        // appelé entre le début du thread et l'exécution du callAsync.
-        juce::WeakReference<EngineFacade> ref(this);
         juce::MessageManager::callAsync([ref, alive, in = std::move(in), state]() {
             if (!alive->load(std::memory_order_acquire)) return;
             auto* self = ref.get();
@@ -527,11 +535,11 @@ void EngineFacade::triggerAiMagicMix(
         serumRms_, serumCentroid_, serumMidFrac_, serumHighFrac_,
         serumContentType_, manualOverrides_, manualOverrideActive_);
 
+    juce::WeakReference<EngineFacade> ref(this);
     auto alive = std::make_shared<std::atomic<bool>>(true);
-    std::thread([this, in = std::move(in), decisions, alive]() mutable {
+    std::thread([ref, in = std::move(in), decisions, alive]() mutable {
         const mix::MixStateArray state = mix::runAiMix(in, decisions);
 
-        juce::WeakReference<EngineFacade> ref(this);
         juce::MessageManager::callAsync([ref, alive, in = std::move(in), state]() {
             if (!alive->load(std::memory_order_acquire)) return;
             auto* self = ref.get();
