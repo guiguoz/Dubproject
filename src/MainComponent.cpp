@@ -486,6 +486,9 @@ MainComponent::MainComponent()
                                   : (mode == 2) ? engine::PlayMode::LoopSync
                                   :               engine::PlayMode::OneShot;
         facade_.setSlotMode(slot, pm);
+        // Persister l'override dans la scène courante pour la sauvegarde.
+        sceneStore_.getScene(facade_.currentSceneIdx())
+            .playModeOverrides[static_cast<std::size_t>(slot)] = mode;
     };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
@@ -885,14 +888,15 @@ void MainComponent::saveProjectToFile(const juce::File& f)
         for (int t = 0; t < 9; ++t)
         {
             const auto st = static_cast<std::size_t>(t);
-            dst.filePaths[st]      = src.slots[st].filePath;
-            dst.gains[st]          = src.slots[st].gain;
-            dst.userGains[st]      = src.slots[st].userGain;
-            dst.mutes[st]          = src.slots[st].muted;
-            dst.trimStart[st]      = src.slots[st].trimStart;
-            dst.trimEnd[st]        = src.slots[st].trimEnd;
-            dst.delaySends[st]     = src.slots[st].delaySend;
-            dst.pitchOffsets[st]   = src.slots[st].semitones;
+            dst.filePaths[st]           = src.slots[st].filePath;
+            dst.gains[st]               = src.slots[st].gain;
+            dst.userGains[st]           = src.slots[st].userGain;
+            dst.mutes[st]               = src.slots[st].muted;
+            dst.trimStart[st]           = src.slots[st].trimStart;
+            dst.trimEnd[st]             = src.slots[st].trimEnd;
+            dst.delaySends[st]          = src.slots[st].delaySend;
+            dst.pitchOffsets[st]        = src.slots[st].semitones;
+            dst.playModeOverrides[st]   = src.playModeOverrides[st];
             const int numSteps = src.trackBarCounts[st] * 16;
             for (int s = 0; s < numSteps; ++s)
                 dst.steps[st][static_cast<std::size_t>(s)] =
@@ -1164,6 +1168,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 dst.slots[st].trimEnd    = src.trimEnd[st];
                 dst.slots[st].delaySend  = src.delaySends[st];
                 dst.slots[st].semitones  = src.pitchOffsets[st];
+                dst.playModeOverrides[st] = src.playModeOverrides[st];
                 const int numSteps = src.trackBarCounts[st] * 16;
                 for (int s = 0; s < numSteps; ++s)
                     dst.steps[st][static_cast<std::size_t>(s)] =
@@ -2511,12 +2516,25 @@ void MainComponent::applyScene(int idx, int fromIdx)
         // un import V2 — le SlotPlayer joue le bon PCM.
         if (!newPath.empty())
         {
+            const int overrideMode = sc.playModeOverrides[sidx]; // capturé avant le thread
             if (facade_.slotFilePath(i) != newPath
                 || facade_.slotTrimStart(i) != sc.slots[sidx].trimStart
                 || facade_.slotTrimEnd(i)   != sc.slots[sidx].trimEnd)
             {
-                facade_.importSampleAsync(i, newPath, nullptr,
+                // Nouveau fichier/trim : l'auto-détection fixe le mode. Le callback
+                // applique ensuite l'override manuel s'il en existe un.
+                engine::ImportCallback importCb;
+                if (overrideMode >= 0)
+                    importCb = [this, overrideMode](int s, const engine::AnalysisResult&) {
+                        facade_.setSlotMode(s, static_cast<engine::PlayMode>(overrideMode));
+                    };
+                facade_.importSampleAsync(i, newPath, std::move(importCb),
                                           sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd);
+            }
+            else if (overrideMode >= 0)
+            {
+                // Même fichier/trim déjà chargé : pas de réimport, applique l'override directement.
+                facade_.setSlotMode(i, static_cast<engine::PlayMode>(overrideMode));
             }
         }
         else
@@ -2536,6 +2554,14 @@ void MainComponent::applyScene(int idx, int fromIdx)
         const int         nSteps2 = sc.trackBarCounts[sidx2] * 16;
         for (int s = 0; s < nSteps2; ++s)
             stepSeqPanel_->setStepState(i, s, sc.steps[sidx2][static_cast<std::size_t>(s)]);
+    }
+
+    // Restaurer l'affichage UI du mode de lecture pour les slots avec override.
+    for (int i = 0; i < 9; ++i)
+    {
+        const int ov = sc.playModeOverrides[static_cast<std::size_t>(i)];
+        if (ov >= 0)
+            stepSeqPanel_->setSlotMode(i, ov);
     }
 
     // When a bar-quantized transition is armed (navigateScene pre-armed the buffer),

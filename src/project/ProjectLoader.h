@@ -15,7 +15,7 @@ namespace project {
 class ProjectLoader
 {
 public:
-    static constexpr int kFormatVersion = 22;
+    static constexpr int kFormatVersion = 23;
 
     static std::optional<ProjectData> load(const std::string& filePath);
     static bool save(const ProjectData& data, const std::string& filePath);

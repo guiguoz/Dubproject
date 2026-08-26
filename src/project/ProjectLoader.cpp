@@ -226,6 +226,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                         for (int i = 0; i < 9 && i < arr->size(); ++i)
                             sc.pitchOffsets[static_cast<std::size_t>(i)] =
                                 juce::jlimit(-12.f, 12.f, static_cast<float>((*arr)[i]));
+
+                if (data.version >= 23)
+                    if (const auto* arr = entry["playModeOverrides"].getArray())
+                        for (int i = 0; i < 9 && i < arr->size(); ++i)
+                            sc.playModeOverrides[static_cast<std::size_t>(i)] =
+                                juce::jlimit(-1, 2, static_cast<int>((*arr)[i]));
             }
         }
 
@@ -440,6 +446,13 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                 for (int i = 0; i < 9; ++i)
                     arr.add(static_cast<double>(sc.pitchOffsets[static_cast<std::size_t>(i)]));
                 entry->setProperty("pitchOffsets", arr);
+            }
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(sc.playModeOverrides[static_cast<std::size_t>(i)]);
+                entry->setProperty("playModeOverrides", arr);
             }
 
             scenesArr.add(juce::var(entry.get()));

@@ -54,6 +54,7 @@ struct SceneData {
     float        dubDelayTone     = 0.50f;
     float        dubDelayDrive    = 0.15f;
 
+    std::array<int, kMaxSlots> playModeOverrides = {-1,-1,-1,-1,-1,-1,-1,-1,-1}; // -1=auto, 0=OneShot, 1=Free, 2=LoopSync
     bool         used             = false;
 };
 
