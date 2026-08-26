@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, v2-engine]
   pull_request:
     branches: [main, dev]
 
@@ -82,3 +82,38 @@ jobs:
           path: build/SaxFXLive_artefacts/Release/SaxFXLive.exe
           if-no-files-found: warn
           retention-days: 30
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job TSan : EngineTSan compilé via tsan/CMakeLists.txt (standalone, sans JUCE).
+  # Détecte les data races dans le moteur audio avec ThreadSanitizer.
+  # ────────────────────────────────────────────────────────────────────────────
+  tsan-linux:
+    name: ThreadSanitizer (Ubuntu / Clang)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake
+
+      - name: Configure CMake (tsan/ standalone)
+        run: |
+          cmake -S tsan -B build-tsan \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build EngineTSan
+        run: cmake --build build-tsan --target EngineTSan --parallel
+
+      - name: Run EngineTSan (TSan stress test)
+        env:
+          TSAN_OPTIONS: "halt_on_error=1:second_deadlock_stack=1"
+        run: ./build-tsan/EngineTSan "[tsan]"
