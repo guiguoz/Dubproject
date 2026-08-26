@@ -2523,11 +2523,15 @@ void MainComponent::applyScene(int idx, int fromIdx)
             {
                 // Nouveau fichier/trim : l'auto-détection fixe le mode. Le callback
                 // applique ensuite l'override manuel s'il en existe un.
+                // SafePointer : évite le dangling si MainComponent est détruit avant la fin de l'import.
                 engine::ImportCallback importCb;
-                if (overrideMode >= 0)
-                    importCb = [this, overrideMode](int s, const engine::AnalysisResult&) {
-                        facade_.setSlotMode(s, static_cast<engine::PlayMode>(overrideMode));
+                if (overrideMode >= 0) {
+                    juce::Component::SafePointer<MainComponent> safeThis(this);
+                    importCb = [safeThis, overrideMode](int s, const engine::AnalysisResult&) {
+                        if (auto* mc = safeThis.getComponent())
+                            mc->facade_.setSlotMode(s, static_cast<engine::PlayMode>(overrideMode));
                     };
+                }
                 facade_.importSampleAsync(i, newPath, std::move(importCb),
                                           sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd);
             }
@@ -2557,10 +2561,12 @@ void MainComponent::applyScene(int idx, int fromIdx)
     }
 
     // Restaurer l'affichage UI du mode de lecture pour les slots avec override.
+    // Guard sur slot vide : ne pas afficher un mode coché pour un slot sans sample.
     for (int i = 0; i < 9; ++i)
     {
-        const int ov = sc.playModeOverrides[static_cast<std::size_t>(i)];
-        if (ov >= 0)
+        const std::size_t sidx3 = static_cast<std::size_t>(i);
+        const int ov = sc.playModeOverrides[sidx3];
+        if (ov >= 0 && !sc.slots[sidx3].filePath.empty())
             stepSeqPanel_->setSlotMode(i, ov);
     }
 
