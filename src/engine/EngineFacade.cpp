@@ -17,8 +17,10 @@ EngineFacade::EngineFacade()
 
 EngineFacade::~EngineFacade()
 {
-    // weakRefMaster_ est automatiquement clear() par le destructeur
-    // de JUCE_DECLARE_WEAK_REFERENCEABLE.
+    // Arrêter le thread de mix avant la destruction des membres.
+    // Sans ça, std::thread::~thread() appelle std::terminate() si joinable.
+    stopMixThread();
+    // weakRefMaster_ est automatiquement clear() par JUCE_DECLARE_WEAK_REFERENCEABLE.
 }
 
 // ─── Cycle de vie ─────────────────────────────────────────────────────────────
