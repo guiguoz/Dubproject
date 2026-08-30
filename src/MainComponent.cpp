@@ -2198,6 +2198,28 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
         facade_.setSlotGain(slot, v);
         break;
     }
+    case MT::DubDelayTone:
+        dubDelayToneSlider_.setValue(v, juce::dontSendNotification);
+        facade_.delay().setTone(v);
+        break;
+    case MT::DubDelayDrive:
+        dubDelayDriveSlider_.setValue(v, juce::dontSendNotification);
+        facade_.delay().setDrive(v);
+        break;
+    case MT::DubDelayDiv:
+    {
+        const int d = static_cast<int>(v * 3.99f);
+        dubDelayDivCombo_.setSelectedId(d + 1, juce::dontSendNotification);
+        facade_.delay().setDiv(d);
+        break;
+    }
+    case MT::DubDelayFreeze:
+    {
+        const bool freeze = v >= 0.5f;
+        dubDelayFreezeBtn_.setToggleState(freeze, juce::dontSendNotification);
+        facade_.delay().setFreeze(freeze);
+        break;
+    }
     default: break;
     }
 }

@@ -12,6 +12,10 @@ enum class MappingTarget {
     SerumGain,        // serumUserGain_ (multiplicateur sur le gain rider)
     Slot0Gain, Slot1Gain, Slot2Gain, Slot3Gain,
     Slot4Gain, Slot5Gain, Slot6Gain, Slot7Gain,
+    DubDelayTone,    // dubDelayToneSlider_
+    DubDelayDrive,   // dubDelayDriveSlider_
+    DubDelayDiv,     // dubDelayDivCombo_  (0–3 → 1/8 1/4 1/2 1bar)
+    DubDelayFreeze,  // dubDelayFreezeBtn_
     Count
 };
 
@@ -41,7 +45,11 @@ inline const char* mappingTargetName(MappingTarget t) noexcept
     case MappingTarget::Slot5Gain:        return "Slot 6 Gain";
     case MappingTarget::Slot6Gain:        return "Slot 7 Gain";
     case MappingTarget::Slot7Gain:        return "Slot 8 Gain";
-    default:                              return "";
+    case MappingTarget::DubDelayTone:    return "Dub Tone";
+    case MappingTarget::DubDelayDrive:   return "Dub Drive";
+    case MappingTarget::DubDelayDiv:     return "Dub Div";
+    case MappingTarget::DubDelayFreeze:  return "Dub Freeze";
+    default:                             return "";
     }
 }
 
