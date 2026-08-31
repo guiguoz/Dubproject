@@ -1103,6 +1103,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         stepSeqPanel_->setSlotMuted(i, sc.muted);
         facade_.setSlotMuted(i, sc.muted);
     }
+    facade_.flipPatternBuffer();
 
     if (data.musicContext.keyRoot >= 0)
     {
