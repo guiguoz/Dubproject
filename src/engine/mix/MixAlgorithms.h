@@ -58,7 +58,8 @@ inline float saxClearance(MixContentType type) noexcept
     if (type == MixContentType::BASS || type == MixContentType::KICK) return 1.00f;
     if (type == MixContentType::LOOP)                                 return 0.85f;
     if (type == MixContentType::SNARE || type == MixContentType::PERC) return 0.75f;
-    return 0.707f;  // HIHAT, SYNTH, PAD, OTHER
+    if (type == MixContentType::HIHAT)                                return 0.85f;
+    return 0.707f;  // SYNTH, PAD, OTHER
 }
 
 // ── Gain cible par type ──────────────────────────────────────────────────────
@@ -69,7 +70,7 @@ inline float targetGainForType(MixContentType type) noexcept
     {
         case MixContentType::KICK:  return 0.65f;              // −3.7 dBFS
         case MixContentType::SNARE: return 0.70f;              // −3.1 dBFS → eff. ×0.75 = 0.525
-        case MixContentType::HIHAT: return 0.75f;              // −2.5 dBFS → eff. ×0.707 = 0.530
+        case MixContentType::HIHAT: return 0.78f;              // −2.2 dBFS → eff. ×0.85 = 0.663
         case MixContentType::BASS:  return kBassTargetGain;    // −3.1 dBFS
         case MixContentType::SYNTH: return 0.75f;              // −2.5 dBFS → eff. ×0.707 = 0.530
         case MixContentType::PAD:   return 0.85f;              // −1.4 dBFS → eff. ×0.707 = 0.601
@@ -467,8 +468,7 @@ inline void applyRoleEQ(std::vector<float>& pcm, MixContentType type, double sr)
             break;
         case MixContentType::HIHAT:
             applyBiquad(pcm, makeHP(600.f, sr));
-            applyBiquad(pcm, makePeaking(3000.f, -1.f, 1.5f, sr));   // ← moins agressif
-            applyBiquad(pcm, makeHighShelf(8000.f, -2.f, sr));       // ← -4 → -2 dB
+            applyBiquad(pcm, makeHighShelf(8000.f, 0.f, sr));        // neutre — retire la coupe
             break;
         case MixContentType::BASS:
             applyBiquad(pcm, makeHP(25.f, sr));
