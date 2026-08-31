@@ -2105,9 +2105,7 @@ void MainComponent::timerCallback()
     if (facade_.isMagicBusy())
         aiCloud_.setState(ui::PixelCloudComponent::State::Working);
     else if (facade_.isMagicActive())
-        aiCloud_.setState(facade_.didLastMixUseFallback()
-                              ? ui::PixelCloudComponent::State::Disabled   // rouge = fallback heuristique
-                              : ui::PixelCloudComponent::State::Active);   // vert = IA réelle
+        aiCloud_.setState(ui::PixelCloudComponent::State::Active);
     else
         aiCloud_.setState(ui::PixelCloudComponent::State::Disabled);
 
