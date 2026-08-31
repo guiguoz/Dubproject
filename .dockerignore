@@ -1,0 +1,17 @@
+# Exclure les gros dossiers inutiles pour le build TSan
+build*/
+bin/
+.git/
+third_party/JUCE/
+third_party/ASIO/
+models/
+data/
+web/
+.vscode/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.o
