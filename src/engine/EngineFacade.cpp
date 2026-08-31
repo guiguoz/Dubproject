@@ -723,8 +723,13 @@ void EngineFacade::setTrackBarCount(int track, int bars) noexcept
 {
     if (track < 0 || track >= kMaxSlots) return;
     if (bars  <= 0) return;
+    const int oldSteps = writePatterns_[track].numSteps;
+    const int newSteps = bars * 16;
     trackBars_[track]              = bars;
-    writePatterns_[track].numSteps = bars * 16;
+    writePatterns_[track].numSteps = newSteps;
+    if (newSteps > oldSteps && oldSteps > 0)
+        for (int i = oldSteps; i < newSteps && i < kMaxSteps; ++i)
+            writePatterns_[track].steps[i] = writePatterns_[track].steps[i % oldSteps];
 }
 
 int EngineFacade::getTrackBarCount(int track) const noexcept

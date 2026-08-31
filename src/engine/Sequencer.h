@@ -80,9 +80,6 @@ public:
                         EventScheduler& scheduler) noexcept {
         if (!ts.playing || numSamples <= 0) return;
 
-        // Marquer que le bloc est lu — met à jour front pour que writeBuffer() ait un back libre.
-        patterns_.consume();
-
         const int64_t blockEnd = blockStart + static_cast<int64_t>(numSamples);
 
         const int64_t firstStep = stepIndexAt(ts, blockStart);
