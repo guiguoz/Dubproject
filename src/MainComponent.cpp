@@ -253,6 +253,7 @@ MainComponent::MainComponent()
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                updateSpatialSlot(s);
             });
         });
     };
@@ -683,6 +684,27 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
     }
 }
 
+void MainComponent::updateSpatialSlot(int slot)
+{
+    static const juce::Colour kColours[9] = {
+        juce::Colour { 0xFF4CDFA8 }, juce::Colour { 0xFF06B6D4 },
+        juce::Colour { 0xFFC8C7C7 }, juce::Colour { 0xFF8B5CF6 },
+        juce::Colour { 0xFFF97316 }, juce::Colour { 0xFFF43F5E },
+        juce::Colour { 0xFFEAB308 }, juce::Colour { 0xFF38BDF8 },
+        juce::Colour { 0xFFFF6B35 },
+    };
+    using MT = engine::mix::MixContentType;
+    static constexpr MT kDefaults[9] = {
+        MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+        MT::PAD,  MT::SYNTH, MT::PERC, MT::LOOP,
+    };
+    const auto detected = facade_.getDetectedType(slot);
+    const auto mt       = (detected != MT::OTHER) ? detected : kDefaults[slot];
+    const auto sp       = engine::mix::spatialForType(slot, mt);
+    const bool loaded   = !facade_.slotFilePath(slot).empty();
+    spatialViz_.setSlotState(slot, sp.pan, sp.width, sp.depth, loaded, kColours[slot]);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // applyMasterKey — propagate master key to MusicContext
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1074,6 +1096,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_->setSlotLoaded(s, true);
                     stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                    updateSpatialSlot(s);
                 });
             });
 

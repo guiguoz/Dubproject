@@ -260,6 +260,7 @@ private:
     //==========================================================================
     void ensureGrainNoise(int w, int h);
     void loadSampleIntoSlot(int slot, const std::string& path);
+    void updateSpatialSlot(int slot);
     void openSampleEditor(int slot);
     static std::vector<float> computeEnvelope(const std::vector<float>& pcm, int bins = 200);
     void applyProjectData(const project::ProjectData& data);
