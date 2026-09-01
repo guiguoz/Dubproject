@@ -886,7 +886,9 @@ void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 {
     for (int s = 0; s < kMaxSlots; ++s)
     {
-        writePatterns_[s].numSteps = buf.trackStepCount[s] > 0 ? buf.trackStepCount[s] : 16;
+        const int steps = buf.trackStepCount[s] > 0 ? buf.trackStepCount[s] : 16;
+        writePatterns_[s].numSteps = steps;
+        trackBars_[s] = steps / 16;
         for (int i = 0; i < kMaxSteps; ++i)
             writePatterns_[s].steps[i] = buf.steps[s][i];
     }

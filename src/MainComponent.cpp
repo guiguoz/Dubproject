@@ -2796,7 +2796,9 @@ void MainComponent::copyCurrentSceneToNext()
         return;
 
     menu.showMenuAsync(
-        juce::PopupMenu::Options().withTargetComponent(&sceneCopyBtn_),
+        juce::PopupMenu::Options()
+            .withTargetComponent(&sceneCopyBtn_)
+            .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::upwards),
         [this](int result)
         {
             if (result <= 0) return;
