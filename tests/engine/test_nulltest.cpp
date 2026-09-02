@@ -196,16 +196,17 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Références committées (§11.2). Régénérer UNIQUEMENT sur changement
     // intentionnel du rendu, avec justification dans le commit.
     //
-    // Référence v3 (M9 étape 6) — spatialisation runtime pan+Haas appliquée
-    // par SlotPlayer à partir du rôle de chaque slot (dérivé dans AudioGraph :
-    // Melodic→SYNTH w=0.4, Snare→SNARE w=0.1, Perc→PERC pan=0.3, Pad→PAD
-    // w=0.8 ; KICK/BASS restent centrés). + MonoSubFilter (1er ordre Butterworth
-    // LP 120 Hz, force le sub-bass en mono). Changement INTENTIONNEL du rendu.
-    // Régénéré via NULL0 (Debug == Release bit-exact, vérifié).
-    //   hashAudio = 0xefcc7914b1fca7ca
-    //   hashRms   = 0x1e2aec5f0d21c5c0
-    CHECK(hashAudio == 0xefcc7914b1fca7caull);
-    CHECK(hashRms   == 0x1e2aec5f0d21c5c0ull);
+    // Référence v4 — crossfade retrigger OneShot/Free (kRetrigFadeLen=256 ≈5.8 ms).
+    // Avant : retrigger = 2 voix simultanées → volume ×2. Maintenant : fade-out
+    // voice[0] + fade-in voice[1] sur 256 frames ; somme des gains = 1.0 partout.
+    // LoopSync : inchangé (position transport, pas de doublement possible).
+    // Affecte slot 0 (mélodique OneShot, steps 0+6+10 — chevauchement step 0→6)
+    // et slot 1 (basse Free, retrigger toutes les 3 steps).
+    // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
+    //   hashAudio = 0x5da5dd5e8636df67
+    //   hashRms   = 0x364b0b0f063dd55d
+    CHECK(hashAudio == 0x5da5dd5e8636df67ull);
+    CHECK(hashRms   == 0x364b0b0f063dd55dull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

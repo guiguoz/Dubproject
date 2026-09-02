@@ -42,11 +42,12 @@ struct SlotParams {
 
 struct Voice {
     std::atomic<bool> active{false};
-    bool    fadingOut = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
-    int64_t readPos   = 0;      // en frames (pas en samples entrelacés)
-    float   readFrac  = 0.f;    // partie fractionnaire pour correction SR
-    float   fadeGain  = 1.0f;   // gain courant du fade (in ou out)
-    int     fadeLeft  = 0;      // samples restants dans le fade
+    bool    fadingOut  = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
+    int64_t readPos    = 0;      // en frames (pas en samples entrelacés)
+    float   readFrac   = 0.f;    // partie fractionnaire pour correction SR
+    float   fadeGain   = 1.0f;   // gain courant du fade (in ou out)
+    int     fadeLeft   = 0;      // samples restants dans le fade
+    int     fadeInLen  = 16;     // durée du fade-in ; kRetrigFadeLen sur retrigger, kFadeLen sinon
 };
 
 // ─── SlotPlayer ──────────────────────────────────────────────────────────────
@@ -173,7 +174,8 @@ public:
 
 private:
     static constexpr int   kSlots         = 9;
-    static constexpr int   kFadeLen       = 16;
+    static constexpr int   kFadeLen       = 16;     // micro-fade (artefact début/fin)
+    static constexpr int   kRetrigFadeLen = 256;    // ≈5.8 ms @44.1 kHz — crossfade retrigger
     static constexpr float kFadeThreshold = 0.001f; // −60 dB
     static constexpr int   kCrossfadeLen  = 256;    // micro-crossfade recalage §10.2
 

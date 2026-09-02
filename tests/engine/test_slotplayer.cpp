@@ -161,51 +161,51 @@ TEST_CASE("T-SP1d: muted slot produces zero output", "[slotplayer]") {
         REQUIRE(out[static_cast<size_t>(i)] == 0.f);
 }
 
-// ─── T-SP1e : chevauchement → deux voix s'additionnent ───────────────────────
-TEST_CASE("T-SP1e: overlapping triggers sum two voices", "[slotplayer]") {
-    // PCM ramp sans fade : valeur frame i = (i+1)*0.001f
-    const int N = 8;
+// ─── T-SP1e : retrigger → crossfade, pas de doublement de volume ─────────────
+// Un retrigger lance un crossfade kRetrigFadeLen (≈256 frames) : voice[0] fond
+// en sortie, voice[1] monte en entrée. La somme des gains vaut 1.0 à tout
+// instant → pas de doublement de volume.
+TEST_CASE("T-SP1e: retrigger crossfades voices, no volume doubling", "[slotplayer]") {
+    // PCM constant C = 0.001f (== threshold → PAS de micro-fade sur trigger frais).
+    // 1000 frames > kRetrigFadeLen (256) : voice[0] encore active au 2e trigger.
+    const int   N    = 1000;
+    const float C    = 0.001f;   // == kFadeThreshold → pas de micro-fade au 1er trigger
     SlotPlayer sp;
-    sp.loadSlot(0, makeMonoRamp(N), PlayMode::OneShot);
+    sp.loadSlot(0, makeMono(N, C), PlayMode::OneShot);
 
     const auto ts = makeTS();
 
-    // Premier trigger : lance voice[0]
+    // Premier trigger à offset 0 : voice[0] démarre sans micro-fade.
+    // On rend 500 frames → voice[0].readPos = 500, encore active.
     {
         const EngineEvent ev = makeTrigger(0);
-        std::vector<float> out(static_cast<size_t>(N) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), N, &wrap(ev), 1);
-        // La voix avance de N frames (readPos = N → inactive pour ONE-SHOT)
+        std::vector<float> dummy(static_cast<size_t>(500) * 2u, 0.f);
+        sp.processBlock(ts, dummy.data(), 500, &wrap(ev), 1);
+        REQUIRE(sp.isVoiceActive(0));
     }
 
-    // Recharger le PCM pour remettre les voix à zéro, puis tester le chevauchement
-    // On recharge → voice[0] et voice[1] sont reset.
-    sp.loadSlot(0, makeMonoRamp(N), PlayMode::OneShot);
-
-    // Trigger 1 : lance voice[0]
+    // Second trigger : crossfade kRetrigFadeLen=256 frames.
+    // Somme des gains : fade-out v0=(256-f)/256 + fade-in v1=f/256 = 1.0 exactement.
+    // Sortie = C * 1.0 = C à chaque frame.
     {
         const EngineEvent ev = makeTrigger(0);
-        std::vector<float> dummy(static_cast<size_t>(N / 2) * 2u, 0.f);
-        // Rendre seulement N/2 frames : voice[0] a readPos = N/2 (toujours active)
-        sp.processBlock(ts, dummy.data(), N / 2, &wrap(ev), 1);
+        std::vector<float> out(static_cast<size_t>(256) * 2u, 0.f);
+        sp.processBlock(ts, out.data(), 256, &wrap(ev), 1);
+
+        for (int f = 0; f < 256; ++f)
+            REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(C).margin(1e-6f));
     }
 
-    // Trigger 2 : lance voice[1] (voice[0] encore active)
+    // Après le crossfade : seule voice[1] active, sortie = C.
     {
-        const EngineEvent ev = makeTrigger(0);
-        std::vector<float> out(static_cast<size_t>(N / 2) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), N / 2, &wrap(ev), 1);
+        std::vector<float> out(static_cast<size_t>(64) * 2u, 0.f);
+        sp.processBlock(ts, out.data(), 64, nullptr, 0);
 
-        // voice[0] est à readPos = N/2, voice[1] est à readPos = 0
-        // frame f : voice[0] → (N/2 + f + 1)*0.001f, voice[1] → (f + 1)*0.001f
-        for (int f = 0; f < N / 2; ++f) {
-            const float v0 = static_cast<float>(N / 2 + f + 1) * 0.001f;
-            const float v1 = static_cast<float>(f + 1) * 0.001f;
-            const float expected = v0 + v1;
-            REQUIRE(out[static_cast<size_t>(f) * 2u] == expected);
-        }
+        for (int f = 0; f < 64; ++f)
+            REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(C).margin(1e-6f));
     }
 }
+
 
 // ─── T-SP1f : micro-fade → les 16 premiers frames ont un fade-in ──────────────
 TEST_CASE("T-SP1f: micro-fade applies to first 16 frames when first sample > 0.001f", "[slotplayer]") {

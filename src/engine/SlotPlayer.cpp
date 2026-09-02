@@ -170,32 +170,33 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 // ─── handleTrigger ───────────────────────────────────────────────────────────
 
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
-    // Si voice[0] est encore active (sample long ou mode Free sans fin naturelle),
-    // la fondre à la sortie avant de lancer la nouvelle voix — évite le chevauchement
-    // (volume x2) quel que soit le mode de lecture.
+    // Crossfade sur retrigger (OneShot + Free uniquement).
+    // LoopSync : position dérivée du transport → une seule voix effective, pas de doublement.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
-    if (voices_[slot][0].active.load(std::memory_order_relaxed)) {
+    const bool isRetrigger = (mode != PlayMode::LoopSync)
+                           && voices_[slot][0].active.load(std::memory_order_relaxed);
+    const int  crossLen    = isRetrigger ? kRetrigFadeLen : kFadeLen;
+
+    if (isRetrigger) {
         voices_[slot][0].fadingOut = true;
-        voices_[slot][0].fadeGain = 1.0f;
-        voices_[slot][0].fadeLeft = kFadeLen;
+        voices_[slot][0].fadeGain  = 1.0f;
+        voices_[slot][0].fadeLeft  = crossLen;
     }
 
-    // Choisir la voix inactive. Si les deux sont actives, prendre voice[1]
-    // (la plus ancienne est voice[0]).
-    int vIdx = 0;
-    if (voices_[slot][0].active.load(std::memory_order_relaxed))
-        vIdx = 1;
+    // Si voice[0] est active (retrigger), utiliser voice[1] ; sinon voice[0].
+    const int vIdx = isRetrigger ? 1 : 0;
 
     // Reset complet : aucun état résiduel (fadingOut, fadeLeft, readFrac…) ne survit.
     // pcmBuffers_ et params_ sont dans des tableaux séparés — non affectés.
     Voice& voice = voices_[slot][vIdx];
     voice.active.store(false, std::memory_order_relaxed);
-    voice.fadingOut = false;
-    voice.readPos   = 0;
-    voice.readFrac  = 0.f;
-    voice.fadeGain  = 1.0f;
-    voice.fadeLeft  = 0;
+    voice.fadingOut  = false;
+    voice.readPos    = 0;
+    voice.readFrac   = 0.f;
+    voice.fadeGain   = 1.0f;
+    voice.fadeLeft   = 0;
+    voice.fadeInLen  = crossLen;
     voice.active.store(true, std::memory_order_relaxed);
     voiceActive_[slot][vIdx].store(true, std::memory_order_relaxed);
 
@@ -214,9 +215,11 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     if (pcm.numFrames > 0 && !pcm.data.empty())
         firstSample = pcm.data[0]; // canal 0, frame 0
 
-    if (std::abs(firstSample) > kFadeThreshold) {
+    // Sur retrigger : toujours fade-in (crossfade avec la voix sortante).
+    // Sur trigger frais : fade-in seulement si le premier sample dépasse le seuil.
+    if (isRetrigger || std::abs(firstSample) > kFadeThreshold) {
         voice.fadeGain = 0.0f;
-        voice.fadeLeft = kFadeLen;
+        voice.fadeLeft = crossLen;
     } else {
         voice.fadeGain = 1.0f;
         voice.fadeLeft = 0;
@@ -411,8 +414,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 return;
             }
         } else if (voice.fadeLeft > 0) {
-            // Fade-in initial (0 → 1 sur kFadeLen frames)
-            voice.fadeGain += 1.0f / static_cast<float>(kFadeLen);
+            voice.fadeGain += 1.0f / static_cast<float>(voice.fadeInLen);
             if (voice.fadeGain > 1.0f) voice.fadeGain = 1.0f;
             --voice.fadeLeft;
         }
