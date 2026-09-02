@@ -170,14 +170,12 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 // ─── handleTrigger ───────────────────────────────────────────────────────────
 
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
-    // En mode Free avec boucle interne, la voix ne s'arrête jamais (se réinitialise
-    // elle-même). Donc si voice[0] est active en mode Free, on DOIT l'arrêter avant
-    // de déclencher une nouvelle voix, sinon on a deux voix simultanées.
+    // Si voice[0] est encore active (sample long ou mode Free sans fin naturelle),
+    // la fondre à la sortie avant de lancer la nouvelle voix — évite le chevauchement
+    // (volume x2) quel que soit le mode de lecture.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
-    
-    if (mode == PlayMode::Free && voices_[slot][0].active.load(std::memory_order_relaxed)) {
-        // Arrêter voice[0] : la marquer fadingOut pour qu'elle s'éteigne graduellement
-        // plutôt que de disparaître brutalement.
+
+    if (voices_[slot][0].active.load(std::memory_order_relaxed)) {
         voices_[slot][0].fadingOut = true;
         voices_[slot][0].fadeGain = 1.0f;
         voices_[slot][0].fadeLeft = kFadeLen;
