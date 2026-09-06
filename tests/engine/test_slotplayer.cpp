@@ -161,22 +161,21 @@ TEST_CASE("T-SP1d: muted slot produces zero output", "[slotplayer]") {
         REQUIRE(out[static_cast<size_t>(i)] == 0.f);
 }
 
-// ─── T-SP1e : retrigger → crossfade, pas de doublement de volume ─────────────
-// Un retrigger lance un crossfade kRetrigFadeLen (≈256 frames) : voice[0] fond
-// en sortie, voice[1] monte en entrée. La somme des gains vaut 1.0 à tout
-// instant → pas de doublement de volume.
-TEST_CASE("T-SP1e: retrigger crossfades voices, no volume doubling", "[slotplayer]") {
-    // PCM constant C = 0.001f (== threshold → PAS de micro-fade sur trigger frais).
-    // 1000 frames > kRetrigFadeLen (256) : voice[0] encore active au 2e trigger.
-    const int   N    = 1000;
-    const float C    = 0.001f;   // == kFadeThreshold → pas de micro-fade au 1er trigger
+// ─── T-SP1e : retrigger → fade-out ancienne voix, nouvelle démarre à plein gain ─
+// L'ancienne voix fond sur kRetrigFadeLen=64 frames (≈1.5 ms) ; la nouvelle
+// démarre immédiatement à gain plein → attaque préservée, pas de doublement durable.
+// Pendant le fade-out (64 frames) : sortie ∈ [C, 2·C] (bref overlap).
+// Après le fade-out : seule la nouvelle voix → sortie exactement C.
+TEST_CASE("T-SP1e: retrigger — fade-out ancienne voix, nouvelle voix à plein gain", "[slotplayer]") {
+    const int   N = 1000;
+    const float C = 0.001f;   // == kFadeThreshold → pas de micro-fade au 1er trigger
     SlotPlayer sp;
     sp.loadSlot(0, makeMono(N, C), PlayMode::OneShot);
 
     const auto ts = makeTS();
 
-    // Premier trigger à offset 0 : voice[0] démarre sans micro-fade.
-    // On rend 500 frames → voice[0].readPos = 500, encore active.
+    // Premier trigger : voice[0] démarre sans micro-fade (C == threshold, strict >).
+    // On rend 500 frames → voice[0].readPos=500, encore active.
     {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> dummy(static_cast<size_t>(500) * 2u, 0.f);
@@ -184,24 +183,46 @@ TEST_CASE("T-SP1e: retrigger crossfades voices, no volume doubling", "[slotplaye
         REQUIRE(sp.isVoiceActive(0));
     }
 
-    // Second trigger : crossfade kRetrigFadeLen=256 frames.
-    // Somme des gains : fade-out v0=(256-f)/256 + fade-in v1=f/256 = 1.0 exactement.
-    // Sortie = C * 1.0 = C à chaque frame.
+    // Second trigger : voice[0] fade-out sur kRetrigFadeLen=64 frames,
+    // voice[1] démarre à plein gain (pas de fade-in forcé sur retrigger).
+    // Pendant le fade : overlap bref [C, 2·C]. Après : exactement C.
     {
+        constexpr int kFade = 64;   // kRetrigFadeLen
         const EngineEvent ev = makeTrigger(0);
-        std::vector<float> out(static_cast<size_t>(256) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), 256, &wrap(ev), 1);
+        std::vector<float> out(static_cast<size_t>(kFade + 64) * 2u, 0.f);
+        sp.processBlock(ts, out.data(), kFade + 64, &wrap(ev), 1);
 
-        for (int f = 0; f < 256; ++f)
+        for (int f = 0; f < kFade; ++f) {
+            const float v = out[static_cast<size_t>(f) * 2u];
+            REQUIRE(v >= Catch::Approx(C).margin(1e-6f));
+            REQUIRE(v <= Catch::Approx(2.f * C).margin(1e-6f));
+        }
+        for (int f = kFade; f < kFade + 64; ++f)
             REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(C).margin(1e-6f));
     }
+}
 
-    // Après le crossfade : seule voice[1] active, sortie = C.
-    {
-        std::vector<float> out(static_cast<size_t>(64) * 2u, 0.f);
-        sp.processBlock(ts, out.data(), 64, nullptr, 0);
+// ─── T-SP1h : multi-retrigger → une seule voix active après le fade-out ──────
+TEST_CASE("T-SP1h: multi-retrigger — après fade-out, une seule voix à plein gain", "[slotplayer]") {
+    const int   N = 10000;
+    const float C = 0.001f;   // == kFadeThreshold → pas de micro-fade sur trigger initial
+    SlotPlayer sp;
+    sp.loadSlot(0, makeMono(N, C), PlayMode::Free);
 
-        for (int f = 0; f < 64; ++f)
+    const auto ts = makeTS();
+
+    // kRetrigFadeLen=64 frames de bref overlap à chaque retrigger (≈1.5 ms).
+    // Après 64 frames : seule voix active → sortie exactement C.
+    constexpr int kFade  = 64;    // kRetrigFadeLen
+    constexpr int kBlock = 300;   // > kFade : fade terminé avant la fin du bloc
+
+    for (int trig = 0; trig < 5; ++trig) {
+        const EngineEvent ev = makeTrigger(0);
+        std::vector<float> out(static_cast<size_t>(kBlock) * 2u, 0.f);
+        sp.processBlock(ts, out.data(), kBlock, &wrap(ev), 1);
+
+        // Après le fade-out : exactement C (une seule voix)
+        for (int f = kFade; f < kBlock; ++f)
             REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(C).margin(1e-6f));
     }
 }

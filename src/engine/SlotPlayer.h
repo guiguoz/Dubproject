@@ -42,12 +42,11 @@ struct SlotParams {
 
 struct Voice {
     std::atomic<bool> active{false};
-    bool    fadingOut  = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
-    int64_t readPos    = 0;      // en frames (pas en samples entrelacés)
-    float   readFrac   = 0.f;    // partie fractionnaire pour correction SR
-    float   fadeGain   = 1.0f;   // gain courant du fade (in ou out)
-    int     fadeLeft   = 0;      // samples restants dans le fade
-    int     fadeInLen  = 16;     // durée du fade-in ; kRetrigFadeLen sur retrigger, kFadeLen sinon
+    bool    fadingOut = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
+    int64_t readPos   = 0;      // en frames (pas en samples entrelacés)
+    float   readFrac  = 0.f;    // partie fractionnaire pour correction SR
+    float   fadeGain  = 1.0f;   // gain courant du fade (in ou out)
+    int     fadeLeft  = 0;      // samples restants dans le fade
 };
 
 // ─── SlotPlayer ──────────────────────────────────────────────────────────────
@@ -61,12 +60,15 @@ public:
     void clearSlot(int slot) noexcept;
 
     // Traite un bloc pour tous les slots actifs.
-    // output : buffer stéréo entrelacé [L0,R0,L1,R1,...], numFrames frames.
-    // Contenu AJOUTÉ (+=) au buffer — wet-only additif.
+    // output : buffer stéréo entrelacé [L0,R0,L1,R1,...], numFrames frames (nullptr = ignoré).
+    // perSlotL/R : buffers planaires par slot (optionnels) — remplis en additif par slot.
+    // Contenu AJOUTÉ (+=) aux buffers — wet-only additif.
     // events : events avec offset temporel dans le bloc (triés par offset croissant).
     void processBlock(const TransportState& ts,
                       float* output, int32_t numFrames,
-                      const EventWithOffset* events, int numEvents) noexcept;
+                      const EventWithOffset* events, int numEvents,
+                      float** perSlotL = nullptr,
+                      float** perSlotR = nullptr) noexcept;
 
     // Active/désactive le mode LOOP SYNC pour un slot (message thread).
     // loopBeats : durée de la loop en beats (ex. 8 = 2 mesures 4/4).
@@ -175,7 +177,7 @@ public:
 private:
     static constexpr int   kSlots         = 9;
     static constexpr int   kFadeLen       = 16;     // micro-fade (artefact début/fin)
-    static constexpr int   kRetrigFadeLen = 256;    // ≈5.8 ms @44.1 kHz — crossfade retrigger
+    static constexpr int   kRetrigFadeLen = 64;     // ≈1.5 ms @44.1 kHz — fade-out anti-clic retrigger
     static constexpr float kFadeThreshold = 0.001f; // −60 dB
     static constexpr int   kCrossfadeLen  = 256;    // micro-crossfade recalage §10.2
 
@@ -211,6 +213,7 @@ private:
     // Buffers temporaires pré-alloués pour renderLoopSync (zéro allocation audio).
     std::vector<float> tmpL_, tmpR_;      // sortie stéréo (numFrames)
     std::vector<float> srcL_, srcR_;      // buffer source (inputFrames)
+    std::vector<float> slotRenderScratch_; // entrelacé L/R pour renderSlot isolé
 
     float sampleRate_ = 44100.f;
 
@@ -250,10 +253,17 @@ private:
     void renderLoopSync(int slot, float* out, int numFrames,
                         const TransportState& ts, float fadeScale = 1.0f) noexcept;
 
+    // Rend un seul slot (appelé par renderSlots / processBlock en sous-blocs).
+    void renderSlot(int slot, const TransportState& ts,
+                    float* output, int32_t numFrames,
+                    int64_t blockStart, int frameOffset,
+                    float* perSlotL, float* perSlotR) noexcept;
+
     // Rend tous les slots actifs dans le buffer de sortie (appelé par processBlock en sous-blocs).
     void renderSlots(const TransportState& ts,
                      float* output, int32_t numFrames,
-                     int64_t blockStart) noexcept;
+                     int64_t blockStart, int frameOffset,
+                     float** perSlotL, float** perSlotR) noexcept;
 };
 
 } // namespace engine

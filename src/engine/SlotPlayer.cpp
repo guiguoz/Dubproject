@@ -41,6 +41,7 @@ void SlotPlayer::prepareStretchers(int channels, float sampleRate, int maxBlockS
     tmpR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     srcL_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);   // x2 pour timeRatio > 1
     srcR_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);
+    slotRenderScratch_.assign(static_cast<size_t>(maxBlockSize) * 2, 0.f);
 }
 
 // ─── armLoopSync ─────────────────────────────────────────────────────────────
@@ -170,33 +171,36 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 // ─── handleTrigger ───────────────────────────────────────────────────────────
 
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
-    // Crossfade sur retrigger (OneShot + Free uniquement).
-    // LoopSync : position dérivée du transport → une seule voix effective, pas de doublement.
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
-    const bool isRetrigger = (mode != PlayMode::LoopSync)
-                           && voices_[slot][0].active.load(std::memory_order_relaxed);
-    const int  crossLen    = isRetrigger ? kRetrigFadeLen : kFadeLen;
-
-    if (isRetrigger) {
-        voices_[slot][0].fadingOut = true;
-        voices_[slot][0].fadeGain  = 1.0f;
-        voices_[slot][0].fadeLeft  = crossLen;
+    // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic (≈1.5 ms).
+    //    LoopSync exclu : position dérivée du transport, pas de double-voix possible.
+    int lastActiveVoice = -1;
+    if (mode != PlayMode::LoopSync) {
+        for (int v = 0; v < 2; ++v) {
+            Voice& vc = voices_[slot][v];
+            if (vc.active.load(std::memory_order_relaxed)) {
+                lastActiveVoice = v;
+                if (!vc.fadingOut) {
+                    vc.fadingOut = true;
+                    vc.fadeGain  = 1.0f;
+                    vc.fadeLeft  = kRetrigFadeLen;
+                }
+            }
+        }
     }
 
-    // Si voice[0] est active (retrigger), utiliser voice[1] ; sinon voice[0].
-    const int vIdx = isRetrigger ? 1 : 0;
+    // 2. Sélectionner la nouvelle voix en alternant.
+    const int vIdx = (lastActiveVoice == 0) ? 1 : 0;
 
-    // Reset complet : aucun état résiduel (fadingOut, fadeLeft, readFrac…) ne survit.
-    // pcmBuffers_ et params_ sont dans des tableaux séparés — non affectés.
+    // 3. Initialiser la nouvelle voix.
     Voice& voice = voices_[slot][vIdx];
     voice.active.store(false, std::memory_order_relaxed);
-    voice.fadingOut  = false;
-    voice.readPos    = 0;
-    voice.readFrac   = 0.f;
-    voice.fadeGain   = 1.0f;
-    voice.fadeLeft   = 0;
-    voice.fadeInLen  = crossLen;
+    voice.fadingOut = false;
+    voice.readPos   = 0;
+    voice.readFrac  = 0.f;
+    voice.fadeGain  = 1.0f;
+    voice.fadeLeft  = 0;
     voice.active.store(true, std::memory_order_relaxed);
     voiceActive_[slot][vIdx].store(true, std::memory_order_relaxed);
 
@@ -209,20 +213,14 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
         stretchers_[slot].reset();
     }
 
-    // Micro-fade : seulement si le premier sample dépasse le seuil
+    // Micro-fade anti-clic uniquement si le premier échantillon dépasse le seuil.
+    // Sur retrigger, PAS de fade-in forcé : la nouvelle voix démarre à plein gain
+    // pour préserver l'attaque. Le clic est évité par le fade-out sur l'ancienne voix.
     const SlotPcm& pcm = activePcm(slot);
-    float firstSample = 0.f;
-    if (pcm.numFrames > 0 && !pcm.data.empty())
-        firstSample = pcm.data[0]; // canal 0, frame 0
-
-    // Sur retrigger : toujours fade-in (crossfade avec la voix sortante).
-    // Sur trigger frais : fade-in seulement si le premier sample dépasse le seuil.
-    if (isRetrigger || std::abs(firstSample) > kFadeThreshold) {
+    if (pcm.numFrames > 0 && !pcm.data.empty()
+            && std::abs(pcm.data[0]) > kFadeThreshold) {
         voice.fadeGain = 0.0f;
-        voice.fadeLeft = crossLen;
-    } else {
-        voice.fadeGain = 1.0f;
-        voice.fadeLeft = 0;
+        voice.fadeLeft = kFadeLen;
     }
 }
 
@@ -414,7 +412,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 return;
             }
         } else if (voice.fadeLeft > 0) {
-            voice.fadeGain += 1.0f / static_cast<float>(voice.fadeInLen);
+            voice.fadeGain += 1.0f / static_cast<float>(kFadeLen);
             if (voice.fadeGain > 1.0f) voice.fadeGain = 1.0f;
             --voice.fadeLeft;
         }
@@ -490,7 +488,8 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
 
 void SlotPlayer::processBlock(const TransportState& ts,
                               float* output, int32_t numFrames,
-                              const EventWithOffset* events, int numEvents) noexcept {
+                              const EventWithOffset* events, int numEvents,
+                              float** perSlotL, float** perSlotR) noexcept {
     // Avancer les rampes de transition + reset des pics de sortie.
     advanceRamps(numFrames);
     for (int slot = 0; slot < kSlots; ++slot)
@@ -557,10 +556,81 @@ void SlotPlayer::processBlock(const TransportState& ts,
         // Renderer le sous-bloc [renderPos, nextEventPos)
         const int subLen = nextEventPos - renderPos;
         if (subLen > 0) {
-            float* subOut = output + static_cast<size_t>(renderPos) * 2u;
-            renderSlots(ts, subOut, subLen, ts.blockStart + renderPos);
+            float* subOut = (output != nullptr)
+                ? output + static_cast<size_t>(renderPos) * 2u
+                : nullptr;
+            renderSlots(ts, subOut, subLen, ts.blockStart + renderPos, renderPos,
+                        perSlotL, perSlotR);
         }
         renderPos = nextEventPos;
+    }
+}
+
+// ─── renderSlot ──────────────────────────────────────────────────────────────
+
+void SlotPlayer::renderSlot(int slot, const TransportState& ts,
+                            float* output, int32_t numFrames,
+                            int64_t blockStart, int frameOffset,
+                            float* perSlotL, float* perSlotR) noexcept
+{
+    if (slot < 0 || slot >= kSlots) return;
+    if (!loaded_[slot].load(std::memory_order_acquire)) return;
+    if (params_[slot].muted.load(std::memory_order_relaxed)) return;
+
+    const bool needScratch = (output == nullptr && (perSlotL != nullptr || perSlotR != nullptr));
+    float* renderOut = output;
+    if (needScratch) {
+        std::fill(slotRenderScratch_.begin(),
+                  slotRenderScratch_.begin() + static_cast<size_t>(numFrames) * 2, 0.f);
+        renderOut = slotRenderScratch_.data();
+    }
+
+    const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
+
+    if (mode == PlayMode::LoopSync) {
+        bool anyActive = false;
+        for (int v = 0; v < 2; ++v)
+            if (voices_[slot][v].active.load(std::memory_order_relaxed)) { anyActive = true; break; }
+        if (!anyActive) return;
+
+        float fadeScale = 1.0f;
+        Voice& vc0 = voices_[slot][0];
+        if (vc0.fadingOut) {
+            if (vc0.fadeLeft <= 0) {
+                deactivateVoice(slot, 0);
+                deactivateVoice(slot, 1);
+                return;
+            }
+            fadeScale = vc0.fadeGain;
+            const int consumed = std::min(vc0.fadeLeft, static_cast<int>(numFrames));
+            vc0.fadeGain -= vc0.fadeGain * static_cast<float>(consumed)
+                                         / static_cast<float>(vc0.fadeLeft);
+            vc0.fadeLeft -= consumed;
+            if (vc0.fadeLeft <= 0) {
+                deactivateVoice(slot, 0);
+                deactivateVoice(slot, 1);
+            }
+        }
+        renderLoopSync(slot, renderOut, numFrames, ts, fadeScale);
+    } else {
+        for (int v = 0; v < 2; ++v) {
+            if (voices_[slot][v].active.load(std::memory_order_relaxed))
+                renderVoice(slot, v, renderOut, numFrames, ts);
+        }
+    }
+
+    if (perSlotL != nullptr || perSlotR != nullptr) {
+        float* slotL = (perSlotL != nullptr) ? perSlotL + frameOffset : nullptr;
+        float* slotR = (perSlotR != nullptr) ? perSlotR + frameOffset : nullptr;
+        const float* src = needScratch ? slotRenderScratch_.data() : renderOut;
+        if (src != nullptr) {
+            for (int f = 0; f < numFrames; ++f) {
+                const float l = src[static_cast<size_t>(f) * 2];
+                const float r = src[static_cast<size_t>(f) * 2 + 1];
+                if (slotL != nullptr) slotL[f] += l;
+                if (slotR != nullptr) slotR[f] += r;
+            }
+        }
     }
 }
 
@@ -568,50 +638,17 @@ void SlotPlayer::processBlock(const TransportState& ts,
 
 void SlotPlayer::renderSlots(const TransportState& ts,
                              float* output, int32_t numFrames,
-                             int64_t blockStart) noexcept {
+                             int64_t blockStart, int frameOffset,
+                             float** perSlotL, float** perSlotR) noexcept {
 
-    // Rendre tous les slots actifs
+    const bool perSlotMode = (perSlotL != nullptr || perSlotR != nullptr);
+    float* mixOut = perSlotMode ? nullptr : output;
+
     for (int slot = 0; slot < kSlots; ++slot) {
-        if (!loaded_[slot].load(std::memory_order_acquire)) continue;
-        if (params_[slot].muted.load(std::memory_order_relaxed)) continue;
-
-        const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
-
-        if (mode == PlayMode::LoopSync) {
-            // LOOP SYNC : rendu centralisé (position dérivée du transport)
-            bool anyActive = false;
-            for (int v = 0; v < 2; ++v)
-                if (voices_[slot][v].active.load(std::memory_order_relaxed)) { anyActive = true; break; }
-            if (!anyActive) continue;
-
-            // Fade-out bloc par bloc pour LoopSync
-            float fadeScale = 1.0f;
-            Voice& vc0 = voices_[slot][0];
-            if (vc0.fadingOut) {
-                if (vc0.fadeLeft <= 0) {
-                    // Fade terminé — désactiver sans rien rendre
-                    deactivateVoice(slot, 0);
-                    deactivateVoice(slot, 1);
-                    continue;
-                }
-                fadeScale = vc0.fadeGain;
-                const int consumed = std::min(vc0.fadeLeft, static_cast<int>(numFrames));
-                // Avance le fade proportionnellement aux frames consommées
-                vc0.fadeGain -= vc0.fadeGain * static_cast<float>(consumed)
-                                             / static_cast<float>(vc0.fadeLeft);
-                vc0.fadeLeft -= consumed;
-                if (vc0.fadeLeft <= 0) {
-                    deactivateVoice(slot, 0);
-                    deactivateVoice(slot, 1);
-                }
-            }
-            renderLoopSync(slot, output, numFrames, ts, fadeScale);
-        } else {
-            for (int v = 0; v < 2; ++v) {
-                if (voices_[slot][v].active.load(std::memory_order_relaxed))
-                    renderVoice(slot, v, output, numFrames, ts);
-            }
-        }
+        float* slotL = (perSlotL != nullptr) ? perSlotL[slot] : nullptr;
+        float* slotR = (perSlotR != nullptr) ? perSlotR[slot] : nullptr;
+        renderSlot(slot, ts, mixOut, numFrames, blockStart, frameOffset,
+                   slotL, slotR);
     }
 }
 

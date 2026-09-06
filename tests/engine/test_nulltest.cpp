@@ -196,17 +196,21 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Références committées (§11.2). Régénérer UNIQUEMENT sur changement
     // intentionnel du rendu, avec justification dans le commit.
     //
-    // Référence v4 — crossfade retrigger OneShot/Free (kRetrigFadeLen=256 ≈5.8 ms).
-    // Avant : retrigger = 2 voix simultanées → volume ×2. Maintenant : fade-out
-    // voice[0] + fade-in voice[1] sur 256 frames ; somme des gains = 1.0 partout.
-    // LoopSync : inchangé (position transport, pas de doublement possible).
-    // Affecte slot 0 (mélodique OneShot, steps 0+6+10 — chevauchement step 0→6)
-    // et slot 1 (basse Free, retrigger toutes les 3 steps).
+    // Référence v9 — Retrigger : fade-out court + attaque immédiate (kRetrigFadeLen 256→64).
+    // Correction précédente (v8) : crossfade symétrique 256 frames (somme gains = 1.0).
+    // Problème : fade-in 256 frames sur la nouvelle voix mangeait l'attaque (5.8 ms de silence
+    // perçu → "décalage" sur kick/basse). Correction : seule l'ancienne voix fade-out (64 frames
+    // ≈1.5 ms) ; la nouvelle voix démarre à plein gain immédiatement.
+    // Slots affectés dans le fixture : slot 0 (mélodique OneShot, retrigger step 6 sur step 0)
+    // et slot 1 (basse Free, retriggered toutes les 3 steps).
+    // Pendant les 64 frames de chevauchement, la somme vaut entre C et 2C (overlap bref).
+    // LoopSync (slot 5) exclu du mécanisme de retrigger : position dérivée du transport,
+    // pas de double-voix possible → inchangé.
     // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
-    //   hashAudio = 0x5da5dd5e8636df67
-    //   hashRms   = 0x364b0b0f063dd55d
-    CHECK(hashAudio == 0x5da5dd5e8636df67ull);
-    CHECK(hashRms   == 0x364b0b0f063dd55dull);
+    //   hashAudio = 0x2b79ff4800a39d7c
+    //   hashRms   = 0x3cdc5423748bdb0c
+    CHECK(hashAudio == 0x2b79ff4800a39d7cull);
+    CHECK(hashRms   == 0x3cdc5423748bdb0cull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {
@@ -237,6 +241,37 @@ TEST_CASE("NULL0: print reference hashes (régénération)", "[nulltest][.hidden
     }
     const uint64_t hashRms = fnv1a(rms.data(), rms.size() * sizeof(float));
 
-    std::cout << "NULL0 hashAudio=0x" << std::hex << hashAudio
-              << " hashRms=0x" << hashRms << std::dec << "\n";
+    std::cout << "=== NULL-TEST ANALYSE DU RENDU DE RÉFÉRENCE ===\n";
+    std::cout << "hashAudio=0x" << std::hex << hashAudio
+              << " hashRms=0x" << hashRms << std::dec << "\n\n";
+
+    const double spb = kSr * 60.0 / 120.0;
+    const int64_t barFrames = static_cast<int64_t>(spb) * 4; // 88200
+    const char* sceneNames[4] = { "Scène 0: Groove (Kick+Snare+Hat)",
+                                   "Scène 1: Pad (Bass+Pad)",
+                                   "Scène 2: Full (Tout)",
+                                   "Scène 3: Stripped (Kick+Snare)" };
+
+    for (int sc = 0; sc < 4; ++sc) {
+        const int64_t startFrame = sc * 3 * barFrames; // 3 mesures par scène dans 12 mesures total ? Non, 4 scènes x 3 mesures = 12
+        const int64_t numFr = 3 * barFrames;
+        double sumSq = 0.0;
+        float scenePeak = 0.f;
+        for (int64_t f = 0; f < numFr; ++f) {
+            const size_t idx = static_cast<size_t>(startFrame + f) * 2u;
+            if (idx + 1 >= out.size()) break;
+            const float l = out[idx];
+            const float r = out[idx + 1];
+            sumSq += l * l + r * r;
+            scenePeak = std::max(scenePeak, std::max(std::abs(l), std::abs(r)));
+        }
+        const double sceneRms = std::sqrt(sumSq / static_cast<double>(numFr * 2));
+        const double rmsDb  = (sceneRms > 1e-9) ? 20.0 * std::log10(sceneRms) : -120.0;
+        const double peakDb = (scenePeak > 1e-9) ? 20.0 * std::log10(scenePeak) : -120.0;
+
+        std::cout << "[" << sceneNames[sc] << "]\n";
+        std::cout << "  - Peak : " << scenePeak << " (" << peakDb << " dBFS)\n";
+        std::cout << "  - RMS  : " << sceneRms << " (" << rmsDb << " dBFS)\n";
+    }
+    std::cout << "===============================================\n";
 }
