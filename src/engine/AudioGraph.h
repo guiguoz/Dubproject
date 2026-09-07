@@ -9,6 +9,7 @@
 #include "engine/TransitionEngine.h"
 #include "engine/fx/PingPongDelay.h"
 #include "engine/fx/MasterLimiter.h"
+#include "engine/fx/WarmthProcessor.h"
 #include "engine/mix/MixAlgorithms.h"
 
 namespace engine {
@@ -110,6 +111,14 @@ public:
     fx::PingPongDelay&      delay()            noexcept { return delay_; }
     fx::MasterLimiter&      limiter()          noexcept { return limiter_; }
 
+    // Chaleur master — saturation parallèle.
+    // drive : intensité saturation (0=bypass, 1=subtil, 2=max)
+    // mix   : proportion wet (0=dry pur, 1=full saturé ; défaut 0.3)
+    void  setWarmthDrive(float drive) noexcept { warmth_.setDrive(drive); }
+    float getWarmthDrive() const noexcept      { return warmth_.getDrive(); }
+    void  setWarmthMix(float mix)     noexcept { warmth_.setMix(mix); }
+    float getWarmthMix()  const noexcept       { return warmth_.getMix(); }
+
     // Rôle par slot (écrit depuis message thread, lu en audio thread).
     // Met à jour le slot kick pour le sidechain et la spatialisation pan+Haas
     // (M9 étape 6) si le rôle change.
@@ -131,9 +140,10 @@ private:
     AutoMixDub        autoMix_;
     Sequencer         sequencer_;
     TransitionEngine  transition_;
-    fx::PingPongDelay delay_;
-    fx::MasterLimiter limiter_;
-    MonoSubFilter     monoSubFilter_;
+    fx::PingPongDelay   delay_;
+    fx::WarmthProcessor warmth_;
+    fx::MasterLimiter   limiter_;
+    MonoSubFilter       monoSubFilter_;
 
     std::atomic<SlotRole> roles_[kMaxSlots] = {};
 

@@ -28,6 +28,7 @@ void AudioGraph::prepare(double sampleRate, int maxBlockSize) noexcept
     monoSubFilter_.prepare(sampleRate);
     monoSubFilter_.reset();
 
+    warmth_.setDrive(1.0f);  // TEST — valeur provisoire pour écoute, ajuster ensuite
     mixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     mixR_.assign(static_cast<size_t>(maxBlockSize), 0.f);
     slotMixL_.assign(static_cast<size_t>(maxBlockSize), 0.f);
@@ -156,12 +157,15 @@ void AudioGraph::processBlock(const TransportState& ts,
     delay_.processAdd(delayInL_.data(), delayInR_.data(),
                       mixL_.data(), mixR_.data(), numFrames);
 
-    // 5b. MonoSubFilter BYPASS DEBUG (bug : ecrase L/R avec LP 120 Hz)
+    // 5b. MonoSubFilter — BYPASS (bug C1 : écrase L/R, non corrigé)
     // monoSubFilter_.process(mixL_.data(), mixR_.data(), numFrames);
 
-    // 6. MasterLimiter BYPASS DEBUG
-    // limiter_.process(mixL_.data(), mixR_.data(), numFrames);
-    // autoMix_.notifyLimiterReduction(limiter_.getGainReductionDb());
+    // 6. Chaleur master (tanh normalisé, drive=0 → bypass exact)
+    warmth_.process(mixL_.data(), mixR_.data(), numFrames);
+
+    // 7. Safety limiter (peak limiter stéréo-couplé, identité sous le seuil)
+    limiter_.process(mixL_.data(), mixR_.data(), numFrames);
+    autoMix_.notifyLimiterReduction(limiter_.getGainReductionDb());
 
     for (int i = 0; i < numFrames; ++i) {
         output[i * 2]     = mixL_[i];

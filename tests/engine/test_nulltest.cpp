@@ -206,11 +206,19 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Pendant les 64 frames de chevauchement, la somme vaut entre C et 2C (overlap bref).
     // LoopSync (slot 5) exclu du mécanisme de retrigger : position dérivée du transport,
     // pas de double-voix possible → inchangé.
+    //
+    // v10 — Chaîne master warmth + limiter (ajout WarmthProcessor + MasterLimiter refait) :
+    // • WarmthProcessor : saturation parallèle tanh (drive=1.0, mix=0.3), compensée en gain
+    //   bas-niveau → A/B sans biais de volume.
+    // • MasterLimiter : peak limiter par bloc stéréo-couplé (seuil 0.98 ≈ −0.17 dBFS),
+    //   identité exacte sous le seuil (remplace l'ancien tanh/clip qui boostait bas niveau).
+    // Signature : peak = 0.98 exact sur toutes les scènes (limiter actif), RMS légèrement
+    // relevé par les harmoniques de la saturation.
     // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
-    //   hashAudio = 0x2b79ff4800a39d7c
-    //   hashRms   = 0x3cdc5423748bdb0c
-    CHECK(hashAudio == 0x2b79ff4800a39d7cull);
-    CHECK(hashRms   == 0x3cdc5423748bdb0cull);
+    //   hashAudio = 0xe32d511b27f62946
+    //   hashRms   = 0x4435863f1803a6fa
+    CHECK(hashAudio == 0xe32d511b27f62946ull);
+    CHECK(hashRms   == 0x4435863f1803a6faull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {
