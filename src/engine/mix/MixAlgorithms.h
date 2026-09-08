@@ -467,9 +467,15 @@ inline void applyRoleEQ(std::vector<float>& pcm, MixContentType type, double sr)
             applyBiquad(pcm, makeHighShelf(8000.f, -1.5f, sr));      // ← -3 → -1.5 dB
             break;
         case MixContentType::HIHAT:
-            applyBiquad(pcm, makeHP(600.f, sr));
-            applyBiquad(pcm, makeHighShelf(8000.f, 0.f, sr));        // neutre — retire la coupe
+        {
+            constexpr float kHpHz   = 200.f;   // ↑ vers 400–600 si trop de corps
+            constexpr float kPresDb = 2.0f;    // présence 6 kHz — ↑ vers 3 dB si manque de définition
+            constexpr float kAirDb  = 2.0f;    // air 10 kHz — ↑ vers 4–6 dB pour plus d'éther
+            applyBiquad(pcm, makeHP(kHpHz, sr));
+            applyBiquad(pcm, makePeaking(6000.f, kPresDb, 2.f, sr));
+            applyBiquad(pcm, makeHighShelf(10000.f, kAirDb, sr));
             break;
+        }
         case MixContentType::BASS:
             applyBiquad(pcm, makeHP(25.f, sr));
             applyBiquad(pcm, makeLowShelf(60.f,  5.f, sr));
@@ -563,6 +569,41 @@ inline void applyUnmasking(std::vector<float>& pcm, int slot,
         }
         if (isSecondary)
             applyBiquad(pcm, makePeaking(2000.f, -2.f, 1.5f, sr));
+    }
+}
+
+// ── Sidechain kick → éléments mélodiques/percussifs ────────────────────────
+//
+// Enveloppe du kick (follower AR) → gain reduction sur la cible.
+// attackMs : temps de montée de l'enveloppe (2 ms recommandé — punch immédiat)
+// releaseMs : temps de descente (80 ms recommandé — respiration naturelle)
+// depth     : 0 = pas d'effet, 1 = atténuation maximale (~−12 dB au pic)
+//
+// Algorithme : env = AR follower sur |kickPcm| → gainReduction = 1 − depth×env
+// → pcm[i] *= gainReduction[i]  (sample-accurate, offline)
+inline void applyKickSidechain(std::vector<float>& pcm,
+                               const std::vector<float>& kickPcm,
+                               float attackMs, float releaseMs,
+                               float depth, double sr) noexcept
+{
+    if (pcm.empty() || kickPcm.empty() || depth <= 0.f) return;
+    const float fs      = static_cast<float>(sr);
+    const float cA      = std::exp(-1.f / (fs * attackMs  * 0.001f));
+    const float cR      = std::exp(-1.f / (fs * releaseMs * 0.001f));
+    const int   n       = static_cast<int>(pcm.size());
+    const int   nKick   = static_cast<int>(kickPcm.size());
+    const float dClamp  = std::clamp(depth, 0.f, 1.f);
+
+    float env = 0.f;
+    for (int i = 0; i < n; ++i)
+    {
+        // Lire l'enveloppe du kick (boucle si kick plus court que la cible)
+        const float kSample = std::abs(kickPcm[static_cast<std::size_t>(i % nKick)]);
+        env = (kSample > env) ? cA * env + (1.f - cA) * kSample
+                              : cR * env;
+        // Gain reduction : 1.0 au repos, (1 − depth) au pic de l'enveloppe
+        const float gr = 1.f - dClamp * env;
+        pcm[static_cast<std::size_t>(i)] *= gr;
     }
 }
 
