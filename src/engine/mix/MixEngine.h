@@ -138,6 +138,16 @@ inline MixOutputs processHeuristic(const MixInputs& in)
     // Sub ownership 30-60 Hz (types détectés bruts)
     applySubOwnership(pcms.data(), types.data(), kMixSlots, sr);
 
+    // Trouver le slot kick pour le sidechain (premier KICK actif)
+    int kickSlotIdx = -1;
+    for (int i = 0; i < kMixSlots; ++i)
+        if (in.active[i] && types[i] == MixContentType::KICK) { kickSlotIdx = i; break; }
+
+    // Sidechain depth : 0.5 par défaut — réglable ici
+    constexpr float kSidechainDepth   = 0.50f;  // 0 = off, 1 = max (~−12 dB au pic)
+    constexpr float kSidechainAttackMs  = 2.0f;  // rapide — punch immédiat
+    constexpr float kSidechainReleaseMs = 80.f;  // respiration naturelle
+
     for (int i = 0; i < kMixSlots; ++i)
     {
         if (!in.active[i]) continue;
@@ -152,6 +162,17 @@ inline MixOutputs processHeuristic(const MixInputs& in)
             applyBiquad(pcms[i], makeLowShelf(150.f, 2.f, sr));
 
         applyUnmasking(pcms[i], i, types.data(), kMixSlots, sr);
+
+        // Sidechain kick → éléments mélodiques et percussifs (pas KICK/SNARE/HIHAT)
+        if (kickSlotIdx >= 0 && i != kickSlotIdx
+         && eff != MixContentType::KICK
+         && eff != MixContentType::SNARE
+         && eff != MixContentType::HIHAT)
+        {
+            applyKickSidechain(pcms[i], pcms[kickSlotIdx],
+                               kSidechainAttackMs, kSidechainReleaseMs,
+                               kSidechainDepth, sr);
+        }
 
         // Echo dub rythmique (PAD, SYNTH, PERC)
         if (in.masterBpm > 0.f)
