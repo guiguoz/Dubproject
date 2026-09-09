@@ -232,6 +232,17 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                         for (int i = 0; i < 9 && i < arr->size(); ++i)
                             sc.playModeOverrides[static_cast<std::size_t>(i)] =
                                 juce::jlimit(-1, 2, static_cast<int>((*arr)[i]));
+
+                if (data.version >= 24) {
+                    if (const auto* arr = entry["slotRoles"].getArray())
+                        for (int i = 0; i < 9 && i < arr->size(); ++i)
+                            sc.slotRoles[static_cast<std::size_t>(i)] =
+                                juce::jlimit(-1, 255, static_cast<int>((*arr)[i]));
+                    if (const auto* arr = entry["roleManual"].getArray())
+                        for (int i = 0; i < 9 && i < arr->size(); ++i)
+                            sc.roleManual[static_cast<std::size_t>(i)] =
+                                static_cast<bool>((*arr)[i]);
+                }
             }
         }
 
@@ -453,6 +464,20 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                 for (int i = 0; i < 9; ++i)
                     arr.add(sc.playModeOverrides[static_cast<std::size_t>(i)]);
                 entry->setProperty("playModeOverrides", arr);
+            }
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(sc.slotRoles[static_cast<std::size_t>(i)]);
+                entry->setProperty("slotRoles", arr);
+            }
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(sc.roleManual[static_cast<std::size_t>(i)]);
+                entry->setProperty("roleManual", arr);
             }
 
             scenesArr.add(juce::var(entry.get()));

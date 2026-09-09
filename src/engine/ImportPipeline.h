@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -47,15 +48,15 @@ struct AnalysisResult {
 class ImportPipeline {
 public:
     /// Lance l'analyse synchrone d'un PCM.
-    /// Le PCM doit rester valide pendant toute la durée de l'appel.
-    /// @param pcm         Pointeur vers les samples entrelacés (ou mono)
-    /// @param numFrames   Nombre de frames (samples si mono)
-    /// @param numChannels Nombre de canaux (downmix vers mono effectué ici)
-    /// @param sampleRate  Fréquence d'échantillonnage en Hz
-    /// @param projectBpm  BPM courant du projet (0 = inconnu, pas de correction d'octave)
+    /// @param filePath    Chemin du fichier source (stem utilisé pour le mapping nom→rôle avant ONNX)
     AnalysisResult analyzeSync(const float* pcm, int numFrames,
                                int numChannels, float sampleRate,
-                               float projectBpm) noexcept;
+                               float projectBpm,
+                               const std::string& filePath = "") noexcept;
+
+    /// Déduit le rôle depuis le stem du chemin de fichier (mots-clés non ambigus).
+    /// Retourne SlotRoleV2::Unknown si aucun mot-clé trouvé ou si ambigu (→ ONNX).
+    static SlotRoleV2 roleFromFilename(const std::string& filePath) noexcept;
 
 private:
     /// Vérifie si loopBeats est entier à < 2% près.

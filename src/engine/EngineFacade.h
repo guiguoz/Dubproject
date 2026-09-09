@@ -70,13 +70,13 @@ public:
 
     // ── Slots (9 slots) ────────────────────────────────────────────────────────
     // Import asynchrone : le callback est appelé sur le message thread.
-    // Si trimStart/trimEnd ≥ 0 (coordonnées fichier), le PCM chargé est découpé
-    // avant le stockage.
-    // Fichier/trim courants exposés via slotFilePath()/slotTrim() pour que
-    // l'UI ne réimporte que si la scène référence un PCM absent du SlotPlayer.
+    // restoredRole != Unknown → chargement depuis projet (rôle sauvegardé, pas de re-classification).
+    // restoredRole == Unknown → nouveau fichier (filename→ONNX, flag manuel effacé).
     void importSampleAsync(int slot, const std::string& filePath,
                            ImportCallback cb = nullptr,
-                           int trimStart = -1, int trimEnd = -1);
+                           int trimStart = -1, int trimEnd = -1,
+                           SlotRole restoredRole = SlotRole::Unknown,
+                           bool wasManual = false);
 
     void clearSlot(int slot) noexcept;
     void triggerSlot(int slot) noexcept;  // trigger immédiat (pad live)
@@ -155,6 +155,12 @@ public:
     // Message thread uniquement.
     SlotRole slotRole(int slot) const noexcept;
     bool     isSlotRoleReliable(int slot) const noexcept;
+
+    // Rôle forcé manuellement par l'utilisateur (priorité absolue, persisté dans le projet).
+    // setSlotRoleManual : écrit le rôle + lève le flag manuel.
+    // isSlotRoleManual  : vrai si le rôle a été posé manuellement (jamais écrasé par ONNX/nom).
+    void setSlotRoleManual(int slot, SlotRole role) noexcept;
+    bool isSlotRoleManual(int slot) const noexcept;
 
     // Métriques (thread-safe via atomics dans SlotPlayer)
     float getSlotPlayheadRatio(int slot) const noexcept;
@@ -285,6 +291,9 @@ private:
     // flag slotRoleReliable_, motif release/acquire).
     std::atomic<SlotRole> slotRoleAnalyzed_[kMaxSlots];
     std::atomic<bool>  slotRoleReliable_ [kMaxSlots] { false };
+
+    // Rôle forcé manuellement (message thread uniquement — jamais écrasé par ONNX/nom).
+    bool isRoleManual_[kMaxSlots] {};
 
     // État de mix persistant par slot (étape 7 / M9) — message thread.
     mix::MixStateArray mixState_ {};

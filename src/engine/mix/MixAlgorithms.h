@@ -506,8 +506,8 @@ inline void applyRoleEQ(std::vector<float>& pcm, MixContentType type, double sr)
             applyBiquad(pcm, makeHighShelf(8000.f, 0.f, sr));        // ← flat
             break;
         case MixContentType::OTHER:
-            applyBiquad(pcm, makeHP(60.f, sr));
-            applyBiquad(pcm, makeHighShelf(6000.f, -3.f, sr));
+            // Rôle inconnu ou non confiant → traitement neutre, pas d'EQ agressive
+            applyBiquad(pcm, makeHP(30.f, sr));
             break;
     }
 }

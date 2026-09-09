@@ -6,9 +6,81 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <vector>
 
 namespace engine {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// roleFromFilename
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Vérifie si le mot-clé kw apparaît dans text avec des frontières de mot :
+// gauche = début ou char non-alphanumérique ; droite = fin ou char non-alphabétique
+// (les chiffres sont acceptés comme terminaison : "kick01" → match "kick").
+bool hasKeyword(const std::string& text, const std::string& kw) noexcept
+{
+    std::size_t pos = text.find(kw);
+    while (pos != std::string::npos) {
+        const bool leftOk  = (pos == 0 ||
+                              !std::isalnum(static_cast<unsigned char>(text[pos - 1])));
+        const bool rightOk = (pos + kw.size() >= text.size() ||
+                              !std::isalpha(static_cast<unsigned char>(text[pos + kw.size()])));
+        if (leftOk && rightOk) return true;
+        pos = text.find(kw, pos + 1);
+    }
+    return false;
+}
+
+} // namespace
+
+SlotRoleV2 ImportPipeline::roleFromFilename(const std::string& filePath) noexcept
+{
+    if (filePath.empty()) return SlotRoleV2::Unknown;
+
+    // Extraire le stem (nom de fichier sans extension ni répertoire)
+    const auto lastSep = filePath.find_last_of("/\\");
+    std::string stem = (lastSep == std::string::npos)
+                       ? filePath : filePath.substr(lastSep + 1);
+    const auto dotPos = stem.rfind('.');
+    if (dotPos != std::string::npos) stem = stem.substr(0, dotPos);
+    for (char& c : stem)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    // Familles de mots-clés par rôle (ordre interne sans importance).
+    // Règle de désambiguïsation : si ≥ 2 familles matchent → Unknown (ONNX fallback).
+    struct Family { SlotRoleV2 role; const char* kws[8]; };
+    static constexpr Family families[] = {
+        { SlotRoleV2::Kick,    { "kick", "bd", "bassdrum", "808",    nullptr } },
+        { SlotRoleV2::Snare,   { "snare", "snr", "clap",             nullptr } },
+        { SlotRoleV2::HiHat,   { "hihat", "hat", "hh",               nullptr } },
+        { SlotRoleV2::Bass,    { "bass", "sub", "basse",              nullptr } },
+        { SlotRoleV2::Melodic, { "lead", "melody", "mel",             nullptr } },
+        { SlotRoleV2::Pad,     { "pad", "atm", "atmosphere", "ambient", "drone", nullptr } },
+        { SlotRoleV2::Perc,    { "perc", "rim", "cowbell", "shaker", "clave", nullptr } },
+        { SlotRoleV2::Fx,      { "fx", "sfx", "riser", "sweep", "foley", nullptr } },
+        { SlotRoleV2::Loop,    { "loop", "break", "arp",              nullptr } },
+    };
+
+    SlotRoleV2 matched = SlotRoleV2::Unknown;
+    int matchCount = 0;
+
+    for (const auto& fam : families) {
+        for (int ki = 0; fam.kws[ki] != nullptr; ++ki) {
+            if (hasKeyword(stem, fam.kws[ki])) {
+                ++matchCount;
+                if (matchCount == 1)
+                    matched = fam.role;
+                else
+                    return SlotRoleV2::Unknown; // ambigu → ONNX
+                break; // une famille est comptée une seule fois
+            }
+        }
+    }
+    return matched; // Unknown si 0 famille, sinon le rôle unique trouvé
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -61,7 +133,8 @@ bool ImportPipeline::shouldAutoLoopSync(const AnalysisResult& r,
 // ─────────────────────────────────────────────────────────────────────────────
 AnalysisResult ImportPipeline::analyzeSync(const float* pcm, int numFrames,
                                             int numChannels, float sampleRate,
-                                            float projectBpm) noexcept
+                                            float projectBpm,
+                                            const std::string& filePath) noexcept
 {
     AnalysisResult result;
 
@@ -83,25 +156,33 @@ AnalysisResult ImportPipeline::analyzeSync(const float* pcm, int numFrames,
     const float* monoPcm  = (numChannels > 1) ? mono.data() : pcm;
     const int    monoSize = numFrames;
 
-    // ── Étape 1 : Classification de rôle (ONNX si disponible) ───────────────
+    // ── Étape 1 : Classification de rôle ─────────────────────────────────────
+    // Priorité : (1) nom de fichier (mots-clés non ambigus) → (2) ONNX fallback
     {
-        analysis::AiContentClassifier classifier;
-        const std::vector<float> pcmVec(monoPcm, monoPcm + monoSize);
-        const auto cr = classifier.classifyWithConfidence(pcmVec,
-                                                          static_cast<double>(sampleRate));
-        result.roleConfidence = cr.confidence;
+        const SlotRoleV2 nameRole = roleFromFilename(filePath);
+        if (nameRole != SlotRoleV2::Unknown) {
+            result.role           = nameRole;
+            result.roleConfidence = 1.0f; // déterministe : pas de score ONNX
+        } else {
+            analysis::AiContentClassifier classifier;
+            const std::vector<float> pcmVec(monoPcm, monoPcm + monoSize);
+            const auto cr = classifier.classifyWithConfidence(pcmVec,
+                                                              static_cast<double>(sampleRate));
+            result.roleConfidence = cr.confidence;
 
-        // Mapping ContentType → SlotRoleV2
-        switch (cr.type) {
-            using CT = analysis::AiContentClassifier::ContentType;
-            case CT::KICK:  result.role = SlotRoleV2::Kick;    break;
-            case CT::SNARE: result.role = SlotRoleV2::Snare;   break;
-            case CT::HIHAT: result.role = SlotRoleV2::HiHat;   break;
-            case CT::BASS:  result.role = SlotRoleV2::Bass;    break;
-            case CT::SYNTH: result.role = SlotRoleV2::Melodic; break;
-            case CT::PAD:   result.role = SlotRoleV2::Pad;     break;
-            case CT::PERC:  result.role = SlotRoleV2::Perc;    break;
-            case CT::OTHER: result.role = SlotRoleV2::Loop;    break;
+            // Mapping ContentType → SlotRoleV2
+            // CT::OTHER → Unknown (traitement neutre, pas d'EQ agressive)
+            switch (cr.type) {
+                using CT = analysis::AiContentClassifier::ContentType;
+                case CT::KICK:  result.role = SlotRoleV2::Kick;    break;
+                case CT::SNARE: result.role = SlotRoleV2::Snare;   break;
+                case CT::HIHAT: result.role = SlotRoleV2::HiHat;   break;
+                case CT::BASS:  result.role = SlotRoleV2::Bass;    break;
+                case CT::SYNTH: result.role = SlotRoleV2::Melodic; break;
+                case CT::PAD:   result.role = SlotRoleV2::Pad;     break;
+                case CT::PERC:  result.role = SlotRoleV2::Perc;    break;
+                case CT::OTHER: result.role = SlotRoleV2::Unknown; break;
+            }
         }
     }
 

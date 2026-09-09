@@ -919,6 +919,9 @@ void MainComponent::saveProjectToFile(const juce::File& f)
             dst.delaySends[st]          = src.slots[st].delaySend;
             dst.pitchOffsets[st]        = src.slots[st].semitones;
             dst.playModeOverrides[st]   = src.playModeOverrides[st];
+            dst.slotRoles[st]           = (src.slots[st].role == engine::SlotRole::Unknown)
+                                          ? -1 : static_cast<int>(src.slots[st].role);
+            dst.roleManual[st]          = src.slots[st].isRoleManual;
             const int numSteps = src.trackBarCounts[st] * 16;
             for (int s = 0; s < numSteps; ++s)
                 dst.steps[st][static_cast<std::size_t>(s)] =
@@ -1193,6 +1196,17 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 dst.slots[st].delaySend  = src.delaySends[st];
                 dst.slots[st].semitones  = src.pitchOffsets[st];
                 dst.playModeOverrides[st] = src.playModeOverrides[st];
+                // v24 — restaurer rôle + flag manuel (pas de re-classification au chargement projet)
+                if (data.version >= 24) {
+                    const int rawRole = src.slotRoles[st];
+                    dst.slots[st].role        = (rawRole < 0 || rawRole > 254)
+                                               ? engine::SlotRole::Unknown
+                                               : static_cast<engine::SlotRole>(rawRole);
+                    dst.slots[st].isRoleManual = src.roleManual[st];
+                } else {
+                    dst.slots[st].role        = engine::SlotRole::Unknown; // → re-classifier
+                    dst.slots[st].isRoleManual = false;
+                }
                 const int numSteps = src.trackBarCounts[st] * 16;
                 for (int s = 0; s < numSteps; ++s)
                     dst.steps[st][static_cast<std::size_t>(s)] =
@@ -2577,7 +2591,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
                     };
                 }
                 facade_.importSampleAsync(i, newPath, std::move(importCb),
-                                          sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd);
+                                          sc.slots[sidx].trimStart, sc.slots[sidx].trimEnd,
+                                          sc.slots[sidx].role, sc.slots[sidx].isRoleManual);
             }
             else if (overrideMode >= 0)
             {

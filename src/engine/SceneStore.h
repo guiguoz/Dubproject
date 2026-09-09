@@ -25,9 +25,10 @@ struct SlotConfig {
     int         trimStart  = 0;
     int         trimEnd    = 0;      // 0 = jusqu'à la fin
     float       delaySend  = 0.0f;   // envoi au bus dub delay
-    SlotRole    role       = SlotRole::Loop;
-    bool        active     = false;
-    bool        muted      = false;
+    SlotRole    role        = SlotRole::Unknown; // Unknown = pas encore analysé / neutre
+    bool        isRoleManual = false;            // vrai si posé manuellement par l'utilisateur
+    bool        active      = false;
+    bool        muted       = false;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

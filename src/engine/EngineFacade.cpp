@@ -194,23 +194,31 @@ void EngineFacade::setBpm(float bpm) noexcept
 // ─── Slots ────────────────────────────────────────────────────────────────────
 
 // Déduit le PlayMode depuis le résultat d'analyse et le slot cible.
-// Deux garde-fous indépendants pour OneShot :
-//   1. Rôle ONNX percussif (Kick/Snare/HiHat/Perc/Unknown)
-//   2. Rôle sémantique du slot (CLAUDE.md §1 — fixe, immuable)
-// Un seul suffit : couvre les erreurs de classification ONNX sur les slots percussifs.
-static PlayMode modeForResult(const AnalysisResult& r, int slot) noexcept
+// restoredRole != Unknown → projet restauré : utilise le rôle sauvegardé pour
+// la décision OneShot/Free, mais garde autoLoopSync du BPM (toujours analysé).
+static PlayMode modeForResult(const AnalysisResult& r, int slot,
+                              SlotRole restoredRole = SlotRole::Unknown) noexcept
 {
     if (r.autoLoopSync)
         return PlayMode::LoopSync;
+
+    // Slots percussifs sémantiques fixes (CLAUDE.md) : KCK=2, SNR=3, HAT=4, PRC=7
+    const bool slotPercussive = (slot == 2 || slot == 3 || slot == 4 || slot == 7);
+
+    if (restoredRole != SlotRole::Unknown) {
+        // Projet restauré : décision basée sur le rôle sauvegardé (SlotRole domain)
+        const bool restored_percussive = (restoredRole == SlotRole::Kick  ||
+                                          restoredRole == SlotRole::Snare ||
+                                          restoredRole == SlotRole::Perc  ||
+                                          restoredRole == SlotRole::Unknown);
+        return (restored_percussive || slotPercussive) ? PlayMode::OneShot : PlayMode::Free;
+    }
 
     const bool rolePercussive = (r.role == SlotRoleV2::Kick   ||
                                  r.role == SlotRoleV2::Snare  ||
                                  r.role == SlotRoleV2::HiHat  ||
                                  r.role == SlotRoleV2::Perc   ||
                                  r.role == SlotRoleV2::Unknown);
-
-    // Slots percussifs sémantiques fixes (CLAUDE.md) : KCK=2, SNR=3, HAT=4, PRC=7
-    const bool slotPercussive = (slot == 2 || slot == 3 || slot == 4 || slot == 7);
 
     if (rolePercussive || slotPercussive)
         return PlayMode::OneShot;
@@ -232,12 +240,13 @@ static SlotRole mapRole(SlotRoleV2 r) noexcept
         case SlotRoleV2::Perc:    return SlotRole::Perc;
         case SlotRoleV2::Fx:      return SlotRole::Fx;
         case SlotRoleV2::Loop:    return SlotRole::Loop;
-        default:                  return SlotRole::Loop;   // Unknown → neutre
+        default:                  return SlotRole::Unknown; // Unknown → traitement neutre
     }
 }
 
 void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
-                                     ImportCallback cb, int trimStart, int trimEnd)
+                                     ImportCallback cb, int trimStart, int trimEnd,
+                                     SlotRole restoredRole, bool wasManual)
 {
     if (slot < 0 || slot >= kMaxSlots) return;
 
@@ -249,7 +258,8 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
 
     juce::WeakReference<EngineFacade> weakThis(this);
     auto alive = std::make_shared<std::atomic<bool>>(true);
-    std::thread([weakThis, slot, filePath, cb, trimStart, trimEnd, alive]() {
+    std::thread([weakThis, slot, filePath, cb, trimStart, trimEnd,
+                 restoredRole, wasManual, alive]() {
         juce::AudioFormatManager fmtMgr;
         fmtMgr.registerBasicFormats();
 
@@ -290,22 +300,35 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         auto* selfForAnalyze = weakThis.get();
         if (!selfForAnalyze || !alive->load(std::memory_order_acquire)) return;
         const float projectBpm = selfForAnalyze->getBpm();
+
+        // Toujours analyser BPM+key (pour modeForResult/autoLoopSync).
+        // Si restoredRole != Unknown (projet chargé) : la classification de rôle
+        // est court-circuitée — on passe filePath="" pour qu'analyzeSync
+        // n'exécute pas le mapping nom+ONNX inutilement.
+        const std::string analyzeFilePath = (restoredRole == SlotRole::Unknown)
+                                            ? filePath : std::string{};
         AnalysisResult result = selfForAnalyze->importPipeline_.analyzeSync(
-            mono.data(), numFrames, 1, sr, projectBpm);
+            mono.data(), numFrames, 1, sr, projectBpm, analyzeFilePath);
 
         // Si l'objet a été détruit pendant l'analyse, abandonner.
         auto* self = weakThis.get();
         if (!self || !alive->load(std::memory_order_acquire)) return;
 
-        // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
-        self->graph_.setSlotRole(slot, mapRole(result.role));
+        // Déterminer le rôle final : projet restauré → restoredRole ; nouveau fichier → ONNX/nom.
+        const SlotRole finalRole = (restoredRole != SlotRole::Unknown)
+                                   ? restoredRole
+                                   : mapRole(result.role);
 
-        // Publier le rôle analysé (fiabilité = confiance ONNX suffisante et rôle
-        // non indéterminé). Lecture sur message thread via release/acquire.
-        self->slotRoleAnalyzed_[slot].store(mapRole(result.role), std::memory_order_release);
-        const bool reliable = (result.roleConfidence >= 0.75f &&
+        // Rôle → AutoMix (gain staging, sends, sidechain) + détection kick.
+        self->graph_.setSlotRole(slot, finalRole);
+
+        // Publier le rôle + fiabilité (release/acquire — lu sur message thread).
+        self->slotRoleAnalyzed_[slot].store(finalRole, std::memory_order_release);
+        const bool reliable = (restoredRole != SlotRole::Unknown) ||
+                              (result.roleConfidence >= 0.75f &&
                                result.role != SlotRoleV2::Unknown);
         self->slotRoleReliable_[slot].store(reliable, std::memory_order_release);
+        self->isRoleManual_[slot] = (restoredRole != SlotRole::Unknown) && wasManual;
 
         // Construction du SlotPcm (conserve la stéréo si disponible).
         // Trim optionnel (coordonnées fichier) : découpe AVANT stockage pour que
@@ -352,7 +375,7 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
             }
 
             // Chargement dans le SlotPlayer (worker thread — pas audio)
-            const PlayMode mode = modeForResult(result, slot);
+            const PlayMode mode = modeForResult(result, slot, restoredRole);
             selfLocked->graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
             selfLocked->slotLoaded_[slot].store(true, std::memory_order_release);
         }
@@ -369,8 +392,9 @@ void EngineFacade::clearSlot(int slot) noexcept
     slotPath_[slot].clear();
     slotTrimStart_[slot] = 0;
     slotTrimEnd_[slot]   = -1;
-    slotRoleAnalyzed_[slot].store(SlotRole::Loop, std::memory_order_relaxed);
+    slotRoleAnalyzed_[slot].store(SlotRole::Unknown, std::memory_order_relaxed);
     slotRoleReliable_[slot].store(false, std::memory_order_release);
+    isRoleManual_[slot] = false;
 }
 
 const std::string& EngineFacade::slotFilePath(int slot) const noexcept
@@ -669,6 +693,21 @@ bool EngineFacade::isSlotRoleReliable(int slot) const noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return false;
     return slotRoleReliable_[static_cast<std::size_t>(slot)].load(std::memory_order_acquire);
+}
+
+void EngineFacade::setSlotRoleManual(int slot, SlotRole role) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    graph_.setSlotRole(slot, role);
+    slotRoleAnalyzed_[slot].store(role, std::memory_order_release);
+    slotRoleReliable_[slot].store(true, std::memory_order_release);
+    isRoleManual_[slot] = true;
+}
+
+bool EngineFacade::isSlotRoleManual(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return false;
+    return isRoleManual_[slot];
 }
 
 // ─── Métriques slot ───────────────────────────────────────────────────────────
