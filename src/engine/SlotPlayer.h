@@ -254,15 +254,16 @@ private:
                         const TransportState& ts, float fadeScale = 1.0f) noexcept;
 
     // Rend un seul slot (appelé par renderSlots / processBlock en sous-blocs).
+    // Le temps absolu circule uniquement via ts.blockStart (invariant P0).
     void renderSlot(int slot, const TransportState& ts,
                     float* output, int32_t numFrames,
-                    int64_t blockStart, int frameOffset,
+                    int frameOffset,
                     float* perSlotL, float* perSlotR) noexcept;
 
     // Rend tous les slots actifs dans le buffer de sortie (appelé par processBlock en sous-blocs).
     void renderSlots(const TransportState& ts,
                      float* output, int32_t numFrames,
-                     int64_t blockStart, int frameOffset,
+                     int frameOffset,
                      float** perSlotL, float** perSlotR) noexcept;
 };
 

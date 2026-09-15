@@ -495,8 +495,15 @@ void SlotPlayer::processBlock(const TransportState& ts,
     for (int slot = 0; slot < kSlots; ++slot)
         slotPeak_[slot].store(0.f, std::memory_order_relaxed);
 
-    // Dispatch temporel : traiter les events et renderer en sous-blocs
-    // aux frontières d'events pour un timing sub-bloc correct.
+    // Dispatch temporel : renderer en sous-blocs aux frontières d'events.
+    //
+    // INVARIANT TEMPOREL (P0) : chaque segment [renderPos, nextEventPos) est
+    // rendu avec l'état ANTERIEUR aux events de nextEventPos, puis les events
+    // sont dispatchés (effet à partir de nextEventPos). Le temps utilisé par
+    // renderLoopSync() ET par l'anchor de handleTrigger() correspond toujours
+    // au début absolu réel du sous-bloc / de l'event — jamais ts.blockStart
+    // brut passé le 1er segment, jamais un état post-event pour le passé.
+    // eventTime et subTs ci-dessous font circuler explicitement ces temps.
     int evIdx = 0;
     int renderPos = 0;
 
@@ -508,6 +515,24 @@ void SlotPlayer::processBlock(const TransportState& ts,
             if (nextEventPos > numFrames) nextEventPos = numFrames;
         }
 
+        // 1. Renderer le sous-bloc [renderPos, nextEventPos), calé sur son
+        // début absolu (renderLoopSync lit subTs.blockStart). Copie POD.
+        {
+            const int subLen = nextEventPos - renderPos;
+            if (subLen > 0) {
+                float* subOut = (output != nullptr)
+                    ? output + static_cast<size_t>(renderPos) * 2u
+                    : nullptr;
+                TransportState subTs = ts;
+                subTs.blockStart = ts.blockStart + static_cast<int64_t>(renderPos);
+                renderSlots(subTs, subOut, subLen, renderPos, perSlotL, perSlotR);
+            }
+        }
+
+        // 2. Dispatcher les events à nextEventPos (effet à partir de ce sample).
+        // Temps absolu de l'event (== début absolu du segment qu'il ouvre).
+        const int64_t eventTime = ts.blockStart + static_cast<int64_t>(nextEventPos);
+
         // Traiter les events à cette position
         while (evIdx < numEvents && events[evIdx].offset == nextEventPos) {
             const EngineEvent& ev = events[evIdx].ev;
@@ -516,7 +541,7 @@ void SlotPlayer::processBlock(const TransportState& ts,
                 switch (ev.type) {
                     case EventType::Trigger:
                         if (loaded_[slot].load(std::memory_order_acquire))
-                            handleTrigger(slot, ts.blockStart);
+                            handleTrigger(slot, eventTime);
                         break;
                     case EventType::Release: {
                         const int fadeLen = std::max(1, static_cast<int>(sampleRate_ * 0.01f));
@@ -552,16 +577,6 @@ void SlotPlayer::processBlock(const TransportState& ts,
             }
             ++evIdx;
         }
-
-        // Renderer le sous-bloc [renderPos, nextEventPos)
-        const int subLen = nextEventPos - renderPos;
-        if (subLen > 0) {
-            float* subOut = (output != nullptr)
-                ? output + static_cast<size_t>(renderPos) * 2u
-                : nullptr;
-            renderSlots(ts, subOut, subLen, ts.blockStart + renderPos, renderPos,
-                        perSlotL, perSlotR);
-        }
         renderPos = nextEventPos;
     }
 }
@@ -570,7 +585,7 @@ void SlotPlayer::processBlock(const TransportState& ts,
 
 void SlotPlayer::renderSlot(int slot, const TransportState& ts,
                             float* output, int32_t numFrames,
-                            int64_t blockStart, int frameOffset,
+                            int frameOffset,
                             float* perSlotL, float* perSlotR) noexcept
 {
     if (slot < 0 || slot >= kSlots) return;
@@ -637,9 +652,9 @@ void SlotPlayer::renderSlot(int slot, const TransportState& ts,
 // ─── renderSlots (extrait de l'ancien processBlock) ──────────────────────────
 
 void SlotPlayer::renderSlots(const TransportState& ts,
-                             float* output, int32_t numFrames,
-                             int64_t blockStart, int frameOffset,
-                             float** perSlotL, float** perSlotR) noexcept {
+                              float* output, int32_t numFrames,
+                              int frameOffset,
+                              float** perSlotL, float** perSlotR) noexcept {
 
     const bool perSlotMode = (perSlotL != nullptr || perSlotR != nullptr);
     float* mixOut = perSlotMode ? nullptr : output;
@@ -647,8 +662,7 @@ void SlotPlayer::renderSlots(const TransportState& ts,
     for (int slot = 0; slot < kSlots; ++slot) {
         float* slotL = (perSlotL != nullptr) ? perSlotL[slot] : nullptr;
         float* slotR = (perSlotR != nullptr) ? perSlotR[slot] : nullptr;
-        renderSlot(slot, ts, mixOut, numFrames, blockStart, frameOffset,
-                   slotL, slotR);
+        renderSlot(slot, ts, mixOut, numFrames, frameOffset, slotL, slotR);
     }
 }
 

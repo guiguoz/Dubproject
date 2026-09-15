@@ -94,6 +94,7 @@ add_executable(EngineTests
     engine/test_monosub.cpp
     engine/test_tsan.cpp
     engine/test_locking.cpp
+    engine/test_sync_p0.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp

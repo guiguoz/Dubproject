@@ -214,11 +214,20 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     //   identité exacte sous le seuil (remplace l'ancien tanh/clip qui boostait bas niveau).
     // Signature : peak = 0.98 exact sur toutes les scènes (limiter actif), RMS légèrement
     // relevé par les harmoniques de la saturation.
+    //
+    // v11 — Invariant temporel P0-1/P0-2 (SlotPlayer::processBlock) :
+    // • chaque segment est rendu AVANT dispatch de ses events (plus de fuite
+    //   backward : un trigger@K ne sonne plus dans [0,K)) ;
+    // • renderLoopSync() lit le début absolu du sous-bloc (subTs), anchor =
+    //   temps absolu de l'event (plus de tranche rejouée depuis blockStart).
+    // Slots affectés dans le fixture : slot 5 (pad LoopSync, triggers à offsets
+    // mid-bloc) + tous les retriggers OneShot/Free (attaques désormais exactes
+    // au sample, sans pré-écho jusqu'à un bloc).
     // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
-    //   hashAudio = 0xe32d511b27f62946
-    //   hashRms   = 0x4435863f1803a6fa
-    CHECK(hashAudio == 0xe32d511b27f62946ull);
-    CHECK(hashRms   == 0x4435863f1803a6faull);
+    //   hashAudio = 0xf89675cd5785446c
+    //   hashRms   = 0x36d0d2ee976ff299
+    CHECK(hashAudio == 0xf89675cd5785446cull);
+    CHECK(hashRms   == 0x36d0d2ee976ff299ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {
