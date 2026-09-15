@@ -710,6 +710,14 @@ bool EngineFacade::isSlotRoleManual(int slot) const noexcept
     return isRoleManual_[slot];
 }
 
+engine::SlotRoleInfo EngineFacade::getSlotRoleInfo(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return {};
+    if (!isSlotLoaded(slot)) return {};   // slot vide → neutre, pas de rôle à afficher
+    const auto idx = static_cast<std::size_t>(slot);
+    return { graph_.slotRole(slot), isRoleManual_[idx] };
+}
+
 // ─── Métriques slot ───────────────────────────────────────────────────────────
 
 float EngineFacade::getSlotPlayheadRatio(int slot) const noexcept

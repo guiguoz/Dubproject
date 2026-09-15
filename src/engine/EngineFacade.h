@@ -31,6 +31,31 @@ namespace engine {
 // Callback d'analyse asynchrone (appelé sur le message thread)
 using ImportCallback = std::function<void(int slot, const AnalysisResult&)>;
 
+// Rôle effectif d'un slot — POD central pour l'UI (anti-logique dispersée).
+// role : rôle réellement utilisé par le moteur (AudioGraph::roles_).
+// manual : vrai si posé manuellement (jamais écrasé par ONNX/nom).
+// Slot vide (pas de PCM) → { Unknown, false }.
+struct SlotRoleInfo { SlotRole role = SlotRole::Unknown; bool manual = false; };
+
+// Nom court du rôle pour l'UI (tag permanent, tooltip). Aucune allocation
+// (const char*) — l'UI est le seul consommateur, jamais le thread audio.
+inline const char* slotRoleShortName(SlotRole role) noexcept
+{
+    switch (role)
+    {
+        case SlotRole::Kick:    return "KICK";
+        case SlotRole::Bass:    return "BASS";
+        case SlotRole::Snare:   return "SNR";
+        case SlotRole::Pad:     return "PAD";
+        case SlotRole::Melodic: return "MEL";
+        case SlotRole::Perc:    return "PRC";
+        case SlotRole::Fx:      return "FX";
+        case SlotRole::Loop:    return "LOOP";
+        case SlotRole::Drum:    return "DRM";
+        default:                return "--";
+    }
+}
+
 // ─── EngineFacade ────────────────────────────────────────────────────────────
 class EngineFacade {
 public:
@@ -161,6 +186,11 @@ public:
     // isSlotRoleManual  : vrai si le rôle a été posé manuellement (jamais écrasé par ONNX/nom).
     void setSlotRoleManual(int slot, SlotRole role) noexcept;
     bool isSlotRoleManual(int slot) const noexcept;
+
+    // Rôle effectif d'un slot — API centrale UI (anti-logique dispersée).
+    // Lecture atomique relaxed, sans lock ni allocation :
+    // message thread uniquement, jamais depuis le thread audio.
+    SlotRoleInfo getSlotRoleInfo(int slot) const noexcept;
 
     // Métriques (thread-safe via atomics dans SlotPlayer)
     float getSlotPlayheadRatio(int slot) const noexcept;

@@ -159,6 +159,14 @@ public:
             sampleNameLabels_[t].setJustificationType(juce::Justification::centredLeft);
             addAndMakeVisible(sampleNameLabels_[t]);
 
+            // Tag rôle permanent (rôle effectif moteur, sous le nom de fichier)
+            slotRoleLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
+            slotRoleLabels_[t].setJustificationType(juce::Justification::centredLeft);
+            addAndMakeVisible(slotRoleLabels_[t]);
+            shownRoles_[t]  = engine::SlotRole::Unknown;
+            shownManual_[t] = false;
+            applySlotRoleTag(t, engine::SlotRoleInfo{});
+
             // Mute button (toggle)
             muteBtns_[t].setButtonText("M");
             muteBtns_[t].setClickingTogglesState(true);
@@ -426,7 +434,24 @@ public:
                 loaded ? trackColour(slot) : SaxFXColours::textSecondary);
             if (!loaded)
                 setSlotSampleName(slot, "");
+            refreshSlotRole(slot);
         }
+    }
+
+    /// Rafraîchit le tag rôle permanent d'un slot (lit facade_->getSlotRoleInfo).
+    /// Appelé sur import/remplace, force/déforce de rôle, load projet, reset slot —
+    /// la fin d'analyse async est aussi captée par timerCallback().
+    void refreshSlotRole(int slot)
+    {
+        if (slot < 0 || slot >= 9) return;
+        const engine::SlotRoleInfo info =
+            facade_ ? facade_->getSlotRoleInfo(slot) : engine::SlotRoleInfo{};
+        applySlotRoleTag(slot, info);
+    }
+
+    void refreshAllSlotRoles()
+    {
+        for (int t = 0; t < 9; ++t) refreshSlotRole(t);
     }
 
     /// Store a pre-computed peak envelope (200 bins) for the waveform preview.
@@ -585,7 +610,9 @@ public:
             slotLabels_[t]      .setBounds(kPad,           ry,      38, rowH);
             loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
             loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
-            sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
+            const int nameH = (rowH - 2) / 2;
+            sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, nameH);
+            slotRoleLabels_[t]  .setBounds(kPad + 92,  ry + 2 + nameH, 44, rowH - 4 - nameH);
             editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);
             muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);
             soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);
@@ -991,6 +1018,18 @@ private:
                 duckingLevel_ = duckingLevel_ * 0.85f + targetGain * 0.15f;
         }
 
+        // Tags rôle — détection de changement (couvre la fin d'analyse async,
+        // le force/déforce de rôle, le load projet et le reset slot).
+        if (facade_)
+        {
+            for (int t = 0; t < 9; ++t)
+            {
+                const auto info = facade_->getSlotRoleInfo(t);
+                if (info.role != shownRoles_[t] || info.manual != shownManual_[t])
+                    applySlotRoleTag(t, info);
+            }
+        }
+
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
         if (facade_ && facade_->isPlaying())
         {
@@ -1291,6 +1330,26 @@ private:
         return (track >= 0 && track < 9) ? track : -1;
     }
 
+    /// Applique un SlotRoleInfo au tag permanent (message thread uniquement).
+    void applySlotRoleTag(int slot, engine::SlotRoleInfo info)
+    {
+        shownRoles_[slot]  = info.role;
+        shownManual_[slot] = info.manual;
+        const char* name = engine::slotRoleShortName(info.role);
+        slotRoleLabels_[slot].setText(
+            (info.role == engine::SlotRole::Unknown)
+                ? juce::String("--")
+                : juce::String(name) + (info.manual ? " (M)" : ""),
+            juce::dontSendNotification);
+        slotRoleLabels_[slot].setColour(
+            juce::Label::textColourId,
+            (info.role == engine::SlotRole::Unknown) ? SaxFXColours::textSecondary
+            : info.manual ? juce::Colour(0xFFFFAA00)   // ambre = manuel
+                          : trackColour(slot));        // auto = couleur piste
+        slotRoleLabels_[slot].setTooltip(
+            juce::String("Role: ") + name + (info.manual ? " (manual)" : " (auto)"));
+    }
+
     static constexpr float kMinBpm = 40.f;
     static constexpr float kMaxBpm = 240.f;
 
@@ -1339,6 +1398,9 @@ private:
     std::array<NeonButton,       9> loadBtns_;
     std::array<juce::Label,      9> loadedIndicators_;
     std::array<juce::Label,      9> sampleNameLabels_;
+    std::array<juce::Label,      9> slotRoleLabels_;  // tag rôle permanent (sous le nom)
+    engine::SlotRole shownRoles_[9];                  // cache détection de changement
+    bool             shownManual_[9] = {};
     std::array<NeonButton,       9> editBtns_;        // opens waveform editor
     std::array<NeonButton,       9> muteBtns_;
     std::array<juce::Slider,     9> volSliders_;

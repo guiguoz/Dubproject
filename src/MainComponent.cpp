@@ -253,6 +253,7 @@ MainComponent::MainComponent()
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                stepSeqPanel_->refreshSlotRole(s);
                 updateSpatialSlot(s);
             });
         });
@@ -270,6 +271,7 @@ MainComponent::MainComponent()
     {
         facade_.clearSlot(slot);
         stepSeqPanel_->setSlotLoaded(slot, false);
+        stepSeqPanel_->refreshSlotRole(slot);
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
@@ -1099,6 +1101,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_->setSlotLoaded(s, true);
                     stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
+                    stepSeqPanel_->refreshSlotRole(s);
                     updateSpatialSlot(s);
                 });
             });
@@ -1116,6 +1119,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             stepSeqPanel_->setSlotFilePath(i, "");
             stepSeqPanel_->setSlotLoaded(i, false);
             stepSeqPanel_->setSlotWaveform(i, {});
+            stepSeqPanel_->refreshSlotRole(i);
         }
 
         for (int s = 0; s < 16; ++s)
@@ -2462,6 +2466,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // de départ pour requestTransition() lors des navigations en lecture.
     syncV2Scene(idx);
     facade_.setCurrentScene(idx);
+    stepSeqPanel_->refreshAllSlotRoles();
 
     if (!sc.used)
     {
