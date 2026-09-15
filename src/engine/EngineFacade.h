@@ -273,7 +273,16 @@ public:
 
     // ── Patterns / Sequencer (helper) ───────────────────────────────────────────
     // Préparer le buffer de pattern pour la prochaine scène (message thread).
+    // Publication IMMÉDIATE — annule tout flip stagé (édition live, reset…).
     void prepareStepBuffer(const StepBuf& buf) noexcept;
+    // Flip de pattern quantisé (scènes, P0 sync) : mémorise le buffer + la
+    // frontière ; l'audio thread bascule exactement à la frontière dans
+    // generateEvents (même sample que les GainRamps). Annulé par
+    // prepareStepBuffer()/setCurrentScene()/stop()/play().
+    void stageStepBufferForBoundary(const StepBuf& buf, int64_t boundarySample) noexcept;
+    // Sample de la frontière armée (plan_.executionSample), ou -1 si aucune
+    // transition armée.
+    int64_t transitionExecutionSample() const noexcept;
 
     // Arrêter tous les slots avec mode d'arrêt spécifié.
     void stopAllSlots(StopMode mode = StopMode::Normal) noexcept;

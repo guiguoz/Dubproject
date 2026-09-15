@@ -2742,8 +2742,9 @@ void MainComponent::navigateScene(int delta)
         sceneLen = std::max(sceneLen, facade_.getTrackStepCount(i));
     facade_.setPendingTransitionLen(sceneLen);
 
-    // Pre-arm the step buffer immediately so the audio thread can flip at exactly
-    // step 0, independent of timer latency (fixes missed triggers on first step).
+    // Flip quantisé à la frontière (P0 sync) : le buffer est stagé, l'audio
+    // thread bascule exactement à executionSample — jamais au clic, jamais
+    // au timer. Repli : publication immédiate (comportement historique).
     {
         const auto& nextSc = sceneStore_.getScene(target);
         engine::StepBuf nextBuf;
@@ -2755,7 +2756,11 @@ void MainComponent::navigateScene(int delta)
             for (int s = 0; s < engine::kMaxSteps; ++s)
                 nextBuf.steps[i][s] = nextSc.steps[sidx][static_cast<std::size_t>(s)];
         }
-        facade_.prepareStepBuffer(nextBuf);
+        const int64_t boundary = facade_.transitionExecutionSample();
+        if (boundary >= 0)
+            facade_.stageStepBufferForBoundary(nextBuf, boundary);
+        else
+            facade_.prepareStepBuffer(nextBuf);
     }
 
     facade_.setPendingScene(target);

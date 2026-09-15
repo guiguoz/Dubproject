@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include "engine/SceneStore.h"
 #include "engine/Transport.h"
@@ -75,7 +76,9 @@ public:
                                      const SceneData& to) noexcept;
 
 private:
-    State          state_ = State::Idle;
+    // Atomique : écrit par requestTransition (message) et processBlock (audio),
+    // lu par les deux (dont transitionExecutionSample sur message thread).
+    std::atomic<State> state_ = State::Idle;
     TransitionPlan plan_;
     int            settleBlocksLeft_ = 0;
 

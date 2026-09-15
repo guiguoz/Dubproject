@@ -75,6 +75,26 @@ struct PatternBuffer {
 
 class Sequencer {
 public:
+    // ── Flip de pattern quantisé (scènes, P0 sync) ──────────────────────────
+    // stageForBoundary() mémorise un pattern + frontière (message thread) ;
+    // le flip est appliqué dans generateEvents quand la frontière est franchie
+    // (audio thread) — aucun changement musical à un instant arbitraire.
+    // L'édition live (flipPatternBuffer) reste immédiate.
+    // Discipline : un seul stage en cours (navigateScene est bloqué pendant
+    // une transition) ; toute publication immédiate annule le stage.
+    void stageForBoundary(const TrackPattern staged[kMaxSlots],
+                          int64_t boundarySample) noexcept {
+        for (int s = 0; s < kMaxSlots; ++s) staged_[s] = staged[s];
+        stagedBoundary_.store(boundarySample, std::memory_order_release);
+        stagedActive_.store(true, std::memory_order_release);
+    }
+    void clearStaged() noexcept {
+        stagedActive_.store(false, std::memory_order_release);
+    }
+    bool hasStaged() const noexcept {
+        return stagedActive_.load(std::memory_order_acquire);
+    }
+
     void generateEvents(const TransportState& ts,
                         int64_t blockStart, int32_t numSamples,
                         float swingFactor,
@@ -82,6 +102,35 @@ public:
         if (!ts.playing || numSamples <= 0) return;
 
         const int64_t blockEnd = blockStart + static_cast<int64_t>(numSamples);
+
+        // Frontière stagée dans ce bloc : générer l'ancien pattern avant,
+        // publier, puis générer le nouveau après — flip sample-accurate,
+        // même sample que les GainRamps de la transition.
+        if (stagedActive_.load(std::memory_order_acquire)) {
+            const int64_t boundary = stagedBoundary_.load(std::memory_order_acquire);
+            if (boundary > blockStart && boundary < blockEnd) {
+                const int32_t preLen = static_cast<int32_t>(boundary - blockStart);
+                emitRange(ts, blockStart, preLen, swingFactor, scheduler);
+                publishStaged();
+                emitRange(ts, boundary, numSamples - preLen, swingFactor, scheduler);
+                return;
+            }
+            if (boundary <= blockStart) {
+                publishStaged();   // rattrapage : frontière déjà passée
+            }
+            // boundary >= blockEnd : flip au bloc suivant, garder l'ancien pattern.
+        }
+        emitRange(ts, blockStart, numSamples, swingFactor, scheduler);
+    }
+
+    // Émet les triggers dont le sample tombe dans [rangeStart, rangeStart+rangeLen).
+    void emitRange(const TransportState& ts,
+                   int64_t rangeStart, int32_t rangeLen,
+                   float swingFactor,
+                   EventScheduler& scheduler) noexcept {
+        if (!ts.playing || rangeLen <= 0) return;
+
+        const int64_t blockEnd = rangeStart + static_cast<int64_t>(rangeLen);
 
         // Fenêtre élargie vers le passé : un step dont la base précède le bloc
         // peut déclencher DANS le bloc via le swing. Chaque trigger appartient
@@ -92,7 +141,7 @@ public:
         const int64_t maxSwing = static_cast<int64_t>(
             std::ceil(swClamped * ts.samplesPerStep));
 
-        const int64_t firstStep = stepIndexAt(ts, blockStart - maxSwing);
+        const int64_t firstStep = stepIndexAt(ts, rangeStart - maxSwing);
         const int64_t lastStep  = stepIndexAt(ts, blockEnd - 1);
 
         for (int64_t step = firstStep; step <= lastStep; ++step) {
@@ -106,7 +155,7 @@ public:
                 triggerSample = baseSample + swingOffset;
             }
 
-            if (triggerSample < blockStart || triggerSample >= blockEnd) continue;
+            if (triggerSample < rangeStart || triggerSample >= blockEnd) continue;
 
             for (int slot = 0; slot < kMaxSlots; ++slot) {
                 const TrackPattern* pat = patterns_.readBuffer(slot);
@@ -130,7 +179,21 @@ public:
     const PatternBuffer& patterns() const noexcept { return patterns_; }
 
 private:
+    // Publie le pattern stagé (audio thread, à la frontière).
+    // Copie bornée sans allocation ; aucun lock, UI, I/O.
+    void publishStaged() noexcept {
+        for (int s = 0; s < kMaxSlots; ++s)
+            *patterns_.writeBuffer(s) = staged_[s];
+        patterns_.publish();
+        stagedActive_.store(false, std::memory_order_release);
+    }
+
     PatternBuffer patterns_;
+
+    // Pattern stagé pour flip quantisé (scènes) + frontière absolue.
+    TrackPattern staged_[kMaxSlots] = {};
+    std::atomic<int64_t> stagedBoundary_ { 0 };
+    std::atomic<bool>    stagedActive_   { false };
 };
 
 } // namespace engine

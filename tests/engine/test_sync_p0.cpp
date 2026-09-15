@@ -347,3 +347,335 @@ TEST_CASE("T-SYNC2d: swing input clamped to legal domain", "[sync][p0]") {
     REQUIRE(collectSwingTriggers(sr, bpm, 256, numSteps, -1.0f)
          == collectSwingTriggers(sr, bpm, 256, numSteps, 0.0f));
 }
+
+// ─── T-SYNC3 : flip de pattern quantisé (P0-3) ───────────────────────────────
+// Driver : Sequencer + scheduler persistant, blocs fixes, collecte des temps.
+static std::vector<int64_t> collectSeqTriggers(Sequencer& seq, double sr, double bpm,
+                                               int blockSize, int64_t total) {
+    TransportState ts{};
+    ts.sampleRate     = sr;
+    ts.bpm            = bpm;
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+    ts.playing        = true;
+    EventScheduler sched;
+    std::vector<int64_t> times;
+    int64_t pos = 0;
+    while (pos < total) {
+        const int32_t n = static_cast<int32_t>(std::min<int64_t>(blockSize, total - pos));
+        ts.blockStart = pos;
+        ts.samplePos  = pos + n;
+        seq.generateEvents(ts, pos, n, 0.f, sched);
+        sched.processBlock(pos, n, [&](int32_t, const EngineEvent& ev) {
+            if (ev.slot == 0) times.push_back(ev.time);
+        });
+        pos += n;
+    }
+    return times;
+}
+
+// T-SYNC3a : pattern A (tout on) puis stage de B (step0 seul) à la frontière
+// mid-bloc — le flip tombe exactement sur la frontière, pas avant/après.
+TEST_CASE("T-SYNC3a: staged pattern flips exactly at boundary", "[sync][p0]") {
+    constexpr double sr = 44100.0, bpm = 120.0;
+    constexpr int block = 512;
+    TransportState ts{};
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+
+    Sequencer seq;
+    TrackPattern patA{};
+    patA.numSteps = 16;
+    for (int i = 0; i < 16; ++i) patA.steps[i] = true;
+    *seq.patterns().writeBuffer(0) = patA;
+    seq.patterns().publish();
+
+    TrackPattern staged[9]{};
+    staged[0].numSteps = 16;
+    staged[0].steps[0] = true;
+    const int64_t boundary = sampleOfStep(ts, 32);   // 176400, 176400 % 512 = 272
+    REQUIRE(boundary % block != 0);   // garde : frontière vraiment mid-bloc
+    seq.stageForBoundary(staged, boundary);
+
+    const int64_t total = sampleOfStep(ts, 48);
+    const std::vector<int64_t> times = collectSeqTriggers(seq, sr, bpm, block, total);
+
+    std::vector<int64_t> expected;
+    for (int64_t s = 0; s < 32; ++s) expected.push_back(sampleOfStep(ts, s));
+    expected.push_back(sampleOfStep(ts, 32));   // B step0 : 32 % 16 == 0
+    REQUIRE(times == expected);
+    REQUIRE(!seq.hasStaged());   // stage consommé à la frontière
+}
+
+// T-SYNC3b : clearStaged annule (A persiste) ; publication live immédiate.
+TEST_CASE("T-SYNC3b: clearStaged cancels, live publish stays immediate", "[sync][p0]") {
+    constexpr double sr = 44100.0, bpm = 120.0;
+    constexpr int block = 512;
+    TransportState ts{};
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+
+    Sequencer seq;
+    TrackPattern patA{};
+    patA.numSteps = 16;
+    for (int i = 0; i < 16; ++i) patA.steps[i] = true;
+    *seq.patterns().writeBuffer(0) = patA;
+    seq.patterns().publish();
+
+    TrackPattern staged[9]{};
+    staged[0].numSteps = 16;   // tout éteint
+    seq.stageForBoundary(staged, sampleOfStep(ts, 32));
+    seq.clearStaged();
+    REQUIRE(!seq.hasStaged());
+
+    const int64_t total = sampleOfStep(ts, 48);
+    const std::vector<int64_t> times = collectSeqTriggers(seq, sr, bpm, block, total);
+    std::vector<int64_t> expected;
+    for (int64_t s = 0; s < 48; ++s) expected.push_back(sampleOfStep(ts, s));
+    REQUIRE(times == expected);
+
+    // Édition live : publication immédiate, sans frontière.
+    TrackPattern patB{};
+    patB.numSteps = 16;
+    patB.steps[0] = true;
+    *seq.patterns().writeBuffer(0) = patB;
+    seq.patterns().publish();
+    const std::vector<int64_t> live =
+        collectSeqTriggers(seq, sr, bpm, block, sampleOfStep(ts, 16));
+    std::vector<int64_t> expectedLive = { sampleOfStep(ts, 0) };
+    REQUIRE(live == expectedLive);
+}
+
+// ─── T-BOUNDARY : scène à la frontière ───────────────────────────────────────
+// Pattern A (step 15 seul), pattern B (step 0 seul). B armé pendant A :
+// dernier event A et premier event B de part et d'autre de la frontière
+// exacte — pas de B prématuré, pas de cycle A supplémentaire.
+TEST_CASE("T-BOUNDARY: last A and first B straddle the exact boundary", "[sync][p0]") {
+    constexpr double sr = 44100.0, bpm = 120.0;
+    constexpr int block = 512;
+    TransportState ts{};
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+
+    Sequencer seq;
+    TrackPattern patA{};
+    patA.numSteps   = 16;
+    patA.steps[15]  = true;
+    *seq.patterns().writeBuffer(0) = patA;
+    seq.patterns().publish();
+
+    TrackPattern staged[9]{};
+    staged[0].numSteps = 16;
+    staged[0].steps[0] = true;
+    const int64_t boundary = sampleOfStep(ts, 48);   // 264600
+    seq.stageForBoundary(staged, boundary);
+
+    const int64_t total = sampleOfStep(ts, 64);
+    const std::vector<int64_t> times = collectSeqTriggers(seq, sr, bpm, block, total);
+
+    const std::vector<int64_t> expected = {
+        sampleOfStep(ts, 15), sampleOfStep(ts, 31),
+        sampleOfStep(ts, 47), sampleOfStep(ts, 48),
+    };
+    REQUIRE(times == expected);
+    REQUIRE(times[2] < boundary);    // dernier A strictement avant
+    REQUIRE(times[3] == boundary);   // premier B exactement dessus
+}
+
+// ─── T-DRIFT : alignement longue durée ───────────────────────────────────────
+// Une loop impulsionnelle LoopSync (frame 1 = 1.0, bypass) rendue sur des
+// centaines de mesures : chaque début de burst tombe EXACTEMENT sur
+// ceil(k*L + L/N) — erreur nulle, aucune accumulation. Streaming (pas de
+// gros buffer) sur la matrice SR × BPM × tailles de bloc.
+static std::vector<int64_t> loopBurstStarts(double sr, double bpm, int blockSize,
+                                            int numLoops, int pcmFrames = 1024) {
+    SlotPlayer sp;
+    sp.prepareStretchers(1, static_cast<float>(sr));
+    sp.setSpatial(0, 0.f, 0.f);
+    sp.loadSlot(0, makeImpulsePcm(pcmFrames, static_cast<float>(sr)), PlayMode::LoopSync);
+    sp.armLoopSync(0, 1, 1.0f, 0.0f, 0);
+
+    const double loopLen = sr * 60.0 / bpm;   // loopBeats = 1
+    // total EXACT : les bursts k < numLoops sont < total, le burst k = numLoops
+    // est > total (pas de +blockSize : il admettrait un burst de trop).
+    const int64_t total =
+        static_cast<int64_t>(std::ceil(numLoops * loopLen));
+
+    TransportState ts{};
+    ts.sampleRate     = sr;
+    ts.bpm            = bpm;
+    ts.samplesPerBeat = loopLen;
+    ts.samplesPerStep = loopLen / 4.0;
+    ts.playing        = true;
+
+    std::vector<int64_t> starts;
+    int64_t pos = 0;
+    float prevVal = 0.f;
+    bool first = true;
+    std::vector<float> out(static_cast<size_t>(blockSize) * 2u, 0.f);
+    while (pos < total) {
+        const int32_t n = static_cast<int32_t>(std::min<int64_t>(blockSize, total - pos));
+        ts.blockStart = pos;
+        ts.samplePos  = pos + n;
+        std::vector<EventWithOffset> evs;
+        if (first) {
+            evs.push_back({ 0, trigEv(0) });
+            first = false;
+        }
+        std::fill(out.begin(), out.end(), 0.f);
+        sp.processBlock(ts, out.data(), n, evs.data(), static_cast<int>(evs.size()));
+        for (int i = 0; i < n; ++i) {
+            const float v = out[static_cast<size_t>(i) * 2u];
+            if (v != 0.f && prevVal == 0.f) starts.push_back(pos + i);
+            prevVal = v;
+        }
+        pos += n;
+    }
+    return starts;
+}
+
+// T-DRIFT1 : 200 mesures, matrice SR × BPM × blocs — erreur de phase BORNÉE.
+// Position idéale (maths réelles) du burst k : p* = k*L + L/N. Le rendu est
+// exact au sample près ; la forme close ceil() utilisée comme référence peut
+// elle-même arrondir d'un sample aux frontières ulp (constaté : k=346 à
+// 48 kHz/133.7 — le rendu avait raison, la formule tort). On assert donc
+// |pos - p*| <= 1 pour chaque k (borne ABSOLUE, indépendante de k : aucune
+// accumulation possible) + compte exact (aucune perte/duplication).
+TEST_CASE("T-DRIFT1: LoopSync aligned after hundreds of measures", "[sync][drift]") {
+    constexpr int numLoops = 800;   // loopBeats=1 → 200 mesures 4/4
+    for (double sr : { 44100.0, 48000.0 }) {
+        for (double bpm : { 120.0, 133.7 }) {
+            const double loopLen = sr * 60.0 / bpm;
+            const double ratio   = loopLen / 1024.0;
+            for (int block : { 64, 1024 }) {
+                INFO("sr=" << sr << " bpm=" << bpm << " block=" << block);
+                const std::vector<int64_t> starts = loopBurstStarts(sr, bpm, block, numLoops);
+                REQUIRE(starts.size() == static_cast<size_t>(numLoops));
+                for (int k = 0; k < numLoops; ++k) {
+                    const double ideal = k * loopLen + ratio;
+                    const double err = std::abs(static_cast<double>(starts[static_cast<size_t>(k)]) - ideal);
+                    INFO("k=" << k << " got=" << starts[static_cast<size_t>(k)]
+                         << " ideal=" << ideal << " err=" << err);
+                    REQUIRE(err <= 1.0);
+                }
+            }
+        }
+    }
+}
+
+// T-DRIFT2 : identité bit-exact entre tailles de bloc (16 mesures).
+TEST_CASE("T-DRIFT2: bit-identical output across block sizes", "[sync][drift]") {
+    constexpr double sr = 44100.0, bpm = 120.0;
+    constexpr int measures = 16;
+    const double loopLen = sr * 60.0 / bpm;
+    const int64_t total = static_cast<int64_t>(std::ceil(4 * measures * loopLen));
+
+    std::vector<std::vector<float>> renders;
+    for (int block : { 64, 128, 256, 512, 1024 }) {
+        SlotPlayer sp;
+        sp.prepareStretchers(1, static_cast<float>(sr));
+        sp.setSpatial(0, 0.f, 0.f);
+        sp.loadSlot(0, makeImpulsePcm(1024, static_cast<float>(sr)), PlayMode::LoopSync);
+        sp.armLoopSync(0, 1, 1.0f, 0.0f, 0);
+        TransportState ts{};
+        ts.sampleRate = sr; ts.bpm = bpm;
+        ts.samplesPerBeat = loopLen; ts.samplesPerStep = loopLen / 4.0;
+        ts.playing = true;
+        std::vector<float> out(static_cast<size_t>(total) * 2u, 0.f);
+        int64_t pos = 0;
+        bool first = true;
+        std::vector<float> blk(static_cast<size_t>(block) * 2u, 0.f);
+        while (pos < total) {
+            const int32_t n = static_cast<int32_t>(std::min<int64_t>(block, total - pos));
+            ts.blockStart = pos; ts.samplePos = pos + n;
+            std::vector<EventWithOffset> evs;
+            if (first) {
+                evs.push_back({ 0, trigEv(0) });
+                first = false;
+            }
+            std::fill(blk.begin(), blk.end(), 0.f);
+            sp.processBlock(ts, blk.data(), n, evs.data(), static_cast<int>(evs.size()));
+            std::copy(blk.begin(), blk.begin() + static_cast<size_t>(n) * 2u,
+                      out.begin() + static_cast<size_t>(pos) * 2u);
+            pos += n;
+        }
+        renders.push_back(std::move(out));
+    }
+    for (size_t i = 1; i < renders.size(); ++i) {
+        INFO("block mismatch at index " << i);
+        REQUIRE(renders[i] == renders[0]);
+    }
+}
+
+// T-DRIFT4 : stepIndexAt(sampleOfStep(N)) == N (SR × BPM, petits et grands N).
+TEST_CASE("T-DRIFT4: step index round-trips sample offset", "[sync][drift]") {
+    TransportState ts{};
+    for (double sr : { 44100.0, 48000.0 }) {
+        for (double bpm : { 90.0, 120.0, 126.0, 133.7, 140.0, 160.0 }) {
+            ts.sampleRate     = sr;
+            ts.bpm            = bpm;
+            ts.samplesPerBeat = sr * 60.0 / bpm;
+            ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+            for (int64_t s : { 0LL, 1LL, 2LL, 3LL, 7LL, 15LL, 16LL, 17LL,
+                               31LL, 32LL, 100LL, 1000LL, 100000LL, 1000000LL }) {
+                INFO("sr=" << sr << " bpm=" << bpm << " step=" << s);
+                REQUIRE(stepIndexAt(ts, sampleOfStep(ts, s)) == s);
+            }
+        }
+    }
+}
+
+// T-DRIFT5 : wrap de loop identique mono/stéréo (OneShot + Free bouclé).
+TEST_CASE("T-DRIFT5: loop wrap identical mono vs stereo", "[sync][drift]") {
+    constexpr double sr = 44100.0, bpm = 120.0;
+    constexpr int frames = 1000;
+    constexpr int total = 352800;   // 4 mesures : ~352 wraps
+
+    auto makeRamp = [&](int numChannels) {
+        SlotPcm pcm;
+        pcm.numChannels = numChannels;
+        pcm.numFrames   = frames;
+        pcm.sampleRate  = static_cast<float>(sr);
+        pcm.data.reserve(static_cast<size_t>(frames * numChannels));
+        for (int i = 0; i < frames; ++i) {
+            const float v = static_cast<float>(i) / static_cast<float>(frames - 1);
+            pcm.data.push_back(v);
+            if (numChannels == 2) pcm.data.push_back(v);
+        }
+        return pcm;
+    };
+
+    for (PlayMode mode : { PlayMode::OneShot, PlayMode::Free }) {
+        SlotPlayer mono, stereo;
+        for (SlotPlayer* sp : { &mono, &stereo }) {
+            sp->prepareStretchers(1, static_cast<float>(sr));
+            sp->setSpatial(0, 0.f, 0.f);
+        }
+        mono.loadSlot(0, makeRamp(1), mode);
+        stereo.loadSlot(0, makeRamp(2), mode);
+
+        std::vector<float> outM(static_cast<size_t>(total) * 2u, 0.f);
+        std::vector<float> outS(static_cast<size_t>(total) * 2u, 0.f);
+        for (int pass = 0; pass < 2; ++pass) {
+            SlotPlayer& sp  = (pass == 0) ? mono : stereo;
+            std::vector<float>& out = (pass == 0) ? outM : outS;
+            int64_t pos = 0;
+            bool first = true;
+            while (pos < total) {
+                const int32_t n = static_cast<int32_t>(std::min<int64_t>(512, total - pos));
+                auto ts = makeSyncTS(sr, bpm, pos, n);
+                std::vector<EventWithOffset> evs;
+                if (first) {
+                    evs.push_back({ 0, trigEv(0) });
+                    first = false;
+                }
+                std::vector<float> blk(static_cast<size_t>(n) * 2u, 0.f);
+                sp.processBlock(ts, blk.data(), n, evs.data(), static_cast<int>(evs.size()));
+                std::copy(blk.begin(), blk.end(), out.begin() + static_cast<size_t>(pos) * 2u);
+                pos += n;
+            }
+        }
+        INFO("mode=" << static_cast<int>(mode));
+        REQUIRE(outM == outS);
+    }
+}

@@ -177,10 +177,14 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
-void EngineFacade::play() noexcept { transport_.play(); }
+void EngineFacade::play() noexcept {
+    graph_.sequencer().clearStaged();   // position remise à 0 : stage obsolète
+    transport_.play();
+}
 
 void EngineFacade::stop() noexcept {
     transport_.stop();
+    graph_.sequencer().clearStaged();   // transport figé : la frontière ne viendra pas
     constexpr uint16_t kAllSlots = (1u << kMaxSlots) - 1u;
     pendingStops_.fetch_or(kAllSlots, std::memory_order_release);
     delayResetPending_.store(true, std::memory_order_release);
@@ -873,6 +877,7 @@ void EngineFacade::reloadSlotPcm(int slot, std::vector<float> mono, float sample
 void EngineFacade::setCurrentScene(int idx) noexcept
 {
     if (idx < 0 || idx >= kMaxScenes) return;
+    graph_.sequencer().clearStaged();   // application directe : annule le stage
     currentScene_.store(idx, std::memory_order_relaxed);
     applySceneInternal(idx);
 }
@@ -979,6 +984,7 @@ float EngineFacade::getSceneEnergy(int idx) const noexcept
 
 void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 {
+    graph_.sequencer().clearStaged();   // publication immédiate : annule le stage
     for (int s = 0; s < kMaxSlots; ++s)
     {
         const int steps = buf.trackStepCount[s] > 0 ? buf.trackStepCount[s] : 16;
@@ -988,6 +994,26 @@ void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
             writePatterns_[s].steps[i] = buf.steps[s][i];
     }
     flipPatternBuffer();
+}
+
+void EngineFacade::stageStepBufferForBoundary(const StepBuf& buf,
+                                              int64_t boundarySample) noexcept
+{
+    TrackPattern staged[kMaxSlots];
+    for (int s = 0; s < kMaxSlots; ++s)
+    {
+        const int steps = buf.trackStepCount[s] > 0 ? buf.trackStepCount[s] : 16;
+        staged[s].numSteps = steps;
+        for (int i = 0; i < kMaxSteps; ++i)
+            staged[s].steps[i] = buf.steps[s][i];
+    }
+    graph_.sequencer().stageForBoundary(staged, boundarySample);
+}
+
+int64_t EngineFacade::transitionExecutionSample() const noexcept
+{
+    if (transition_.state() != TransitionEngine::State::Armed) return -1;
+    return transition_.plan().executionSample;
 }
 
 void EngineFacade::stopAllSlots(StopMode /*mode*/) noexcept

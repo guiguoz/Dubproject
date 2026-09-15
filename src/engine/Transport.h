@@ -24,18 +24,24 @@ inline double beatAt(const TransportState& ts, int64_t pos) noexcept {
     return static_cast<double>(pos) / ts.samplesPerBeat;
 }
 
-// Retourne l'index de step monotone (int64, jamais de modulo global).
-// Utilise double pour éviter l'erreur d'arrondi sur de grandes valeurs.
-inline int64_t stepIndexAt(const TransportState& ts, int64_t pos) noexcept {
-    return static_cast<int64_t>(static_cast<double>(pos) / ts.samplesPerStep);
-}
-
 // Retourne l'offset en samples du PREMIER sample appartenant au step N.
 // Utilise ceil : le step N commence au premier entier >= N * samplesPerStep.
-// Garantit que stepIndexAt(sampleOfStep(N)) == N même pour des samplesPerStep
-// non entiers (BPM non ronds comme 133.7).
 inline int64_t sampleOfStep(const TransportState& ts, int64_t stepIndex) noexcept {
     return static_cast<int64_t>(std::ceil(static_cast<double>(stepIndex) * ts.samplesPerStep));
+}
+
+// Retourne l'index de step monotone (int64, jamais de modulo global).
+// Exact par construction : part de la division double puis ajuste par
+// sampleOfStep() (strictement croissante pour samplesPerStep > 1, toujours
+// vrai musicalement). Garantit stepIndexAt(sampleOfStep(N)) == N — la division
+// seule peut arrondir sous l'entier (ex. SR 48 kHz / 126 BPM : step 7 → 6,
+// step manqué ou relancé) et fausser la fenêtre d'itération du séquenceur.
+// Coût : 0 à 2 évaluations sampleOfStep en plus (graine à ±1 step près).
+inline int64_t stepIndexAt(const TransportState& ts, int64_t pos) noexcept {
+    int64_t seed = static_cast<int64_t>(static_cast<double>(pos) / ts.samplesPerStep);
+    while (seed > 0 && sampleOfStep(ts, seed) > pos) --seed;
+    while (sampleOfStep(ts, seed + 1) <= pos) ++seed;
+    return seed;
 }
 
 // Samples restants jusqu'au prochain step N (peut être 0 si exactement dessus).
