@@ -409,6 +409,7 @@ MainComponent::MainComponent()
     {
         facade_.setSlotRoleChoice(slot, typeIndex);
         stepSeqPanel_->updateRoleStatus(slot);
+        stepSeqPanel_->repaint();   // contour manuel peint en paintOverChildren : immédiat
         // Re-lancer l'IA avec le nouveau type
         triggerAI();
     };

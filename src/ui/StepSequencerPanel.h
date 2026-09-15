@@ -761,6 +761,24 @@ public:
             }
         }
 
+        // ── Rôle manuel : contour ambre 2 px + pastille ───────────────────────
+        // Dessin explicite (Label::outlineColourId n'est pas honoré par le LnF).
+        // slotLabels_ sont enfants directs → getBounds() déjà en coords panel.
+        // Placé AVANT le early-return playhead : visible même à l'arrêt.
+        if (facade_)
+        {
+            for (int t = 0; t < 9; ++t)
+            {
+                if (!facade_->getSlotRoleInfo(t).manual) continue;
+                const auto r = slotLabels_[static_cast<std::size_t>(t)].getBounds()
+                                   .toFloat().reduced(0.5f);
+                g.setColour(juce::Colour(0xFFFFB74D));
+                g.drawRoundedRectangle(r, 3.0f, 2.0f);
+                // Pastille ambre, coin haut-droit (hors du texte centré).
+                g.fillEllipse(r.getRight() - 8.f, r.getY() + 3.f, 5.f, 5.f);
+            }
+        }
+
         // ── Drag-and-drop highlight overlay ──────────────────────────────────
         if (dragHighlightTrack_ >= 0 && dragHighlightTrack_ < 9)
         {
@@ -1367,7 +1385,15 @@ private:
         }
 
         label.setText(engine::slotRoleShortName(info.role), juce::dontSendNotification);
-        if (info.role == engine::SlotRole::Unknown)
+        if (info.manual)
+        {
+            // Rôle forcé manuellement : fond ambre très sombre + texte ambre.
+            // Le contour 2 px + pastille sont dessinés explicitement dans
+            // paintOverChildren (le LnF ignore Label::outlineColourId).
+            label.setColour(juce::Label::textColourId, juce::Colour(0xFFFFB74D));
+            label.setColour(juce::Label::backgroundColourId, juce::Colour(0xFF2E1A0A));
+        }
+        else if (info.role == engine::SlotRole::Unknown)
         {
             // Sample chargé mais rôle inclassable : fond orange/rouge sombre.
             label.setColour(juce::Label::textColourId, juce::Colour(0xFFFFAA88));
@@ -1379,17 +1405,8 @@ private:
             label.setColour(juce::Label::textColourId, trackColour(slot));
             label.setColour(juce::Label::backgroundColourId, juce::Colour(0xFF0B2620));
         }
-        if (info.manual)
-        {
-            // Rôle forcé manuellement : contour ambre.
-            label.setColour(juce::Label::outlineColourId, juce::Colour(0xFFFFAA00));
-            label.setBorderSize(juce::BorderSize<int>(1));
-        }
-        else
-        {
-            label.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-            label.setBorderSize(juce::BorderSize<int>(0));
-        }
+        label.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+        label.setBorderSize(juce::BorderSize<int>(0));
         label.setTooltip(juce::String("Role: ") + engine::slotRoleDisplayName(info.role) +
                          (info.manual ? " (manual)" : " (auto)") + " — Click to change");
     }
