@@ -159,9 +159,13 @@ public:
             sampleNameLabels_[t].setJustificationType(juce::Justification::centredLeft);
             addAndMakeVisible(sampleNameLabels_[t]);
 
-            // Tag rôle permanent (rôle effectif moteur, sous le nom de fichier)
-            slotRoleLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
-            slotRoleLabels_[t].setJustificationType(juce::Justification::centredLeft);
+            // Badge rôle permanent (overlay bas-droite zone waveform, taille fixe —
+            // indépendant de la hauteur de ligne). Toujours visible, transparent
+            // à la souris pour ne pas casser l'interaction du slot.
+            slotRoleLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(10.f).withStyle("Bold")));
+            slotRoleLabels_[t].setJustificationType(juce::Justification::centred);
+            slotRoleLabels_[t].setInterceptsMouseClicks(false, false);
+            slotRoleLabels_[t].setAlwaysOnTop(true);
             addAndMakeVisible(slotRoleLabels_[t]);
             shownRoles_[t]  = engine::SlotRole::Unknown;
             shownManual_[t] = false;
@@ -610,9 +614,13 @@ public:
             slotLabels_[t]      .setBounds(kPad,           ry,      38, rowH);
             loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
             loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
-            const int nameH = (rowH - 2) / 2;
-            sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, nameH);
-            slotRoleLabels_[t]  .setBounds(kPad + 92,  ry + 2 + nameH, 44, rowH - 4 - nameH);
+            sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
+            // Badge rôle : overlay en bas à droite de la zone waveform (même rect
+            // que paintOverChildren wfArea : x=kPad+76, w=60). Taille fixe 30×12.
+            auto badge = juce::Rectangle<int>(kPad + 76, ry + 2, 60, rowH - 4)
+                             .removeFromBottom(12).removeFromRight(34).reduced(2, 0);
+            slotRoleLabels_[t].setBounds(badge);
+            slotRoleLabels_[t].toFront(false);
             editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);
             muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);
             soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);
@@ -1336,11 +1344,9 @@ private:
         shownRoles_[slot]  = info.role;
         shownManual_[slot] = info.manual;
         const char* name = engine::slotRoleShortName(info.role);
-        slotRoleLabels_[slot].setText(
-            (info.role == engine::SlotRole::Unknown)
-                ? juce::String("--")
-                : juce::String(name) + (info.manual ? " (M)" : ""),
-            juce::dontSendNotification);
+        // Badge étroit (30 px) : code seul, sans suffixe. Manuel = ambre,
+        // le tooltip porte le détail "(manual)".
+        slotRoleLabels_[slot].setText(juce::String(name), juce::dontSendNotification);
         slotRoleLabels_[slot].setColour(
             juce::Label::textColourId,
             (info.role == engine::SlotRole::Unknown) ? SaxFXColours::textSecondary

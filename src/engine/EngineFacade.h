@@ -52,7 +52,7 @@ inline const char* slotRoleShortName(SlotRole role) noexcept
         case SlotRole::Fx:      return "FX";
         case SlotRole::Loop:    return "LOOP";
         case SlotRole::Drum:    return "DRM";
-        default:                return "--";
+        default:                return "UNK";
     }
 }
 
