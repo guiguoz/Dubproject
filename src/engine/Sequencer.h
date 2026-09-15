@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include "engine/Transport.h"
 #include "engine/EventScheduler.h"
@@ -82,17 +83,26 @@ public:
 
         const int64_t blockEnd = blockStart + static_cast<int64_t>(numSamples);
 
-        const int64_t firstStep = stepIndexAt(ts, blockStart);
+        // Fenêtre élargie vers le passé : un step dont la base précède le bloc
+        // peut déclencher DANS le bloc via le swing. Chaque trigger appartient
+        // à exactement un bloc (test d'appartenance sur le trigger, pas la base)
+        // → ni perte aux alignements grille/bloc, ni doublon. Clamp défensif :
+        // setSwing() n'est pas borné côté façade.
+        const double swClamped = std::clamp(static_cast<double>(swingFactor), 0.0, 1.0);
+        const int64_t maxSwing = static_cast<int64_t>(
+            std::ceil(swClamped * ts.samplesPerStep));
+
+        const int64_t firstStep = stepIndexAt(ts, blockStart - maxSwing);
         const int64_t lastStep  = stepIndexAt(ts, blockEnd - 1);
 
         for (int64_t step = firstStep; step <= lastStep; ++step) {
+            if (step < 0) continue;   // le transport démarre à 0
             const int64_t baseSample = sampleOfStep(ts, step);
 
             int64_t triggerSample = baseSample;
-            if (swingFactor > 0.0f && (step & 1) == 1) {
+            if (swClamped > 0.0 && (step & 1) == 1) {
                 const int64_t swingOffset =
-                    static_cast<int64_t>(std::round(
-                        static_cast<double>(swingFactor) * ts.samplesPerStep));
+                    static_cast<int64_t>(std::round(swClamped * ts.samplesPerStep));
                 triggerSample = baseSample + swingOffset;
             }
 

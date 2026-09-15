@@ -218,3 +218,132 @@ TEST_CASE("T-PARTITION: 1x512 equals 8x64 on transients and LoopSync phase", "[s
 
     REQUIRE(outA == outB);
 }
+
+// ─── T-SYNC2 : comptabilité swing (P0-4) ─────────────────────────────────────
+// Un trigger déplacé par swing hors du bloc courant doit être généré
+// exactement dans le bloc contenant son timestamp final : jamais supprimé,
+// jamais clampé, jamais dupliqué. Driver fidèle au live : Transport +
+// Sequencer + scheduler PERSISTANT entre blocs (les events futurs survivent).
+static std::vector<int64_t> collectSwingTriggers(double sr, double bpm, int blockSize,
+                                                 int numSteps, float swing,
+                                                 bool stepOneOnly = false) {
+    TransportState ts{};
+    ts.sampleRate     = sr;
+    ts.bpm            = bpm;
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+    ts.playing        = true;
+
+    Sequencer seq;
+    TrackPattern pat{};
+    pat.numSteps = 16;
+    if (stepOneOnly) {
+        pat.steps[1] = true;   // impair → toujours swingué
+    } else {
+        for (int i = 0; i < 16; ++i) pat.steps[i] = true;
+    }
+    *seq.patterns().writeBuffer(0) = pat;
+    seq.patterns().publish();
+
+    const int64_t total =
+        static_cast<int64_t>(std::ceil(static_cast<double>(numSteps) * ts.samplesPerStep));
+
+    EventScheduler sched;
+    std::vector<int64_t> times;
+    int64_t pos = 0;
+    while (pos < total) {
+        const int32_t n = static_cast<int32_t>(std::min<int64_t>(blockSize, total - pos));
+        ts.blockStart = pos;
+        ts.samplePos  = pos + n;
+        seq.generateEvents(ts, pos, n, swing, sched);
+        sched.processBlock(pos, n, [&](int32_t, const EngineEvent& ev) {
+            if (ev.slot == 0) times.push_back(ev.time);
+        });
+        pos += n;
+    }
+    return times;
+}
+
+static std::vector<int64_t> expectedSwingTriggers(double sr, double bpm, int numSteps,
+                                                  float swing, bool stepOneOnly = false) {
+    TransportState ts{};
+    ts.sampleRate     = sr;
+    ts.samplesPerBeat = sr * 60.0 / bpm;
+    ts.samplesPerStep = ts.samplesPerBeat / 4.0;
+    const double swClamped = std::clamp(static_cast<double>(swing), 0.0, 1.0);
+    const int64_t sw = static_cast<int64_t>(std::round(swClamped * ts.samplesPerStep));
+    const int64_t total =
+        static_cast<int64_t>(std::ceil(static_cast<double>(numSteps) * ts.samplesPerStep));
+    std::vector<int64_t> times;
+    for (int64_t s = 0; s < numSteps; ++s) {
+        const bool on = stepOneOnly ? ((s % 16) == 1) : true;
+        if (!on) continue;
+        const int64_t t = sampleOfStep(ts, s) + (((s & 1) == 1) ? sw : 0);
+        if (t < total) times.push_back(t);
+    }
+    return times;
+}
+
+// T-SYNC2a : mêmes timestamps exacts quelle que soit la taille de bloc.
+TEST_CASE("T-SYNC2a: swung triggers identical across block sizes", "[sync][p0]") {
+    constexpr double bpm = 120.0, sr = 44100.0;
+    constexpr int numSteps = 256;
+    const std::vector<int64_t> ref = collectSwingTriggers(sr, bpm, 512, numSteps, 0.5f);
+    REQUIRE(ref == expectedSwingTriggers(sr, bpm, numSteps, 0.5f));
+    for (int block : { 64, 128, 256, 1024, 2048 }) {
+        INFO("block=" << block);
+        REQUIRE(collectSwingTriggers(sr, bpm, block, numSteps, 0.5f) == ref);
+    }
+}
+
+// T-SYNC2b : frontières explicites — triggers swingués tombant pile sur
+// blockEnd (offset 0 du bloc suivant) ou blockEnd+1 (offset 1).
+TEST_CASE("T-SYNC2b: swung triggers landing on block edges are exact", "[sync][p0]") {
+    constexpr double bpm = 120.0, sr = 44100.0;
+    constexpr int block = 512, numSteps = 2048;
+    const std::vector<int64_t> times = collectSwingTriggers(sr, bpm, block, numSteps, 0.5f);
+    const std::vector<int64_t> expected = expectedSwingTriggers(sr, bpm, numSteps, 0.5f);
+    REQUIRE(times == expected);
+
+    bool sawEdge0 = false, sawEdge1 = false;
+    for (int64_t t : expected) {
+        const int64_t m = t % block;
+        if (m == 0) sawEdge0 = true;
+        if (m == 1) sawEdge1 = true;
+    }
+    // Le run couvre ces cas (garde : le test resterait vert sinon par vacuité).
+    REQUIRE(sawEdge0);
+    REQUIRE(sawEdge1);
+    // Chacun présent exactement une fois dans le flux émis.
+    for (int64_t t : expected) {
+        const int64_t m = t % block;
+        if (m == 0 || m == 1)
+            REQUIRE(std::count(times.begin(), times.end(), t) == 1);
+    }
+}
+
+// T-SYNC2c : longue durée — 8192 steps (512 mesures), bloc 64, compte exact,
+// unicité, ordre chronologique. Aucune perte/duplication.
+TEST_CASE("T-SYNC2c: long-run swing accounting, no loss or duplication", "[sync][p0]") {
+    constexpr double bpm = 133.7, sr = 48000.0;
+    constexpr int numSteps = 8192;
+    const std::vector<int64_t> times =
+        collectSwingTriggers(sr, bpm, 64, numSteps, 0.7f, true);
+    const std::vector<int64_t> expected =
+        expectedSwingTriggers(sr, bpm, numSteps, 0.7f, true);
+    REQUIRE(times.size() == expected.size());
+    REQUIRE(times.size() == 512);   // 8192 / 16 : un trigger par groupe
+    REQUIRE(times == expected);
+    REQUIRE(std::is_sorted(times.begin(), times.end()));
+    REQUIRE(std::adjacent_find(times.begin(), times.end()) == times.end());
+}
+
+// T-SYNC2d : clamp d'entrée — swing hors domaine rabattu sur [0,1].
+TEST_CASE("T-SYNC2d: swing input clamped to legal domain", "[sync][p0]") {
+    constexpr double bpm = 120.0, sr = 44100.0;
+    constexpr int numSteps = 128;
+    REQUIRE(collectSwingTriggers(sr, bpm, 256, numSteps, 2.0f)
+         == collectSwingTriggers(sr, bpm, 256, numSteps, 1.0f));
+    REQUIRE(collectSwingTriggers(sr, bpm, 256, numSteps, -1.0f)
+         == collectSwingTriggers(sr, bpm, 256, numSteps, 0.0f));
+}
