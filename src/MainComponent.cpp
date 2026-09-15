@@ -253,7 +253,7 @@ MainComponent::MainComponent()
             juce::MessageManager::callAsync([this, s] {
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
-                stepSeqPanel_->refreshSlotRole(s);
+                stepSeqPanel_->updateRoleStatus(s);
                 updateSpatialSlot(s);
             });
         });
@@ -271,7 +271,7 @@ MainComponent::MainComponent()
     {
         facade_.clearSlot(slot);
         stepSeqPanel_->setSlotLoaded(slot, false);
-        stepSeqPanel_->refreshSlotRole(slot);
+        stepSeqPanel_->updateRoleStatus(slot);
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
@@ -402,10 +402,13 @@ MainComponent::MainComponent()
         mixStateDirty_ = true;
     });
 
-    // Override manuel du type par slot (right-click sur l'indicateur)
+    // Choix du menu rôle unique (zone rôle à gauche, item "Rôle…" du menu
+    // LOAD, clic droit ●) — méthode moteur unique + refresh immédiat
+    // (le timer 30 Hz ne sert qu'à récupérer la fin d'analyse async).
     stepSeqPanel_->onTypeOverrideChanged = [this](int slot, int typeIndex)
     {
-        facade_.setManualTypeOverride(slot, typeIndex);
+        facade_.setSlotRoleChoice(slot, typeIndex);
+        stepSeqPanel_->updateRoleStatus(slot);
         // Re-lancer l'IA avec le nouveau type
         triggerAI();
     };
@@ -1101,7 +1104,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                 juce::MessageManager::callAsync([this, s] {
                     stepSeqPanel_->setSlotLoaded(s, true);
                     stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
-                    stepSeqPanel_->refreshSlotRole(s);
+                    stepSeqPanel_->updateRoleStatus(s);
                     updateSpatialSlot(s);
                 });
             });
@@ -1119,7 +1122,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
             stepSeqPanel_->setSlotFilePath(i, "");
             stepSeqPanel_->setSlotLoaded(i, false);
             stepSeqPanel_->setSlotWaveform(i, {});
-            stepSeqPanel_->refreshSlotRole(i);
+            stepSeqPanel_->updateRoleStatus(i);
         }
 
         for (int s = 0; s < 16; ++s)
@@ -2466,7 +2469,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // de départ pour requestTransition() lors des navigations en lecture.
     syncV2Scene(idx);
     facade_.setCurrentScene(idx);
-    stepSeqPanel_->refreshAllSlotRoles();
+    stepSeqPanel_->updateAllRoleStatus();
 
     if (!sc.used)
     {

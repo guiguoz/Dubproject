@@ -37,7 +37,25 @@ using ImportCallback = std::function<void(int slot, const AnalysisResult&)>;
 // Slot vide (pas de PCM) → { Unknown, false }.
 struct SlotRoleInfo { SlotRole role = SlotRole::Unknown; bool manual = false; };
 
-// Nom court du rôle pour l'UI (tag permanent, tooltip). Aucune allocation
+// Nom complet du rôle pour tooltip UI ("Role: Kick (auto)"). Aucune allocation.
+inline const char* slotRoleDisplayName(SlotRole role) noexcept
+{
+    switch (role)
+    {
+        case SlotRole::Kick:    return "Kick";
+        case SlotRole::Bass:    return "Bass";
+        case SlotRole::Snare:   return "Snare";
+        case SlotRole::Pad:     return "Pad";
+        case SlotRole::Melodic: return "Melodic";
+        case SlotRole::Perc:    return "Perc";
+        case SlotRole::Fx:      return "Fx";
+        case SlotRole::Loop:    return "Loop";
+        case SlotRole::Drum:    return "Drum";
+        default:                return "Unknown";
+    }
+}
+
+// Nom court du rôle pour l'UI (indicateur permanent). Aucune allocation
 // (const char*) — l'UI est le seul consommateur, jamais le thread audio.
 inline const char* slotRoleShortName(SlotRole role) noexcept
 {
@@ -187,6 +205,15 @@ public:
     void setSlotRoleManual(int slot, SlotRole role) noexcept;
     bool isSlotRoleManual(int slot) const noexcept;
 
+    // Applique un choix du menu rôle — MÉTHODE MOTEUR UNIQUE pour l'UI.
+    // typeIndex : 0-8 = entrée du menu (= MixContentType KICK..OTHER),
+    //             < 0  = Auto (retire l'override, restaure le rôle analysé).
+    // Force : override mix (comme l'ancien setManualTypeOverride) + rôle
+    //         effectif manuel (AudioGraph + flag). Auto : retire les deux
+    //         overrides et restaure le dernier rôle auto (aucune reclassification).
+    // Message thread uniquement — aucun changement sur le chemin audio.
+    void setSlotRoleChoice(int slot, int typeIndex) noexcept;
+
     // Rôle effectif d'un slot — API centrale UI (anti-logique dispersée).
     // Lecture atomique relaxed, sans lock ni allocation :
     // message thread uniquement, jamais depuis le thread audio.
@@ -324,6 +351,12 @@ private:
 
     // Rôle forcé manuellement (message thread uniquement — jamais écrasé par ONNX/nom).
     bool isRoleManual_[kMaxSlots] {};
+
+    // Dernier rôle AUTO analysé par slot (jamais écrasé par un forçage manuel) —
+    // permet à setSlotRoleChoice(Auto) de restaurer sans reclassifier.
+    // Écrit par le worker d'import, lu sur message thread (release/acquire, sans lock).
+    std::atomic<SlotRole> slotRoleAuto_[kMaxSlots];
+    std::atomic<bool>  slotRoleAutoReliable_[kMaxSlots] { false };
 
     // État de mix persistant par slot (étape 7 / M9) — message thread.
     mix::MixStateArray mixState_ {};

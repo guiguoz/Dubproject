@@ -12,6 +12,7 @@ EngineFacade::EngineFacade()
     for (int s = 0; s < kMaxSlots; ++s) {
         trackBars_[s]              = 1;
         writePatterns_[s].numSteps = 16;
+        slotRoleAuto_[s].store(SlotRole::Unknown, std::memory_order_relaxed);
     }
 }
 
@@ -329,6 +330,12 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
                                result.role != SlotRoleV2::Unknown);
         self->slotRoleReliable_[slot].store(reliable, std::memory_order_release);
         self->isRoleManual_[slot] = (restoredRole != SlotRole::Unknown) && wasManual;
+        // Mémoriser le rôle AUTO (jamais écrasé par un forçage manuel ultérieur).
+        // Rôle restauré manuel (projet) : pas de valeur auto à retenir.
+        if (!((restoredRole != SlotRole::Unknown) && wasManual)) {
+            self->slotRoleAuto_[slot].store(finalRole, std::memory_order_release);
+            self->slotRoleAutoReliable_[slot].store(reliable, std::memory_order_release);
+        }
 
         // Construction du SlotPcm (conserve la stéréo si disponible).
         // Trim optionnel (coordonnées fichier) : découpe AVANT stockage pour que
@@ -395,6 +402,8 @@ void EngineFacade::clearSlot(int slot) noexcept
     slotRoleAnalyzed_[slot].store(SlotRole::Unknown, std::memory_order_relaxed);
     slotRoleReliable_[slot].store(false, std::memory_order_release);
     isRoleManual_[slot] = false;
+    slotRoleAuto_[slot].store(SlotRole::Unknown, std::memory_order_relaxed);
+    slotRoleAutoReliable_[slot].store(false, std::memory_order_relaxed);
 }
 
 const std::string& EngineFacade::slotFilePath(int slot) const noexcept
@@ -716,6 +725,45 @@ engine::SlotRoleInfo EngineFacade::getSlotRoleInfo(int slot) const noexcept
     if (!isSlotLoaded(slot)) return {};   // slot vide → neutre, pas de rôle à afficher
     const auto idx = static_cast<std::size_t>(slot);
     return { graph_.slotRole(slot), isRoleManual_[idx] };
+}
+
+// Entrée du menu rôle (0-8) → rôle effectif. Miroir de mapRole() pour le
+// sens inverse (le menu parle ContentType, le moteur parle SlotRole).
+static SlotRole contentTypeToRole(mix::MixContentType ct) noexcept
+{
+    using MT = mix::MixContentType;
+    switch (ct) {
+        case MT::KICK:  return SlotRole::Kick;
+        case MT::SNARE: return SlotRole::Snare;
+        case MT::HIHAT: return SlotRole::Perc;
+        case MT::BASS:  return SlotRole::Bass;
+        case MT::SYNTH: return SlotRole::Melodic;
+        case MT::PAD:   return SlotRole::Pad;
+        case MT::PERC:  return SlotRole::Perc;
+        case MT::LOOP:  return SlotRole::Loop;
+        default:        return SlotRole::Fx;   // OTHER → Fx (roleToMixType(Fx)==OTHER)
+    }
+}
+
+void EngineFacade::setSlotRoleChoice(int slot, int typeIndex) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    const auto idx = static_cast<std::size_t>(slot);
+    if (typeIndex < 0 || typeIndex > 8) {
+        // Auto : retire les overrides, restaure le dernier rôle auto analysé
+        // (aucune reclassification — slotRoleAuto_ n'est jamais écrasé par manuel).
+        manualOverrideActive_[idx] = false;
+        isRoleManual_[idx] = false;
+        const SlotRole autoRole = slotRoleAuto_[idx].load(std::memory_order_acquire);
+        graph_.setSlotRole(slot, autoRole);
+        slotRoleAnalyzed_[idx].store(autoRole, std::memory_order_release);
+        slotRoleReliable_[idx].store(slotRoleAutoReliable_[idx].load(std::memory_order_acquire),
+                                     std::memory_order_release);
+        return;
+    }
+    // Force : override mix (comportement historique) + rôle effectif manuel.
+    setManualTypeOverride(slot, typeIndex);
+    setSlotRoleManual(slot, contentTypeToRole(static_cast<mix::MixContentType>(typeIndex)));
 }
 
 // ─── Métriques slot ───────────────────────────────────────────────────────────

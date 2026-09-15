@@ -115,15 +115,16 @@ public:
         // Per-track controls
         for (int t = 0; t < 9; ++t)
         {
-            // Slot label — rôle fixe de la piste
-            static constexpr const char* kRoleNames[9] = {
-                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC", "DRM"
-            };
-            slotLabels_[t].setText(kRoleNames[t], juce::dontSendNotification);
+            // Slot label — indicateur UNIQUE du rôle effectif moteur.
+            // Texte/couleurs posés par updateRoleStatus() (source : getSlotRoleInfo).
             slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(12.f).withStyle("Bold")));
-            slotLabels_[t].setColour(juce::Label::textColourId, trackColour(t));
             slotLabels_[t].setJustificationType(juce::Justification::centred);
+            slotLabels_[t].setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            slotLabels_[t].addMouseListener(this, false);  // clic → menu rôle unique
             addAndMakeVisible(slotLabels_[t]);
+            shownRoles_[t]  = engine::SlotRole::Unknown;
+            shownManual_[t] = false;
+            shownLoaded_[t] = false;
 
             // Load button (right-click → context menu)
             loadBtns_[t].setButtonText("LOAD");
@@ -159,17 +160,7 @@ public:
             sampleNameLabels_[t].setJustificationType(juce::Justification::centredLeft);
             addAndMakeVisible(sampleNameLabels_[t]);
 
-            // Badge rôle permanent (overlay bas-droite zone waveform, taille fixe —
-            // indépendant de la hauteur de ligne). Toujours visible, transparent
-            // à la souris pour ne pas casser l'interaction du slot.
-            slotRoleLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(10.f).withStyle("Bold")));
-            slotRoleLabels_[t].setJustificationType(juce::Justification::centred);
-            slotRoleLabels_[t].setInterceptsMouseClicks(false, false);
-            slotRoleLabels_[t].setAlwaysOnTop(true);
-            addAndMakeVisible(slotRoleLabels_[t]);
-            shownRoles_[t]  = engine::SlotRole::Unknown;
-            shownManual_[t] = false;
-            applySlotRoleTag(t, engine::SlotRoleInfo{});
+            updateRoleStatus(t);
 
             // Mute button (toggle)
             muteBtns_[t].setButtonText("M");
@@ -438,24 +429,24 @@ public:
                 loaded ? trackColour(slot) : SaxFXColours::textSecondary);
             if (!loaded)
                 setSlotSampleName(slot, "");
-            refreshSlotRole(slot);
+            updateRoleStatus(slot);
         }
     }
 
-    /// Rafraîchit le tag rôle permanent d'un slot (lit facade_->getSlotRoleInfo).
-    /// Appelé sur import/remplace, force/déforce de rôle, load projet, reset slot —
-    /// la fin d'analyse async est aussi captée par timerCallback().
-    void refreshSlotRole(int slot)
+    /// Met à jour l'indicateur unique de rôle (slotLabels_ à gauche) depuis
+    /// facade_->getSlotRoleInfo(). Appelé sur import/remplace, force/déforce
+    /// de rôle, load projet, reset slot — la fin d'analyse async est aussi
+    /// captée par timerCallback(). Message thread uniquement.
+    void updateRoleStatus(int slot)
     {
-        if (slot < 0 || slot >= 9) return;
-        const engine::SlotRoleInfo info =
-            facade_ ? facade_->getSlotRoleInfo(slot) : engine::SlotRoleInfo{};
-        applySlotRoleTag(slot, info);
+        if (slot < 0 || slot >= 9 || !facade_) return;
+        const bool loaded = facade_->isSlotLoaded(slot);
+        applyRoleStatus(slot, loaded, facade_->getSlotRoleInfo(slot));
     }
 
-    void refreshAllSlotRoles()
+    void updateAllRoleStatus()
     {
-        for (int t = 0; t < 9; ++t) refreshSlotRole(t);
+        for (int t = 0; t < 9; ++t) updateRoleStatus(t);
     }
 
     /// Store a pre-computed peak envelope (200 bins) for the waveform preview.
@@ -615,12 +606,6 @@ public:
             loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
             loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
             sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
-            // Badge rôle : overlay en bas à droite de la zone waveform (même rect
-            // que paintOverChildren wfArea : x=kPad+76, w=60). Taille fixe 30×12.
-            auto badge = juce::Rectangle<int>(kPad + 76, ry + 2, 60, rowH - 4)
-                             .removeFromBottom(12).removeFromRight(34).reduced(2, 0);
-            slotRoleLabels_[t].setBounds(badge);
-            slotRoleLabels_[t].toFront(false);
             editBtns_[t]        .setBounds(kPad + 138, ry + 2, 20, rowH - 4);
             muteBtns_[t]        .setBounds(kPad + 160, ry + 2, 24, rowH - 4);
             soloBtns_[t]        .setBounds(kPad + 186, ry + 2, 28, rowH - 4);
@@ -936,6 +921,16 @@ public:
             return;
         }
 
+        // Clic sur la zone rôle (gauche) → menu rôle unique.
+        for (int t = 0; t < 9; ++t)
+        {
+            if (e.eventComponent == &slotLabels_[t])
+            {
+                showRoleMenu(t, &slotLabels_[t]);
+                return;
+            }
+        }
+
         if (!e.mods.isRightButtonDown()) return;
         for (int t = 0; t < 9; ++t)
         {
@@ -1026,15 +1021,17 @@ private:
                 duckingLevel_ = duckingLevel_ * 0.85f + targetGain * 0.15f;
         }
 
-        // Tags rôle — détection de changement (couvre la fin d'analyse async,
-        // le force/déforce de rôle, le load projet et le reset slot).
+        // Indicateur rôle — détection de changement (couvre la fin d'analyse
+        // async, le force/déforce de rôle, le load projet et le reset slot).
         if (facade_)
         {
             for (int t = 0; t < 9; ++t)
             {
+                const bool loaded = facade_->isSlotLoaded(t);
                 const auto info = facade_->getSlotRoleInfo(t);
-                if (info.role != shownRoles_[t] || info.manual != shownManual_[t])
-                    applySlotRoleTag(t, info);
+                if (loaded != shownLoaded_[t] || info.role != shownRoles_[t] ||
+                    info.manual != shownManual_[t])
+                    applyRoleStatus(t, loaded, info);
             }
         }
 
@@ -1131,18 +1128,8 @@ private:
         menu.addItem(4, "Paste track", hasPasteData);
         menu.addSeparator();
 
-        // Type sub-menu (same entries as showTypeMenu, offset 100)
-        static const std::array<const char*, 9> kTypeNames {
-            "KICK", "SNR (Snare)", "HAT (Hi-hat)", "BASS",
-            "SYN (Synth)", "PAD", "PRC (Perc)", "LOOP (Drum loop)", "??? (Other)"
-        };
-        juce::PopupMenu typeSub;
-        typeSub.addSectionHeader("Forcer le type (S" + juce::String(slot + 1) + ")");
-        for (int i = 0; i < static_cast<int>(kTypeNames.size()); ++i)
-            typeSub.addItem(100 + i, kTypeNames[static_cast<std::size_t>(i)]);
-        typeSub.addSeparator();
-        typeSub.addItem(110, "Auto (annuler l'override)");
-        menu.addSubMenu("Forcer le type...", typeSub);
+        // Rôle : ouvre le menu rôle unique (mêmes entrées que showRoleMenu).
+        menu.addItem(500, "Rôle…");
 
         // Pitch offset sub-menu — IDs 200..212
         static constexpr std::array<float, 13> kSemitones {
@@ -1179,10 +1166,8 @@ private:
                 else if (result == 2) clearSlot(slot);
                 else if (result == 3 && onTrackCopyRequest)  onTrackCopyRequest(slot);
                 else if (result == 4 && onTrackPasteRequest) onTrackPasteRequest(slot);
-                else if (result >= 100 && result < 110 && onTypeOverrideChanged)
-                    onTypeOverrideChanged(slot, result - 100);
-                else if (result == 110 && onTypeOverrideChanged)
-                    onTypeOverrideChanged(slot, -1);
+                else if (result == 500)
+                    showRoleMenu(slot, &loadBtns_[slot]);
                 else if (result >= 200 && result < 213 && onPitchOffsetChanged)
                 {
                     static constexpr std::array<float, 13> kSt {
@@ -1297,26 +1282,48 @@ private:
             });
     }
 
-    void showTypeMenu(int slot)
+    // ── Menu rôle unique ────────────────────────────────────────────────────
+    // Entrées partagées (ordre = ContentType KICK=0..OTHER=8) + routeur unique.
+    // Points d'entrée : clic gauche zone rôle, item "Rôle…" du menu LOAD,
+    // clic droit ●. Le choix est appliqué via onTypeOverrideChanged
+    // (MainComponent → EngineFacade::setSlotRoleChoice : méthode moteur unique).
+    static const std::array<const char*, 9>& roleMenuNames() noexcept
     {
-        // Ordre doit correspondre à ContentType enum : KICK=0..PERC=6, LOOP=7, OTHER=8
         static const std::array<const char*, 9> kNames {
             "KICK", "SNR (Snare)", "HAT (Hi-hat)", "BASS",
             "SYN (Synth)", "PAD", "PRC (Perc)", "LOOP (Drum loop)", "??? (Other)"
         };
+        return kNames;
+    }
+
+    /// Route un résultat d'item rôle (100-108 = force, 110 = Auto).
+    void handleRoleMenuResult(int slot, int result)
+    {
+        if (result >= 100 && result < 110 && onTypeOverrideChanged)
+            onTypeOverrideChanged(slot, result - 100);
+        else if (result == 110 && onTypeOverrideChanged)
+            onTypeOverrideChanged(slot, -1);
+    }
+
+    void showRoleMenu(int slot, juce::Component* anchor)
+    {
         juce::PopupMenu menu;
-        menu.addSectionHeader("Forcer le type (slot S" + juce::String(slot + 1) + ")");
-        for (int i = 0; i < static_cast<int>(kNames.size()); ++i)
-            menu.addItem(i + 1, kNames[static_cast<std::size_t>(i)]);
+        menu.addSectionHeader("Rôle — S" + juce::String(slot + 1));
+        const auto& names = roleMenuNames();
+        for (int i = 0; i < static_cast<int>(names.size()); ++i)
+            menu.addItem(100 + i, names[static_cast<std::size_t>(i)]);
         menu.addSeparator();
-        menu.addItem(10, "Rôle fixe (annuler l'override)");
-        menu.showMenuAsync(juce::PopupMenu::Options{},
-            [this, slot](int result)
-            {
-                if (result == 0) return;
-                if (onTypeOverrideChanged)
-                    onTypeOverrideChanged(slot, result == 10 ? -1 : result - 1);
-            });
+        menu.addItem(110, "Auto (détection)");
+        auto options = juce::PopupMenu::Options{};
+        if (anchor != nullptr) options = options.withTargetComponent(anchor);
+        menu.showMenuAsync(options,
+            [this, slot](int result) { handleRoleMenuResult(slot, result); });
+    }
+
+    void showTypeMenu(int slot)
+    {
+        // Historique (clic droit ●) : même menu rôle unique.
+        showRoleMenu(slot, &loadedIndicators_[slot]);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1338,22 +1345,53 @@ private:
         return (track >= 0 && track < 9) ? track : -1;
     }
 
-    /// Applique un SlotRoleInfo au tag permanent (message thread uniquement).
-    void applySlotRoleTag(int slot, engine::SlotRoleInfo info)
+    /// Applique un état de rôle à l'indicateur unique (slotLabels_ à gauche).
+    /// Message thread uniquement.
+    void applyRoleStatus(int slot, bool loaded, engine::SlotRoleInfo info)
     {
         shownRoles_[slot]  = info.role;
         shownManual_[slot] = info.manual;
-        const char* name = engine::slotRoleShortName(info.role);
-        // Badge étroit (30 px) : code seul, sans suffixe. Manuel = ambre,
-        // le tooltip porte le détail "(manual)".
-        slotRoleLabels_[slot].setText(juce::String(name), juce::dontSendNotification);
-        slotRoleLabels_[slot].setColour(
-            juce::Label::textColourId,
-            (info.role == engine::SlotRole::Unknown) ? SaxFXColours::textSecondary
-            : info.manual ? juce::Colour(0xFFFFAA00)   // ambre = manuel
-                          : trackColour(slot));        // auto = couleur piste
-        slotRoleLabels_[slot].setTooltip(
-            juce::String("Role: ") + name + (info.manual ? " (manual)" : " (auto)"));
+        shownLoaded_[slot] = loaded;
+
+        auto& label = slotLabels_[static_cast<std::size_t>(slot)];
+        if (!loaded)
+        {
+            // Slot vide : discret, jamais UNK.
+            label.setText("--", juce::dontSendNotification);
+            label.setColour(juce::Label::textColourId, SaxFXColours::textSecondary);
+            label.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+            label.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+            label.setBorderSize(juce::BorderSize<int>(0));
+            label.setTooltip("Role: --");
+            return;
+        }
+
+        label.setText(engine::slotRoleShortName(info.role), juce::dontSendNotification);
+        if (info.role == engine::SlotRole::Unknown)
+        {
+            // Sample chargé mais rôle inclassable : fond orange/rouge sombre.
+            label.setColour(juce::Label::textColourId, juce::Colour(0xFFFFAA88));
+            label.setColour(juce::Label::backgroundColourId, juce::Colour(0xFF3A1C10));
+        }
+        else
+        {
+            // Rôle auto connu : fond teal/vert très sombre, texte couleur piste.
+            label.setColour(juce::Label::textColourId, trackColour(slot));
+            label.setColour(juce::Label::backgroundColourId, juce::Colour(0xFF0B2620));
+        }
+        if (info.manual)
+        {
+            // Rôle forcé manuellement : contour ambre.
+            label.setColour(juce::Label::outlineColourId, juce::Colour(0xFFFFAA00));
+            label.setBorderSize(juce::BorderSize<int>(1));
+        }
+        else
+        {
+            label.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+            label.setBorderSize(juce::BorderSize<int>(0));
+        }
+        label.setTooltip(juce::String("Role: ") + engine::slotRoleDisplayName(info.role) +
+                         (info.manual ? " (manual)" : " (auto)") + " — Click to change");
     }
 
     static constexpr float kMinBpm = 40.f;
@@ -1404,9 +1442,9 @@ private:
     std::array<NeonButton,       9> loadBtns_;
     std::array<juce::Label,      9> loadedIndicators_;
     std::array<juce::Label,      9> sampleNameLabels_;
-    std::array<juce::Label,      9> slotRoleLabels_;  // tag rôle permanent (sous le nom)
-    engine::SlotRole shownRoles_[9];                  // cache détection de changement
-    bool             shownManual_[9] = {};
+    engine::SlotRole shownRoles_[9];   // cache détection de changement (rôle)
+    bool             shownManual_[9] = {};  // cache (flag manuel)
+    bool             shownLoaded_[9] = {};  // cache (slot chargé ou vide)
     std::array<NeonButton,       9> editBtns_;        // opens waveform editor
     std::array<NeonButton,       9> muteBtns_;
     std::array<juce::Slider,     9> volSliders_;
