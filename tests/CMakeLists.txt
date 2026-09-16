@@ -97,6 +97,7 @@ add_executable(EngineTests
     engine/test_sync_p0.cpp
     engine/test_transition_plan.cpp
     engine/test_plan_direct.cpp
+    engine/test_transition_policy.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp
