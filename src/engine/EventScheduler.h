@@ -18,6 +18,10 @@ enum class EventType : uint8_t {
     TransposeSet = 6,
     SendRamp     = 7,
     PerfFx       = 8,
+    PcmFlip      = 9,  // COMMIT staged PCM (ENTER)
+    ModeSet      = 10, // PlayMode
+    RoleSet      = 11, // SlotRole
+    SemitoneSet  = 12, // semitones
 };
 
 struct EngineEvent {

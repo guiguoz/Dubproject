@@ -17,6 +17,7 @@
 #include "engine/Transport.h"
 #include "engine/ImportPipeline.h"
 #include "engine/SceneStore.h"
+#include "engine/SceneTransitionPlan.h"
 #include "engine/TransitionEngine.h"
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
@@ -245,6 +246,7 @@ public:
     // ── Scènes ─────────────────────────────────────────────────────────────────
     int  currentSceneIdx() const noexcept { return currentScene_.load(std::memory_order_relaxed); }
     void setCurrentScene(int idx) noexcept;
+    void setCurrentSceneIndexOnly(int idx) noexcept { currentScene_.store(idx, std::memory_order_relaxed); }
     void requestTransition(int toScene) noexcept;
     SceneData& scene(int idx) noexcept  { return sceneStore_.getScene(idx); }
 
@@ -283,6 +285,15 @@ public:
     // Sample de la frontière armée (plan_.executionSample), ou -1 si aucune
     // transition armée.
     int64_t transitionExecutionSample() const noexcept;
+
+    // ── Plan DIRECT ───────────────────────────────────────────────────────────
+    // PREPARE (message) → COMMIT (audio) → CLEANUP (message)
+    // Prépare le plan DIRECT A→B, précharge les ENTER, vérifie readiness.
+    // Retourne true si plan prêt à être armé (tous ENTER préchargés).
+    bool prepareDirectPlan(int fromIdx, int toIdx) noexcept;
+    bool hasTransitionPlan() const noexcept { return transitionPlanValid_.load(std::memory_order_acquire); }
+    const SceneTransitionPlan& transitionPlan() const noexcept { return transitionPlan_; }
+    void clearTransitionPlan() noexcept { transitionPlanValid_.store(false, std::memory_order_release); transitionPlan_.valid = false; }
 
     // Arrêter tous les slots avec mode d'arrêt spécifié.
     void stopAllSlots(StopMode mode = StopMode::Normal) noexcept;
@@ -402,6 +413,10 @@ private:
     std::atomic<int>  pendingScene_    { -1 };
     std::atomic<int>  pendingTransLen_ { 0 };
     std::atomic<bool> sceneEndFlag_    { false };
+
+    // ── Plan DIRECT (PREPARE → COMMIT) ───────────────────────────────────────
+    SceneTransitionPlan transitionPlan_ = {};
+    std::atomic<bool>   transitionPlanValid_ {false};
 
     // ── Morphing PingPongDelay (Tier 2 — Phase 4a) ────────────────────────────
     struct MorphState

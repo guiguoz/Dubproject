@@ -57,6 +57,36 @@ void SlotPlayer::armLoopSync(int slot, int loopBeats, float timeRatio,
     stretchers_[slot].reset();
 }
 
+// ─── Staging pour ENTER (PREPARE → COMMIT) ────────────────────────────────────
+void SlotPlayer::stagePcm(int slot, SlotPcm pcm, PlayMode mode) noexcept {
+    if (slot < 0 || slot >= kSlots) return;
+    const int inactive = 1 - activePcmIdx_[slot].load(std::memory_order_relaxed);
+    pcmBuffers_[inactive][slot] = std::move(pcm);
+    stagedMode_[slot] = mode;
+    stagedIdx_[slot].store(inactive, std::memory_order_release);
+    stagedReady_[slot].store(true, std::memory_order_release);
+}
+bool SlotPlayer::hasStagedPcm(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return false;
+    return stagedReady_[slot].load(std::memory_order_acquire);
+}
+void SlotPlayer::commitStagedPcm(int slot) noexcept {
+    if (slot < 0 || slot >= kSlots) return;
+    if (!stagedReady_[slot].load(std::memory_order_acquire)) return;
+    const int idx = stagedIdx_[slot].load(std::memory_order_acquire);
+    // Flip atomique — le thread audio voit le nouveau PCM dès le sample suivant
+    activePcmIdx_[slot].store(idx, std::memory_order_release);
+    params_[slot].mode.store(stagedMode_[slot], std::memory_order_relaxed);
+    resetSpatialSlot(slot);
+    // Pas de kill de voix : KEEP/MORPH ne retrigg pas, ENTER sera triggé par Sequencer
+    loaded_[slot].store(true, std::memory_order_release);
+    stagedReady_[slot].store(false, std::memory_order_release);
+}
+void SlotPlayer::clearStagedPcm(int slot) noexcept {
+    if (slot < 0 || slot >= kSlots) return;
+    stagedReady_[slot].store(false, std::memory_order_release);
+}
+
 // ─── loadSlot ────────────────────────────────────────────────────────────────
 
 void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
@@ -77,6 +107,9 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
     // ne lise pas un état intermédiaire.
     loaded_[slot].store(false, std::memory_order_release);
 
+    // Annuler tout staging en cours (load immédiat prioritaire)
+    stagedReady_[slot].store(false, std::memory_order_release);
+
     // Double-buffer : écrire dans le buffer inactif, puis flip atomique
     const int inactive = 1 - activePcmIdx_[slot].load(std::memory_order_relaxed);
     pcmBuffers_[inactive][slot] = std::move(pcm);
@@ -92,6 +125,7 @@ void SlotPlayer::loadSlot(int slot, SlotPcm pcm, PlayMode mode) noexcept {
 
 void SlotPlayer::clearSlot(int slot) noexcept {
     if (slot < 0 || slot >= kSlots) return;
+    stagedReady_[slot].store(false, std::memory_order_release);
     loaded_[slot].store(false, std::memory_order_release);
     for (int v = 0; v < 2; ++v) {
         voices_[slot][v].active.store(false, std::memory_order_relaxed);
@@ -571,6 +605,19 @@ void SlotPlayer::processBlock(const TransportState& ts,
                         }
                         break;
                     }
+                    case EventType::PcmFlip:
+                        commitStagedPcm(slot);
+                        break;
+                    case EventType::ModeSet:
+                        params_[slot].mode.store(static_cast<PlayMode>(static_cast<int>(ev.a)), std::memory_order_relaxed);
+                        break;
+                    case EventType::TransposeSet:
+                    case EventType::SemitoneSet:
+                        params_[slot].semitones.store(ev.a, std::memory_order_relaxed);
+                        break;
+                    case EventType::RoleSet:
+                        // Role is handled via AudioGraph; no-op here (handled in EngineFacade COMMIT)
+                        break;
                     default:
                         break;
                 }

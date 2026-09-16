@@ -119,6 +119,23 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
         sceneEndFlag_.store(true, std::memory_order_release);
         pendingTransLen_.store(0, std::memory_order_release);
     }
+
+    // ── Morph dub audio-safe (DIRECT) ────────────────────────────────────────
+    // Progression basée uniquement sur la timeline sample, jamais sur timer.
+    // Chaque bloc interpole les 4 params du delay. Serum reste hors garantie.
+    if (transitionPlanValid_.load(std::memory_order_acquire) && transitionPlan_.morphActive) {
+        const int64_t elapsed = ts.blockStart - transitionPlan_.morphStart;
+        float progress = 0.f;
+        if (elapsed >= transitionPlan_.morphDur) progress = 1.f;
+        else if (elapsed > 0) progress = static_cast<float>(elapsed) / static_cast<float>(transitionPlan_.morphDur);
+        auto lerp = [](float a, float b, float t){ return a + (b - a) * t; };
+        auto& d = graph_.delay();
+        d.setFeedback(lerp(transitionPlan_.morphFrom[0], transitionPlan_.morphTo[0], progress));
+        d.setWet(lerp(transitionPlan_.morphFrom[1], transitionPlan_.morphTo[1], progress));
+        d.setTone(lerp(transitionPlan_.morphFrom[2], transitionPlan_.morphTo[2], progress));
+        d.setDrive(lerp(transitionPlan_.morphFrom[3], transitionPlan_.morphTo[3], progress));
+    }
+
     graph_.sequencer().generateEvents(ts, blockStart, numSamples,
                                       swingFactor_.load(std::memory_order_relaxed), scheduler_);
 
@@ -887,6 +904,104 @@ void EngineFacade::requestTransition(int toScene) noexcept
     if (toScene < 0 || toScene >= kMaxScenes) return;
     transition_.requestTransition(currentScene_, toScene,
                                    sceneStore_, transport_.snapshot());
+}
+
+bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
+{
+    if (fromIdx < 0 || fromIdx >= kMaxScenes || toIdx < 0 || toIdx >= kMaxScenes) return false;
+    if (fromIdx == toIdx) return false;
+    if (transition_.state() != TransitionEngine::State::Idle) return false;
+    const SceneData& from = sceneStore_.getScene(fromIdx);
+    const SceneData& to   = sceneStore_.getScene(toIdx);
+    const int64_t boundary = nextBoundary(transport_.snapshot(), 16);
+    SceneTransitionPlan plan;
+    buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
+    if (!plan.valid) return false;
+
+    // Readiness gate : tous les ENTER doivent être préchargés
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (plan.slots[s].action != SlotPlanAction::Enter) continue;
+        if (graph_.slotPlayer().hasStagedPcm(s)) continue;
+        const SlotConfig& cfg = to.slots[s];
+        const AssetId targetAsset = assetIdForSlot(cfg);
+        if (targetAsset == 0) return false; // fichier manquant → pas d'ARM
+        // Déjà chargé avec bon asset ?
+        const AssetId curAsset = assetIdFor(slotPath_[s], slotTrimStart_[s], slotTrimEnd_[s]);
+        if (curAsset == targetAsset && slotLoaded_[s].load(std::memory_order_acquire)) continue;
+        // Essayer précharge synchrone depuis fichier
+        // Si fichier n'existe pas ou lecture échoue → pas d'ARM (pas de demi-scène)
+        juce::AudioFormatManager fmtMgr;
+        fmtMgr.registerBasicFormats();
+        const auto file = juce::File(juce::String(cfg.filePath));
+        if (!file.existsAsFile()) return false;
+        std::unique_ptr<juce::AudioFormatReader> reader(fmtMgr.createReaderFor(file));
+        if (!reader || reader->lengthInSamples <= 0 || reader->numChannels <= 0) return false;
+        const int numFrames = static_cast<int>(reader->lengthInSamples);
+        const int numCh = static_cast<int>(reader->numChannels);
+        const float sr = static_cast<float>(reader->sampleRate);
+        juce::AudioBuffer<float> buf(numCh, numFrames);
+        if (!reader->read(&buf, 0, numFrames, 0, true, numCh > 1)) return false;
+        // Trim
+        int start = std::clamp(cfg.trimStart, 0, numFrames);
+        int end = (cfg.trimEnd > 0) ? std::clamp(cfg.trimEnd, 0, numFrames) : numFrames;
+        if (end <= start) end = start + 1;
+        const int trimFrames = end - start;
+        SlotPcm pcm;
+        pcm.numChannels = std::min(numCh, 2);
+        pcm.numFrames = trimFrames;
+        pcm.sampleRate = sr;
+        pcm.data.reserve(static_cast<size_t>(trimFrames * pcm.numChannels));
+        if (pcm.numChannels == 1) {
+            const float* ch0 = buf.getReadPointer(0);
+            pcm.data.assign(ch0 + start, ch0 + end);
+        } else {
+            pcm.data.resize(static_cast<size_t>(trimFrames * 2));
+            const float* ch0 = buf.getReadPointer(0);
+            const float* ch1 = buf.getReadPointer(1);
+            for (int i = 0; i < trimFrames; ++i) {
+                pcm.data[static_cast<size_t>(i*2)] = ch0[start + i];
+                pcm.data[static_cast<size_t>(i*2+1)] = ch1[start + i];
+            }
+        }
+        graph_.slotPlayer().stagePcm(s, std::move(pcm), cfg.mode);
+        // Vérifier que le staging a réussi
+        if (!graph_.slotPlayer().hasStagedPcm(s)) return false;
+    }
+
+    // Stocker le plan et armer la transition
+    transitionPlan_ = plan;
+    transitionPlanValid_.store(true, std::memory_order_release);
+    transition_.armWithPlan(plan);
+
+    // Stage pattern B à la même frontière (sample-accurate, même sample que GainRamps)
+    {
+        StepBuf nextBuf;
+        for (int i = 0; i < kMaxSlots; ++i) {
+            const auto& tr = to.trackBarCounts[static_cast<size_t>(i)];
+            const int nSteps = tr * 16;
+            nextBuf.trackStepCount[i] = nSteps;
+            for (int s = 0; s < kMaxSteps; ++s)
+                nextBuf.steps[i][s] = to.steps[static_cast<size_t>(i)][static_cast<size_t>(s)];
+        }
+        stageStepBufferForBoundary(nextBuf, boundary);
+    }
+
+    // Mettre à jour slotPath_/trim pour les slots stagés (évite re-import dans applyScene)
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (plan.slots[s].action == SlotPlanAction::Enter) {
+            slotPath_[s] = to.slots[s].filePath;
+            slotTrimStart_[s] = to.slots[s].trimStart;
+            slotTrimEnd_[s] = to.slots[s].trimEnd;
+        }
+    }
+
+    // Figer longueur pour détection fin de cycle (comme avant)
+    int sceneLen = 1;
+    for (int i = 0; i < kMaxSlots; ++i) sceneLen = std::max(sceneLen, getTrackStepCount(i));
+    setPendingTransitionLen(sceneLen);
+    setPendingScene(toIdx);
+
+    return true;
 }
 
 void EngineFacade::applySceneInternal(int idx) noexcept

@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include "engine/SceneStore.h"
+#include "engine/SceneTransitionPlan.h"
 #include "engine/Transport.h"
 #include "engine/EventScheduler.h"
 
@@ -65,8 +66,14 @@ public:
     void processBlock(const TransportState& ts,
                       EventScheduler& scheduler) noexcept;
 
-    State               state() const noexcept { return state_; }
+    State               state() const noexcept { return state_.load(std::memory_order_acquire); }
     const TransitionPlan& plan() const noexcept { return plan_; }
+    const SceneTransitionPlan& directPlan() const noexcept { return directPlan_; }
+    bool hasDirectPlan() const noexcept { return hasDirectPlan_; }
+
+    // Arme une transition DIRECT à partir d'un plan pré-construit (PREPARE → COMMIT).
+    // Le plan doit être valide et préchargé (readiness gate déjà vérifié).
+    void armWithPlan(const SceneTransitionPlan& plan) noexcept;
 
     // Densité d'une scène : fraction de slots actifs [0, 1].
     static float sceneDensity(const SceneData& scene) noexcept;
@@ -76,10 +83,12 @@ public:
                                      const SceneData& to) noexcept;
 
 private:
-    // Atomique : écrit par requestTransition (message) et processBlock (audio),
+    // Atomique : écrit par requestTransition/armWithPlan (message) et processBlock (audio),
     // lu par les deux (dont transitionExecutionSample sur message thread).
     std::atomic<State> state_ = State::Idle;
     TransitionPlan plan_;
+    SceneTransitionPlan directPlan_ = {};
+    bool hasDirectPlan_ = false;
     int            settleBlocksLeft_ = 0;
 
     // Seuil densité : en-dessous → « calme », au-dessus → « musical »
@@ -94,6 +103,7 @@ private:
 
     // Compile le plan en EngineEvents et les pousse dans le scheduler.
     void compilePlan(EventScheduler& scheduler, int64_t boundary) noexcept;
+    void compileDirectPlan(EventScheduler& scheduler) noexcept;
 
     // Calcule le diff slot à slot entre A et B.
     static SlotAction diffSlot(const SlotConfig& a, const SlotConfig& b) noexcept;

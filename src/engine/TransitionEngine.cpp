@@ -53,7 +53,7 @@ void TransitionEngine::requestTransition(int fromScene, int toScene,
                                           const SceneStore& store,
                                           const TransportState& ts) noexcept {
     // Ignorer si déjà en cours
-    if (state_ != State::Idle) return;
+    if (state_.load(std::memory_order_acquire) != State::Idle) return;
 
     const SceneData& from = store.getScene(fromScene);
     const SceneData& to   = store.getScene(toScene);
@@ -70,10 +70,54 @@ void TransitionEngine::requestTransition(int fromScene, int toScene,
     // Frontière d'exécution : prochaine frontière de 16 steps
     plan_.executionSample = nextBoundary(ts, 16);
 
-    state_ = State::Armed;
+    hasDirectPlan_ = false;
+    state_.store(State::Armed, std::memory_order_release);
+}
+
+void TransitionEngine::armWithPlan(const SceneTransitionPlan& plan) noexcept {
+    if (state_.load(std::memory_order_acquire) != State::Idle) return;
+    if (!plan.valid) return;
+    directPlan_ = plan;
+    hasDirectPlan_ = true;
+    // Remplir aussi le plan legacy pour compatibilité (type, from/to, boundary)
+    plan_.fromScene = plan.fromScene;
+    plan_.toScene = plan.toScene;
+    plan_.type = TransitionType::Smooth;
+    plan_.executionSample = plan.boundary;
+    plan_.valid = true;
+    for (int i = 0; i < kMaxSlots; ++i) {
+        switch (plan.slots[i].action) {
+            case SlotPlanAction::Keep:  plan_.slotActions[i] = SlotAction::Keep; break;
+            case SlotPlanAction::Morph: plan_.slotActions[i] = SlotAction::Keep; break; // Morph est Keep côté ancien plan (pas de retrigger)
+            case SlotPlanAction::Leave: plan_.slotActions[i] = SlotAction::Exit; break;
+            case SlotPlanAction::Enter: plan_.slotActions[i] = SlotAction::Enter; break;
+        }
+    }
+    state_.store(State::Armed, std::memory_order_release);
 }
 
 // ─── compilePlan ─────────────────────────────────────────────────────────────
+
+void TransitionEngine::compileDirectPlan(EventScheduler& scheduler) noexcept {
+    if (!hasDirectPlan_ || !directPlan_.valid) return;
+    for (int i = 0; i < directPlan_.numEvents; ++i) {
+        const PlanEvent& pe = directPlan_.events[i];
+        EngineEvent ev{};
+        ev.time = pe.atSample;
+        ev.slot = pe.slot;
+        switch (pe.type) {
+            case PlanEventType::GainRamp: ev.type = EventType::GainRamp; ev.a = pe.a; ev.b = pe.b; break;
+            case PlanEventType::PcmFlip:  ev.type = EventType::PcmFlip;  ev.a = pe.a; ev.b = pe.b; break;
+            case PlanEventType::Release:  ev.type = EventType::Release;  ev.a = pe.a; ev.b = pe.b; break;
+            case PlanEventType::ModeSet:  ev.type = EventType::ModeSet;  ev.a = pe.a; ev.b = pe.b; break;
+            case PlanEventType::RoleSet:  ev.type = EventType::RoleSet;  ev.a = pe.a; ev.b = pe.b; break;
+            case PlanEventType::MuteSet:  ev.type = (pe.a > 0.5f) ? EventType::Mute : EventType::Unmute; break;
+            case PlanEventType::SemitoneSet: ev.type = EventType::TransposeSet; ev.a = pe.a; break;
+            default: continue;
+        }
+        scheduler.push(ev);
+    }
+}
 
 void TransitionEngine::compilePlan(EventScheduler& scheduler,
                                     int64_t boundary) noexcept {
@@ -182,16 +226,21 @@ void TransitionEngine::compilePlan(EventScheduler& scheduler,
 
 void TransitionEngine::processBlock(const TransportState& ts,
                                      EventScheduler& scheduler) noexcept {
-    switch (state_) {
+    State st = state_.load(std::memory_order_acquire);
+    switch (st) {
     case State::Idle:
     case State::Preparing:
         break;
 
     case State::Armed:
         if (ts.samplePos >= plan_.executionSample) {
-            compilePlan(scheduler, plan_.executionSample);
+            if (hasDirectPlan_ && directPlan_.valid) {
+                compileDirectPlan(scheduler);
+            } else {
+                compilePlan(scheduler, plan_.executionSample);
+            }
             settleBlocksLeft_ = kSettleBlocks;
-            state_ = State::Executing;
+            state_.store(State::Executing, std::memory_order_release);
         }
         break;
 
@@ -199,12 +248,13 @@ void TransitionEngine::processBlock(const TransportState& ts,
         if (settleBlocksLeft_ > 0) {
             --settleBlocksLeft_;
         } else {
-            state_ = State::Settling;
+            state_.store(State::Settling, std::memory_order_release);
         }
         break;
 
     case State::Settling:
-        state_ = State::Idle;
+        state_.store(State::Idle, std::memory_order_release);
+        hasDirectPlan_ = false;
         break;
     }
 }

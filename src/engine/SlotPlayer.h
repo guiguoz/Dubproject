@@ -56,6 +56,15 @@ public:
     // Charge le PCM dans le slot (message thread uniquement).
     void loadSlot(int slot, SlotPcm pcm, PlayMode mode = PlayMode::Free) noexcept;
 
+    // Précharge le PCM pour un ENTER (message thread) : écrit dans le buffer
+    // inactif sans flip ni kill de voix. Le flip est effectué à COMMIT audio
+    // via commitStagedPcm(). Aucune allocation en audio.
+    void stagePcm(int slot, SlotPcm pcm, PlayMode mode) noexcept;
+    bool hasStagedPcm(int slot) const noexcept;
+    // COMMIT audio : flip atomique du buffer stagé. Sample-accurate.
+    void commitStagedPcm(int slot) noexcept;
+    void clearStagedPcm(int slot) noexcept;
+
     // Efface le slot (arrêt immédiat des voix).
     void clearSlot(int slot) noexcept;
 
@@ -186,6 +195,10 @@ private:
     Voice           voices_[kSlots][2];
     SlotParams      params_[kSlots];
     StretchConform  stretchers_[kSlots];
+    // Staging pour ENTER (PREPARE → COMMIT)
+    std::atomic<bool> stagedReady_[kSlots] = {};
+    std::atomic<int>  stagedIdx_[kSlots] = {};
+    PlayMode          stagedMode_[kSlots] = {};
 
     // Indique si le slot a un PCM chargé (écrit message thread, lu audio thread).
     std::atomic<bool> loaded_[kSlots] {};

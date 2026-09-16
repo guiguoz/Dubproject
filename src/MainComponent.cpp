@@ -2095,12 +2095,17 @@ void MainComponent::timerCallback()
         const int target = facade_.consumePendingScene();
         if (target >= 0)
         {
-            // NE PAS appeler captureCurrentScene() ici : le step buffer est déjà flippé
-            // vers la nouvelle scène par l'audio thread. La capture correcte a été faite
-            // dans navigateScene() avant prepareStepBuffer().
+            const bool isDirect = facade_.hasTransitionPlan() && facade_.transitionPlan().valid;
             const int oldIdx = facade_.currentSceneIdx();
-            facade_.setCurrentScene(target);
-            applyScene(target, oldIdx);
+            if (isDirect) {
+                // DIRECT : index seul, applyScene fera early-return (pas de PCM/gain)
+                facade_.setCurrentSceneIndexOnly(target);
+                applyScene(target, oldIdx);
+                facade_.clearTransitionPlan();
+            } else {
+                facade_.setCurrentScene(target);
+                applyScene(target, oldIdx);
+            }
             updateSceneLabel();
         }
     }
@@ -2465,6 +2470,18 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     const auto& sc = sceneStore_.getScene(idx);
 
+    // DIRECT : audio déjà commité à T via plan (gains/modes/PCM/pattern). Le timer
+    // ne refait aucune mutation audible — juste index + UI.
+    const bool isDirectCommit = facade_.hasTransitionPlan() && facade_.transitionPlan().valid && fromIdx != -1;
+    if (isDirectCommit) {
+        facade_.setCurrentSceneIndexOnly(idx);
+        stepSeqPanel_->updateAllRoleStatus();
+        // Pas de re-chargement PCM ni de setGain/mode qui écraserait les rampes.
+        // Le pattern est déjà stagé, les gains sont en ramp, le PCM est flippé.
+        // On ne fait que l'UI minimale et on sort — CLEANUP (clear plan) en timer.
+        return;
+    }
+
     // Config V2 : sync sceneStore_ → EngineFacade SceneStore puis application au graphe
     // (gains, modes, semitones, rôles). setCurrentScene sert aussi de point
     // de départ pour requestTransition() lors des navigations en lecture.
@@ -2725,45 +2742,25 @@ void MainComponent::navigateScene(int delta)
         return;
     }
 
-    // Séquenceur en lecture : on met la cible en attente.
+    // Séquenceur en lecture : PREPARE → COMMIT (DIRECT)
     // Capturer la scène courante MAINTENANT, pendant que activeBuf_ contient encore
-    // l'ancien step buffer. Après prepareStepBuffer()/flipIfPrepared(), getStep()
-    // retournera les données de la nouvelle scène, corrompant la capture.
+    // l'ancien step buffer.
     captureCurrentScene();
 
-    // Moteur V2 : armer la transition vers la cible. Le diff est calculé depuis
-    // la scène courante du moteur (mise à jour par applyScene / setCurrentScene).
-    facade_.requestTransition(target);
-
-    // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
-    // pour que la détection de fin de cycle soit stable dans le thread audio.
-    int sceneLen = 1;
-    for (int i = 0; i < 9; ++i)
-        sceneLen = std::max(sceneLen, facade_.getTrackStepCount(i));
-    facade_.setPendingTransitionLen(sceneLen);
-
-    // Flip quantisé à la frontière (P0 sync) : le buffer est stagé, l'audio
-    // thread bascule exactement à executionSample — jamais au clic, jamais
-    // au timer. Repli : publication immédiate (comportement historique).
-    {
-        const auto& nextSc = sceneStore_.getScene(target);
-        engine::StepBuf nextBuf;
-        for (int i = 0; i < 9; ++i)
-        {
-            const std::size_t sidx     = static_cast<std::size_t>(i);
-            const int         numSteps = nextSc.trackBarCounts[sidx] * 16;
-            nextBuf.trackStepCount[i]  = numSteps;
-            for (int s = 0; s < engine::kMaxSteps; ++s)
-                nextBuf.steps[i][s] = nextSc.steps[sidx][static_cast<std::size_t>(s)];
-        }
-        const int64_t boundary = facade_.transitionExecutionSample();
-        if (boundary >= 0)
-            facade_.stageStepBufferForBoundary(nextBuf, boundary);
-        else
-            facade_.prepareStepBuffer(nextBuf);
+    // DIRECT : PREPARE complet (diff par AssetId, précharge ENTER, readiness gate).
+    // Si tous les ENTER sont prêts, le plan est armé et le pattern est stagé à la
+    // même frontière que les GainRamps/PcmFlips — COMMIT audio sample-accurate.
+    // Si un ENTER manque (fichier absent/échec preload) → pas d'ARM, A continue
+    // sans aucune mutation audible (pas de demi-scène).
+    if (facade_.prepareDirectPlan(facade_.currentSceneIdx(), target)) {
+        // Plan armé — le COMMIT audio fera tout (gains, modes, PcmFlip, pattern)
+        // au même sample T. Le timer ne fera que CLEANUP/UI (voir timerCallback).
+    } else {
+        // Échec readiness (sample manquant) → transition non armée, on reste sur A.
+        // Pas de fallback partiel : on signale et on sort.
+        juce::Logger::writeToLog("prepareDirectPlan: scene " + juce::String(target) + " not ready — transition aborted");
+        return;
     }
-
-    facade_.setPendingScene(target);
     sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
