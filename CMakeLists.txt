@@ -110,6 +110,7 @@ target_sources(SaxFXLive PRIVATE
     src/engine/Analysis/FeatureExtractor.cpp
     src/engine/ImportPipeline.cpp
     src/engine/SceneTransitionPlan.cpp
+    src/engine/TransitionPolicy.cpp
     src/engine/TransitionEngine.cpp
     src/engine/AutoMixDub.cpp
     src/engine/AudioGraph.cpp
