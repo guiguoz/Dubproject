@@ -13,6 +13,7 @@ int64_t TransitionPolicy::samplesPerStep(const PolicyContext& ctx) noexcept {
 }
 
 PolicyType TransitionPolicy::choose(const SceneTransitionPlan& plan) noexcept {
+    if (forceDirect_) return PolicyType::Direct;
     if (!plan.valid) return PolicyType::Direct;
     // Audit continuité : forte variation sans socle commun → fallback DIRECT
     // Métrique V1 : (KEEP+MORPH) avec asset non vide < 2 → pas assez de socle (ex. 2→6 sans overlap)

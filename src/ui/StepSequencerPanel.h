@@ -115,9 +115,18 @@ public:
         // Per-track controls
         for (int t = 0; t < 9; ++t)
         {
-            // Slot label — indicateur UNIQUE du rôle effectif moteur.
-            // Texte/couleurs posés par updateRoleStatus() (source : getSlotRoleInfo).
-            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(12.f).withStyle("Bold")));
+            // Repère fixe de piste (historique, toujours visible)
+            static constexpr const char* kFixedNames[9] = {
+                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC", "DRM"
+            };
+            fixedLabels_[t].setText(kFixedNames[t], juce::dontSendNotification);
+            fixedLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
+            fixedLabels_[t].setColour(juce::Label::textColourId, juce::Colour(0xFF888888));
+            fixedLabels_[t].setJustificationType(juce::Justification::centred);
+            addAndMakeVisible(fixedLabels_[t]);
+
+            // Rôle effectif (contrôle cliquable Auto/Manual, source getSlotRoleInfo)
+            slotLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
             slotLabels_[t].setJustificationType(juce::Justification::centred);
             slotLabels_[t].setMouseCursor(juce::MouseCursor::PointingHandCursor);
             slotLabels_[t].addMouseListener(this, false);  // clic → menu rôle unique
@@ -602,7 +611,8 @@ public:
             const int ry     = rowAreaY + t * rowH;
             const int nSteps = trackStepCounts_[t];
 
-            slotLabels_[t]      .setBounds(kPad,           ry,      38, rowH);
+            fixedLabels_[t]     .setBounds(kPad,           ry,      38, rowH/2);
+            slotLabels_[t]      .setBounds(kPad,           ry+rowH/2, 38, rowH - rowH/2);
             loadBtns_[t]        .setBounds(kPad + 40,      ry + 2,  36, rowH - 4);
             loadedIndicators_[t].setBounds(kPad + 78,      ry,      12, rowH);
             sampleNameLabels_[t].setBounds(kPad + 92,  ry + 2, 44, rowH - 4);
@@ -1455,7 +1465,8 @@ private:
     juce::TextButton magicBtn_;
     float            currentBpm_ = 120.f;
 
-    std::array<juce::Label,      9> slotLabels_;
+    std::array<juce::Label,      9> fixedLabels_; // repère fixe historique
+    std::array<juce::Label,      9> slotLabels_; // rôle effectif (Auto/Manual)
     std::array<NeonButton,       9> loadBtns_;
     std::array<juce::Label,      9> loadedIndicators_;
     std::array<juce::Label,      9> sampleNameLabels_;

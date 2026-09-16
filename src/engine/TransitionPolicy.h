@@ -18,9 +18,13 @@ struct PolicyContext {
 
 class TransitionPolicy {
 public:
+    // Pour diagnostic : forcer DIRECT (élimine BUILD/BREAKDOWN du test)
+    static void setForceDirect(bool v) noexcept { forceDirect_ = v; }
+    static bool isForceDirect() noexcept { return forceDirect_; }
+
     // Choix déterministe basé sur ENTER/LEAVE nets (pas sur nombre brut de slots).
     // KEEP est sacré et ne compte pas. Replace (même slot asset différent) compte
-    // comme 1 LEAVE + 1 ENTER (churn équilibré → DIRECT).
+    // comme 1 Leave + 1 Enter (churn équilibré → DIRECT).
     static PolicyType choose(const SceneTransitionPlan& plan) noexcept;
 
     // Applique la policy au plan en ajustant uniquement les atSample des
@@ -33,6 +37,9 @@ public:
     // Helpers publics pour tests
     static int64_t samplesPerStep(const PolicyContext& ctx) noexcept;
     static int64_t samplesPerBeat(const PolicyContext& ctx) noexcept;
+
+private:
+    static inline bool forceDirect_ = false;
 };
 
 } // namespace engine
