@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "engine/EngineFacade.h"
+#include "engine/TransitionPolicy.h"
 #include <thread>
 #include <algorithm>
 #include <cmath>
@@ -906,6 +907,16 @@ void EngineFacade::requestTransition(int toScene) noexcept
                                    sceneStore_, transport_.snapshot());
 }
 
+// DETTE PREPARE synchrone — documentée, non migrée ce milestone :
+// prepareDirectPlan fait actuellement du file I/O JUCE synchrone sur le
+// message thread (AudioFormatManager::createReaderFor + read). Sur des
+// ENTER nombreux/volumineux, cela peut freezer l'UI quelques dizaines de ms.
+// L'architecture future doit être PREPARING(worker)→READY→ARMED : le worker
+// décode/stage en arrière-plan, READY est posé quand tous les ENTER sont
+// préchargés, ARM n'est autorisé que depuis READY. Tant qu'aucun freeze
+// n'est constaté en usage réel (scènes 2→6→2, fichiers < 30s), on garde le
+// synchrone pour sa simplicité et sa déterminisme de test. Ne migrer que sur
+// freeze avéré (mesure > 50 ms sur message thread).
 bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
 {
     if (fromIdx < 0 || fromIdx >= kMaxScenes || toIdx < 0 || toIdx >= kMaxScenes) return false;
@@ -913,10 +924,43 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     if (transition_.state() != TransitionEngine::State::Idle) return false;
     const SceneData& from = sceneStore_.getScene(fromIdx);
     const SceneData& to   = sceneStore_.getScene(toIdx);
-    const int64_t boundary = nextBoundary(transport_.snapshot(), 16);
+    int64_t boundary = nextBoundary(transport_.snapshot(), 16);
     SceneTransitionPlan plan;
     buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
     if (!plan.valid) return false;
+
+    // Policy pure : ajuste les atSample (BUILD/BREAKDOWN) sans toucher au DSP
+    {
+        PolicyContext pctx{ sampleRate_, transport_.snapshot().bpm, 4, 4, boundary };
+        // Pour BREAKDOWN, vérifier que T-measure est dans le futur, sinon décaler T d'une mesure
+        PolicyType ptype = TransitionPolicy::choose(plan);
+        if (ptype == PolicyType::Breakdown) {
+            const int64_t measure = TransitionPolicy::samplesPerBeat(pctx) * 4;
+            int64_t earliest = transport_.snapshot().samplePos;
+            // Si le premier LEAVE (T-measure) est déjà passé, décaler d'une mesure
+            if (boundary - measure < earliest) {
+                boundary = nextBoundary(transport_.snapshot(), 32); // next next bar
+                // Si encore trop tôt (rare), boucler
+                while (boundary - measure < earliest) boundary += measure;
+                buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
+                if (!plan.valid) return false;
+                pctx.boundary = boundary;
+            }
+        }
+        TransitionPolicy::apply(plan, pctx);
+    }
+
+    // Gate d'activation ENTER : avant PcmFlip, les triggers B pour ce slot sont ignorés
+    // (évite double trigger / pré-écho entre T et activation). KEEP/MORPH/LEAVE restent actifs.
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (plan.slots[s].action == SlotPlanAction::Enter) {
+            int64_t activateAt = plan.boundary;
+            for (int i = 0; i < plan.numEvents; ++i) if (plan.events[i].slot == s && plan.events[i].type == PlanEventType::PcmFlip) { activateAt = plan.events[i].atSample; break; }
+            graph_.sequencer().setSlotActiveAt(s, activateAt);
+        } else {
+            graph_.sequencer().clearSlotActiveAt(s);
+        }
+    }
 
     // Readiness gate : tous les ENTER doivent être préchargés
     for (int s = 0; s < kMaxSlots; ++s) {

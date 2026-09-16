@@ -163,6 +163,8 @@ public:
                 const int32_t stepInPattern =
                     static_cast<int32_t>(step % static_cast<int64_t>(pat->numSteps));
                 if (!pat->steps[stepInPattern]) continue;
+                // Gate ENTER : avant PcmFlip, ignorer les triggers de B
+                if (triggerSample < slotActiveAt_[slot].load(std::memory_order_acquire)) continue;
 
                 EngineEvent ev{};
                 ev.time = triggerSample;
@@ -177,6 +179,18 @@ public:
 
     PatternBuffer&       patterns()       noexcept { return patterns_; }
     const PatternBuffer& patterns() const noexcept { return patterns_; }
+
+    // Activation gate pour ENTER : avant PcmFlip(atSample), les triggers du
+    // pattern B pour ce slot sont ignorés (évite double trigger / pré-écho).
+    // 0 = actif immédiatement (KEEP/MORPH/LEAVE). ENTER = PcmFlip time.
+    void setSlotActiveAt(int slot, int64_t atSample) noexcept {
+        if (slot < 0 || slot >= kMaxSlots) return;
+        slotActiveAt_[slot].store(atSample, std::memory_order_release);
+    }
+    void clearSlotActiveAt(int slot) noexcept {
+        if (slot < 0 || slot >= kMaxSlots) return;
+        slotActiveAt_[slot].store(0, std::memory_order_release);
+    }
 
 private:
     // Publie le pattern stagé (audio thread, à la frontière).
@@ -194,6 +208,9 @@ private:
     TrackPattern staged_[kMaxSlots] = {};
     std::atomic<int64_t> stagedBoundary_ { 0 };
     std::atomic<bool>    stagedActive_   { false };
+
+    // Gate d'activation par slot (voir ci-dessus)
+    std::atomic<int64_t> slotActiveAt_[kMaxSlots] = {};
 };
 
 } // namespace engine
