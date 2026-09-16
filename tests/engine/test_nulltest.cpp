@@ -224,10 +224,12 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // mid-bloc) + tous les retriggers OneShot/Free (attaques désormais exactes
     // au sample, sans pré-écho jusqu'à un bloc).
     // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
-    //   hashAudio = 0xf89675cd5785446c
-    //   hashRms   = 0x36d0d2ee976ff299
-    CHECK(hashAudio == 0xf89675cd5785446cull);
-    CHECK(hashRms   == 0x36d0d2ee976ff299ull);
+    // v24 : EQ OTHER neutre (HP 30Hz seulement) — slot MST/LOOP classifiés OTHER
+    //       ne subissent plus HP 60Hz + highShelf -3dB → léger gain dans le mix.
+    //   hashAudio = 0x86f0ab033b5a6fe0
+    //   hashRms   = 0x79918a409b0f2794
+    CHECK(hashAudio == 0x86f0ab033b5a6fe0ull);
+    CHECK(hashRms   == 0x79918a409b0f2794ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

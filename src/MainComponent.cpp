@@ -2477,25 +2477,6 @@ void MainComponent::applyScene(int idx, int fromIdx)
     const bool isDirectCommit = facade_.hasTransitionPlan() && facade_.transitionPlan().valid && fromIdx != -1;
     if (isDirectCommit) {
         facade_.setCurrentSceneIndexOnly(idx);
-        // UI : refléter la définition de la scène sélectionnée (pas le runtime)
-        for (int i = 0; i < 9; ++i) {
-            const std::string& defPath = sc.slots[i].filePath;
-            stepSeqPanel_->setSlotFilePath(i, defPath);
-            // Waveform depuis la définition, pas depuis le snapshot runtime
-            // (si le slot a un fichier, on garde la waveform déjà affichée,
-            // sinon on efface)
-            if (defPath.empty()) {
-                stepSeqPanel_->setSlotWaveform(i, {});
-                stepSeqPanel_->setSlotLoaded(i, false);
-            } else {
-                // Conserver la waveform existante (déjà chargée) ou laisser vide si pas encore
-                // Ne pas déclencher de nouvel import audio ici
-            }
-            stepSeqPanel_->setSlotMuted(i, sc.slots[i].muted);
-            // Steps : refléter la définition, pas le runtime
-            for (int s = 0; s < sc.trackBarCounts[i] * 16 && s < 512; ++s)
-                stepSeqPanel_->setStepState(i, s, sc.steps[i][static_cast<size_t>(s)]);
-        }
         stepSeqPanel_->updateAllRoleStatus();
         return;
     }
@@ -2737,6 +2718,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
         spatialViz_.setSaxActive(true);
     }
 }
+
 
 void MainComponent::navigateScene(int delta)
 {
