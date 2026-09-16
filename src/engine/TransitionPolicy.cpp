@@ -14,6 +14,13 @@ int64_t TransitionPolicy::samplesPerStep(const PolicyContext& ctx) noexcept {
 
 PolicyType TransitionPolicy::choose(const SceneTransitionPlan& plan) noexcept {
     if (!plan.valid) return PolicyType::Direct;
+    // Audit continuité : forte variation sans socle commun → fallback DIRECT
+    // Métrique V1 : (KEEP+MORPH) avec asset non vide < 2 → pas assez de socle (ex. 2→6 sans overlap)
+    {
+        int keepMorph = 0;
+        for (int s = 0; s < kMaxSlots; ++s) if ((plan.slots[s].action == SlotPlanAction::Keep || plan.slots[s].action == SlotPlanAction::Morph) && plan.slots[s].asset != 0) keepMorph++;
+        if (keepMorph < 2) return PolicyType::Direct;
+    }
     int enters = 0, leaves = 0;
     for (int s = 0; s < kMaxSlots; ++s) {
         const auto a = plan.slots[s].action;

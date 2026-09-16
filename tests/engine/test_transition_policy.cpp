@@ -72,6 +72,43 @@ TEST_CASE("Policy: BREAKDOWN 6->2 distributes LEAVE", "[policy][breakdown]") {
     REQUIRE(maxAt==20000);
 }
 
+TEST_CASE("BREAKDOWN invariant: ReleaseAt == LeaveAt + fadeSamples per LEAVE", "[policy][breakdown][invariant]") {
+    for(double sr : {44100.0, 48000.0}) {
+        SceneData from=makeSceneWithSlots(6,{"a.wav","b.wav","c.wav","d.wav","e.wav","f.wav"});
+        SceneData to=makeSceneWithSlots(2,{"a.wav","b.wav"});
+        SceneTransitionPlan plan; buildDirectPlan(from,to,0,1,50000,sr,plan);
+        PolicyContext ctx{sr,120.0,4,4,50000};
+        TransitionPolicy::apply(plan, ctx);
+        const int fade = static_cast<int>(std::round(sr * 0.010));
+        for(int s=0;s<kMaxSlots;++s) if(plan.slots[s].action==SlotPlanAction::Leave){
+            int64_t leaveAt=-1, releaseAt=-1;
+            for(int i=0;i<plan.numEvents;++i) if(plan.events[i].slot==s){
+                if(plan.events[i].type==PlanEventType::GainRamp) leaveAt=plan.events[i].atSample;
+                if(plan.events[i].type==PlanEventType::Release) releaseAt=plan.events[i].atSample;
+            }
+            REQUIRE(leaveAt!=-1); REQUIRE(releaseAt!=-1);
+            INFO("sr="<<sr<<" slot="<<s<<" leaveAt="<<leaveAt<<" releaseAt="<<releaseAt<<" fade="<<fade);
+            REQUIRE(releaseAt == leaveAt + fade);
+        }
+    }
+    // Also verify BUILD replacement case: second phase Leave+Enter still respects invariant for its Leave part
+    {
+        SceneData from, to; from.used=to.used=true;
+        from.slots[0]=SlotConfig{}; from.slots[0].filePath="a.wav"; from.slots[0].active=true;
+        to.slots[0]=SlotConfig{}; to.slots[0].filePath="b.wav"; to.slots[0].active=true;
+        SceneTransitionPlan plan; buildDirectPlan(from,to,0,1,30000,44100.0,plan);
+        // This is a same-slot different asset → Enter with implicit Leave at T
+        REQUIRE(plan.slots[0].action==SlotPlanAction::Enter);
+        // Should have GainRamp at T (leave) and GainRamp+Release+PcmFlip at T+fade
+        int leaveAt=-1, relAt=-1;
+        for(int i=0;i<plan.numEvents;++i) if(plan.events[i].slot==0){
+            if(plan.events[i].type==PlanEventType::GainRamp && leaveAt==-1) leaveAt=plan.events[i].atSample;
+            if(plan.events[i].type==PlanEventType::Release) relAt=plan.events[i].atSample;
+        }
+        REQUIRE(relAt == leaveAt + static_cast<int>(std::round(44100*0.010)));
+    }
+}
+
 TEST_CASE("Policy: block-size independence", "[policy]") {
     SceneData from=makeSceneWithSlots(2,{"a.wav","b.wav"});
     SceneData to=makeSceneWithSlots(6,{"a.wav","b.wav","c.wav","d.wav","e.wav","f.wav"});
@@ -119,4 +156,16 @@ TEST_CASE("Policy: A->B->C no stale commit", "[policy]") {
     REQUIRE(p2.boundary==20000);
     // Ensure no event from p1 has atSample >= p2.boundary that would be stale
     for(int i=0;i<p1.numEvents;++i) REQUIRE(p1.events[i].atSample < p2.boundary);
+}
+
+TEST_CASE("Policy: low continuity fallback to DIRECT", "[policy]") {
+    // From 2 slots (a,b) to 6 slots (c,d,e,f,g,h) no overlap -> keep+Morph =0, net +4 but no socle -> fallback DIRECT
+    SceneData from=makeSceneWithSlots(2,{"a.wav","b.wav"});
+    SceneData to=makeSceneWithSlots(6,{"c.wav","d.wav","e.wav","f.wav","g.wav","h.wav"});
+    SceneTransitionPlan plan; buildDirectPlan(from,to,0,1,10000,44100.0,plan);
+    REQUIRE(TransitionPolicy::choose(plan)==PolicyType::Direct);
+    // With overlap 2, it would be BUILD
+    SceneData to2=makeSceneWithSlots(6,{"a.wav","b.wav","c.wav","d.wav","e.wav","f.wav"});
+    SceneTransitionPlan plan2; buildDirectPlan(from,to2,0,1,10000,44100.0,plan2);
+    REQUIRE(TransitionPolicy::choose(plan2)==PolicyType::Build);
 }

@@ -19,6 +19,7 @@
 #include "engine/SceneStore.h"
 #include "engine/SceneTransitionPlan.h"
 #include "engine/TransitionEngine.h"
+#include "engine/TransitionTrace.h"
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
 #include "engine/mix/MixWorker.h"
@@ -417,6 +418,7 @@ private:
     // ── Plan DIRECT (PREPARE → COMMIT) ───────────────────────────────────────
     SceneTransitionPlan transitionPlan_ = {};
     std::atomic<bool>   transitionPlanValid_ {false};
+    TransitionTrace     transitionTrace_ = {};
 
     // ── Morphing PingPongDelay (Tier 2 — Phase 4a) ────────────────────────────
     struct MorphState

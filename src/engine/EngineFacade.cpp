@@ -928,6 +928,7 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     SceneTransitionPlan plan;
     buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
     if (!plan.valid) return false;
+    transitionTrace_.push({TraceEntry::Type::Prepared, boundary, fromIdx, toIdx, 255, 0.f, 0.f});
 
     // Policy pure : ajuste les atSample (BUILD/BREAKDOWN) sans toucher au DSP
     {
@@ -1011,11 +1012,30 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
         // Vérifier que le staging a réussi
         if (!graph_.slotPlayer().hasStagedPcm(s)) return false;
     }
+    transitionTrace_.push({TraceEntry::Type::Ready, boundary, fromIdx, toIdx, 255, 0.f, 0.f});
 
     // Stocker le plan et armer la transition
     transitionPlan_ = plan;
     transitionPlanValid_.store(true, std::memory_order_release);
     transition_.armWithPlan(plan);
+    transitionTrace_.push({TraceEntry::Type::Armed, plan.boundary, fromIdx, toIdx, 255, 0.f, 0.f});
+    for (int s = 0; s < kMaxSlots; ++s) {
+        auto act = plan.slots[s].action;
+        TraceEntry::Type t = TraceEntry::Type::Keep;
+        if (act == SlotPlanAction::Keep) t = TraceEntry::Type::Keep;
+        else if (act == SlotPlanAction::Morph) t = TraceEntry::Type::Morph;
+        else if (act == SlotPlanAction::Leave) t = TraceEntry::Type::Leave;
+        else if (act == SlotPlanAction::Enter) t = TraceEntry::Type::Enter;
+        transitionTrace_.push({t, plan.boundary, fromIdx, toIdx, static_cast<uint8_t>(s), 0.f, 0.f});
+    }
+    for (int i = 0; i < plan.numEvents; ++i) {
+        const auto& ev = plan.events[i];
+        TraceEntry::Type t = TraceEntry::Type::GainRamp;
+        if (ev.type == PlanEventType::PcmFlip) t = TraceEntry::Type::PcmFlip;
+        else if (ev.type == PlanEventType::GainRamp) t = TraceEntry::Type::GainRamp;
+        else if (ev.type == PlanEventType::Release) t = TraceEntry::Type::Release;
+        transitionTrace_.push({t, ev.atSample, fromIdx, toIdx, ev.slot, ev.a, ev.b});
+    }
 
     // Stage pattern B à la même frontière (sample-accurate, même sample que GainRamps)
     {
