@@ -95,11 +95,13 @@ add_executable(EngineTests
     engine/test_tsan.cpp
     engine/test_locking.cpp
     engine/test_sync_p0.cpp
+    engine/test_transition_plan.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp
     ../src/engine/Analysis/AiContentClassifier.cpp
     ../src/engine/ImportPipeline.cpp
+    ../src/engine/SceneTransitionPlan.cpp
     ../src/engine/TransitionEngine.cpp
     ../src/engine/AutoMixDub.cpp
     ../src/engine/AudioGraph.cpp
