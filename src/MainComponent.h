@@ -275,6 +275,7 @@ private:
     // Scene management
     void captureCurrentScene();
     void applyScene(int idx, int fromIdx = -1);
+    void refreshSceneEditorFromDefinition(int sceneIndex) noexcept;
     void navigateScene(int delta);
     void resetCurrentScene();
     void resetCurrentSceneFull();

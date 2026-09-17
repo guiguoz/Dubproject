@@ -115,9 +115,9 @@ public:
         // Per-track controls
         for (int t = 0; t < 9; ++t)
         {
-            // Repère fixe de piste (historique, toujours visible)
+            // Repère fixe de piste : numéro stable du slot (indépendant du rôle)
             static constexpr const char* kFixedNames[9] = {
-                "MST", "BASS", "KICK", "SNR", "HAT", "PAD", "SYN", "PRC", "DRM"
+                "1", "2", "3", "4", "5", "6", "7", "8", "9"
             };
             fixedLabels_[t].setText(kFixedNames[t], juce::dontSendNotification);
             fixedLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));
@@ -456,6 +456,15 @@ public:
     void updateAllRoleStatus()
     {
         for (int t = 0; t < 9; ++t) updateRoleStatus(t);
+    }
+
+    /// Applique directement un rôle issu d'une SceneDefinition (pas de facade_).
+    /// Utilisé par refreshSceneEditorFromDefinition() pour afficher la définition
+    /// de la scène sélectionnée sans lire le RuntimeSlotState.
+    void setSlotRoleInfoDirect(int slot, bool loaded, engine::SlotRoleInfo info)
+    {
+        if (slot < 0 || slot >= 9) return;
+        applyRoleStatus(slot, loaded, info);
     }
 
     /// Store a pre-computed peak envelope (200 bins) for the waveform preview.

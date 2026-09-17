@@ -2477,7 +2477,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
     const bool isDirectCommit = facade_.hasTransitionPlan() && facade_.transitionPlan().valid && fromIdx != -1;
     if (isDirectCommit) {
         facade_.setCurrentSceneIndexOnly(idx);
-        stepSeqPanel_->updateAllRoleStatus();
+        // Afficher la SceneDefinition sélectionnée, pas le RuntimeSlotState global.
+        // Garantit que "A" réaffiche ses données (ex. slot vide) même si le moteur
+        // joue encore "B" (plan DIRECT déjà commité à T).
+        refreshSceneEditorFromDefinition(idx);
         return;
     }
 
@@ -2557,9 +2560,10 @@ void MainComponent::applyScene(int idx, int fromIdx)
             : (gainsBeforeScene[static_cast<std::size_t>(i)] > 0.001f
                 ? gainsBeforeScene[static_cast<std::size_t>(i)]
                 : 0.5f);
-        facade_.setSlotGain     (i, targetGain);
-        stepSeqPanel_->setSlotMuted (i, sc.slots[i].muted);
-        stepSeqPanel_->setSlotVolume(i, sc.slots[sidx].userGain);
+        facade_.setSlotGain          (i, targetGain);
+        stepSeqPanel_->setSlotMuted  (i, sc.slots[i].muted);
+        stepSeqPanel_->setSlotVolume (i, sc.slots[sidx].userGain);
+        stepSeqPanel_->setSlotPitchOffset(i, sc.slots[sidx].semitones);
         for (int s = 0; s < numSteps; ++s)
             stepSeqPanel_->setStepState(i, s, sc.steps[sidx][static_cast<std::size_t>(s)]);
 
@@ -2719,6 +2723,49 @@ void MainComponent::applyScene(int idx, int fromIdx)
     }
 }
 
+
+// ═══ refreshSceneEditorFromDefinition ════════════════════════════════════════
+// Met à jour l'éditeur UI depuis sceneStore_[sceneIndex] uniquement.
+// INTERDIT ici : importSampleAsync, stagePcm, setSlotGain moteur,
+//               setSlotMode moteur, mutation AudioGraph, mutation SlotPlayer.
+// Appelé dans la branche isDirectCommit pour afficher la définition sélectionnée
+// indépendamment du RuntimeSlotState (qui joue potentiellement une autre scène).
+void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
+{
+    if (sceneIndex < 0 || sceneIndex >= kMaxScenes) return;
+    const auto& sc = sceneStore_.getScene(sceneIndex);
+
+    stepSeqPanel_->resetViewToStart();
+
+    for (int i = 0; i < 9; ++i)
+    {
+        const auto sz    = static_cast<std::size_t>(i);
+        const auto& sl   = sc.slots[sz];
+        const bool loaded = !sl.filePath.empty();
+
+        stepSeqPanel_->setSlotFilePath   (i, sl.filePath);
+        stepSeqPanel_->setSlotLoaded     (i, loaded);
+        if (!loaded)
+            stepSeqPanel_->setSlotWaveform(i, {});
+        // Slot non vide : conserver la waveform déjà affichée (l'envelope est calculée
+        // à l'import et reste valide tant que le fichier n'a pas changé).
+        stepSeqPanel_->setSlotMuted      (i, sl.muted);
+        stepSeqPanel_->setSlotVolume     (i, sl.userGain);
+        stepSeqPanel_->setSlotPitchOffset(i, sl.semitones);
+
+        const int ov   = sc.playModeOverrides[sz];
+        const int mode = (ov >= 0 && loaded) ? ov : static_cast<int>(sl.mode);
+        stepSeqPanel_->setSlotMode(i, mode);
+
+        const int nSteps = sc.trackBarCounts[sz] * 16;
+        stepSeqPanel_->setTrackStepCount(i, nSteps);
+        for (int s = 0; s < nSteps && s < 512; ++s)
+            stepSeqPanel_->setStepState(i, s, sc.steps[sz][static_cast<std::size_t>(s)]);
+
+        stepSeqPanel_->setSlotRoleInfoDirect(i, loaded,
+            engine::SlotRoleInfo{ sl.role, sl.isRoleManual });
+    }
+}
 
 void MainComponent::navigateScene(int delta)
 {
