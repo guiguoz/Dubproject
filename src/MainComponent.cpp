@@ -264,6 +264,10 @@ MainComponent::MainComponent()
     {
         facade_.setStep(track, step, active);
         facade_.flipPatternBuffer();
+        // SceneDefinition est la source de vérité — mise à jour immédiate au clic.
+        if (track >= 0 && track < engine::kMaxSlots && step >= 0 && step < engine::kMaxSteps)
+            sceneStore_.getScene(facade_.currentSceneIdx())
+                .steps[static_cast<std::size_t>(track)][static_cast<std::size_t>(step)] = active;
     };
 
     // Slot cleared: unload PCM and clear engine state
@@ -484,6 +488,10 @@ MainComponent::MainComponent()
     {
         facade_.setTrackBarCount(track, bars);
         facade_.flipPatternBuffer();
+        // SceneDefinition authoritative — mise à jour immédiate du barCount.
+        if (track >= 0 && track < engine::kMaxSlots)
+            sceneStore_.getScene(facade_.currentSceneIdx())
+                .trackBarCounts[static_cast<std::size_t>(track)] = bars;
     };
 
     // Override manuel du mode de lecture (clic droit → "Mode de lecture...")
@@ -2110,6 +2118,26 @@ void MainComponent::timerCallback()
         }
     }
 
+    // ── Rapport instrumentation silence (8 blocs post-play) ─────────────────
+    if (facade_.diagIsReady()) {
+        const auto d = facade_.diagReadAndClear();
+        juce::Logger::writeToLog("[DIAG] === RAPPORT SILENCE (8 blocs post-play) ===");
+        juce::Logger::writeToLog("[DIAG]   scene=" + juce::String(facade_.currentSceneIdx())
+            + "  teState=" + juce::String(d.teState)
+            + "  hasPend=" + juce::String((int)d.hasPending)
+            + "  masterPeak=" + juce::String(d.masterPeak, 4));
+        for (int s = 0; s < 9; ++s) {
+            juce::Logger::writeToLog("[DIAG]   slot" + juce::String(s)
+                + "  gen=" + juce::String(d.generated[s])
+                + "  hdl=" + juce::String(d.handled[s])
+                + "  peak=" + juce::String(d.slotPeak[s], 4)
+                + "  loaded=" + juce::String((int)d.loaded[s])
+                + "  muted=" + juce::String((int)d.muted[s])
+                + "  gain=" + juce::String(d.gain[s], 3));
+        }
+        juce::Logger::writeToLog("[DIAG] ==========================================");
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Serum content classification — lock tenu uniquement pour la copie, pas pour extract()
     if (serumHost_.isLoaded())
@@ -2331,7 +2359,6 @@ void MainComponent::captureCurrentScene()
     for (int i = 0; i < 9; ++i)
     {
         const std::size_t idx  = static_cast<std::size_t>(i);
-        const int numSteps     = facade_.getTrackStepCount(i);
         sc.slots[idx].filePath  = stepSeqPanel_->getSlotFilePath(i);
         sc.slots[idx].muted  = facade_.isSlotMuted(i);
         {
@@ -2343,9 +2370,8 @@ void MainComponent::captureCurrentScene()
         // temps réel sont pilotés par l'AutoMix V2 depuis les rôles).
         sc.slots[idx].delaySend =
             engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(i));
-        sc.trackBarCounts[idx] = facade_.getTrackBarCount(i);
-        for (int s = 0; s < numSteps; ++s)
-            sc.steps[idx][static_cast<std::size_t>(s)] = facade_.getStep(i, s);
+        // steps et trackBarCounts sont maintenant mis à jour en temps réel
+        // (onStepChanged, onTrackBarCountChanged) — ne pas écraser depuis writePatterns_.
     }
     sc.serumGain = serumUserGain_.load(std::memory_order_relaxed);
 
@@ -2370,6 +2396,19 @@ void MainComponent::captureCurrentScene()
     // Rafraîchir le score d'énergie V2 de la scène capturée.
     const int ci = facade_.currentSceneIdx();
     facade_.setSceneEnergy(ci, engine::SceneEnergy::compute(facade_.scene(ci)));
+
+    // ── Instrumentation CAPTURE CRC ──────────────────────────────────────────
+    {
+        uint32_t capCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            for (int s2 = 0; s2 < engine::kMaxSteps; ++s2)
+                if (sc.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s2)])
+                    capCRC ^= static_cast<uint32_t>(t * 512u + static_cast<uint32_t>(s2) + 1u);
+        juce::Logger::writeToLog("[DIAG] captureCurrentScene scene=" + juce::String(ci)
+            + " capCRC=0x" + juce::String::toHexString(capCRC)
+            + " used=" + juce::String((int)sc.used));
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 }
 
 // ═══ Moteur V2 : sync des scènes (sceneStore_ → EngineFacade.sceneStore_) ════
@@ -2470,6 +2509,45 @@ void MainComponent::applyScene(int idx, int fromIdx)
 
     const auto& sc = sceneStore_.getScene(idx);
 
+    // ── Instrumentation CRC sources avant applyScene ─────────────────────────
+    {
+        // storeCRC : sc.steps direct depuis sceneStore_ MainComponent
+        uint32_t storeCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            for (int s2 = 0; s2 < engine::kMaxSteps; ++s2)
+                if (sc.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s2)])
+                    storeCRC ^= static_cast<uint32_t>(t * 512u + static_cast<uint32_t>(s2) + 1u);
+
+        // barCRC : trackBarCounts
+        uint32_t barCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            barCRC ^= static_cast<uint32_t>(sc.trackBarCounts[static_cast<std::size_t>(t)] * 17u
+                                            + static_cast<uint32_t>(t) + 1u);
+
+        // engineSceneCRC : facade_.scene(idx).steps (SceneStore côté moteur)
+        const auto& es = facade_.scene(idx);
+        uint32_t engineSceneCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            for (int s2 = 0; s2 < engine::kMaxSteps; ++s2)
+                if (es.steps[static_cast<std::size_t>(t)][static_cast<std::size_t>(s2)])
+                    engineSceneCRC ^= static_cast<uint32_t>(t * 512u + static_cast<uint32_t>(s2) + 1u);
+
+        // writePatternCRC : writePatterns_ via facade_.getStep() (séquenceur)
+        uint32_t writePatternCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            for (int s2 = 0; s2 < engine::kMaxSteps; ++s2)
+                if (facade_.getStep(t, s2))
+                    writePatternCRC ^= static_cast<uint32_t>(t * 512u + static_cast<uint32_t>(s2) + 1u);
+
+        juce::Logger::writeToLog("[DIAG] SCENE_SOURCES idx=" + juce::String(idx)
+            + " used=" + juce::String((int)sc.used)
+            + " storeCRC=0x" + juce::String::toHexString(storeCRC)
+            + " barCRC=0x" + juce::String::toHexString(barCRC)
+            + " engineSceneCRC=0x" + juce::String::toHexString(engineSceneCRC)
+            + " writePatternCRC=0x" + juce::String::toHexString(writePatternCRC));
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // DIRECT : audio déjà commité à T via plan (gains/modes/PCM/pattern). Le timer
     // ne refait aucune mutation audible — juste index + UI.
     // MAIS l'UI doit toujours refléter la SceneDefinition de la scène sélectionnée,
@@ -2477,9 +2555,11 @@ void MainComponent::applyScene(int idx, int fromIdx)
     const bool isDirectCommit = facade_.hasTransitionPlan() && facade_.transitionPlan().valid && fromIdx != -1;
     if (isDirectCommit) {
         facade_.setCurrentSceneIndexOnly(idx);
+        // Sync writePatterns_ vers la scène sélectionnée SANS toucher au triple-buffer audio
+        // (le plan DIRECT a déjà commité le pattern à T — on ne redéclenche pas de flip).
+        // Garantit que getStep() / captureCurrentScene() lisent les steps corrects ensuite.
+        facade_.syncWritePatternsFromScene(idx);
         // Afficher la SceneDefinition sélectionnée, pas le RuntimeSlotState global.
-        // Garantit que "A" réaffiche ses données (ex. slot vide) même si le moteur
-        // joue encore "B" (plan DIRECT déjà commité à T).
         refreshSceneEditorFromDefinition(idx);
         return;
     }
@@ -2505,6 +2585,11 @@ void MainComponent::applyScene(int idx, int fromIdx)
     }
 
     // BPM is global (master clock) — not overridden by scene data
+
+    // Sync writePatterns_ vers la nouvelle scène IMMÉDIATEMENT (sans flip audio).
+    // Les appels suivants à refreshStepButtons() liront ainsi les steps corrects,
+    // au lieu des steps stale de la scène précédente.
+    facade_.syncWritePatternsFromScene(idx);
 
     // Track which slots got a new file — trim is already integrated in that case.
     std::array<bool, 9> loadedNewFile {};
@@ -2661,8 +2746,24 @@ void MainComponent::applyScene(int idx, int fromIdx)
     // When a bar-quantized transition is armed (navigateScene pre-armed the buffer),
     // skip: the audio thread will flip at step 0. Otherwise (sequencer stopped or
     // direct applyScene call), prepare immediately for an instant flip.
-    if (!facade_.hasPendingTransition())
-        facade_.prepareStepBuffer(nextStepBuf);
+    {
+        // ── Instrumentation stopped-nav silence ──────────────────────────────
+        const bool skipPrep = facade_.hasPendingTransition();
+        uint32_t nextCRC = 0;
+        for (int t = 0; t < 9; ++t)
+            for (int s = 0; s < engine::kMaxSteps; ++s)
+                if (nextStepBuf.steps[t][s]) nextCRC ^= static_cast<uint32_t>(t * 512u + s + 1u);
+        juce::Logger::writeToLog("[DIAG] applyScene idx=" + juce::String(idx)
+            + " playing=" + juce::String((int)facade_.isPlaying())
+            + " skipPrep=" + juce::String((int)skipPrep)
+            + " teState=" + juce::String(facade_.transitionStateRaw())
+            + " nextStepCRC=0x" + juce::String::toHexString(nextCRC));
+        if (!skipPrep)
+            facade_.prepareStepBuffer(nextStepBuf);
+        else
+            juce::Logger::writeToLog("[DIAG] WARNING applyScene: prepareStepBuffer SKIPPED");
+        // ─────────────────────────────────────────────────────────────────────
+    }
 
     // Appliquer le gain Serum de la nouvelle scène — petite rampe de 250 ms pour
     // éviter un saut audible (le crossfade de gains des slots sampler est géré
@@ -2776,6 +2877,9 @@ void MainComponent::navigateScene(int delta)
     {
         // Séquenceur arrêté : changement immédiat, sans risque de coupure
         const int oldIdx = facade_.currentSceneIdx();
+        juce::Logger::writeToLog("[DIAG] nav stopped " + juce::String(oldIdx) + "->" + juce::String(target)
+            + " hasPend=" + juce::String((int)facade_.hasPendingTransition())
+            + " teState=" + juce::String(facade_.transitionStateRaw()));
         captureCurrentScene();
         facade_.setCurrentScene(target);
         applyScene(target, oldIdx);

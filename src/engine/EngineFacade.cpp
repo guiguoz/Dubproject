@@ -186,6 +186,31 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
         masterRms_.store(rms, std::memory_order_relaxed);
     }
 
+    // ── Instrumentation diagnostics (temporaire — stopped-nav silence) ─────────
+    if (diagState_.load(std::memory_order_relaxed) == 1) {
+        for (int i = 0; i < evCount_; ++i) {
+            if (evBuf_[i].ev.type == EventType::Trigger) {
+                const int s = static_cast<int>(evBuf_[i].ev.slot);
+                if (s >= 0 && s < kMaxSlots) {
+                    diagGen_[s].fetch_add(1, std::memory_order_relaxed);
+                    if (graph_.slotPlayer().isLoaded(s))
+                        diagHdl_[s].fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
+        for (int s = 0; s < kMaxSlots; ++s) {
+            const float p = graph_.slotPlayer().getSlotPeak(s);
+            if (p > diagPeak_[s].load(std::memory_order_relaxed))
+                diagPeak_[s].store(p, std::memory_order_relaxed);
+        }
+        const float mp = masterRms_.load(std::memory_order_relaxed);
+        if (mp > diagMasterPeak_.load(std::memory_order_relaxed))
+            diagMasterPeak_.store(mp, std::memory_order_relaxed);
+        const int left = diagBlocksLeft_.fetch_sub(1, std::memory_order_relaxed);
+        if (left <= 1)
+            diagState_.store(2, std::memory_order_release);
+    }
+
     // ── CPU load ──────────────────────────────────────────────────────────────
     const float elapsed = std::chrono::duration<float>(Clock::now() - t0).count();
     const float budget  = static_cast<float>(numSamples) / static_cast<float>(sampleRate_);
@@ -195,7 +220,51 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
+// ─── Instrumentation diagnostics ─────────────────────────────────────────────
+
+int EngineFacade::transitionStateRaw() const noexcept {
+    return static_cast<int>(transition_.state());
+}
+
+void EngineFacade::diagStart() noexcept {
+    for (int s = 0; s < kMaxSlots; ++s) {
+        diagGen_[s].store(0, std::memory_order_relaxed);
+        diagHdl_[s].store(0, std::memory_order_relaxed);
+        diagPeak_[s].store(0.f, std::memory_order_relaxed);
+    }
+    diagMasterPeak_.store(0.f, std::memory_order_relaxed);
+    diagBlocksLeft_.store(8, std::memory_order_relaxed);
+    diagState_.store(1, std::memory_order_release);
+}
+
+bool EngineFacade::diagIsReady() const noexcept {
+    return diagState_.load(std::memory_order_acquire) == 2;
+}
+
+EngineFacade::DiagCounters EngineFacade::diagReadAndClear() noexcept {
+    DiagCounters d;
+    for (int s = 0; s < kMaxSlots; ++s) {
+        d.generated[s] = diagGen_[s].load(std::memory_order_relaxed);
+        d.handled  [s] = diagHdl_[s].load(std::memory_order_relaxed);
+        d.slotPeak [s] = diagPeak_[s].load(std::memory_order_relaxed);
+        d.loaded   [s] = graph_.slotPlayer().isLoaded(s);
+        d.muted    [s] = graph_.slotPlayer().isMuted(s);
+        d.gain     [s] = graph_.slotPlayer().getGain(s);
+    }
+    d.masterPeak = diagMasterPeak_.load(std::memory_order_relaxed);
+    d.teState    = transitionStateRaw();
+    d.hasPending = hasPendingTransition();
+    diagState_.store(0, std::memory_order_relaxed);
+    return d;
+}
+
+// ─── Transport ────────────────────────────────────────────────────────────────
+
 void EngineFacade::play() noexcept {
+    juce::Logger::writeToLog("[DIAG] play() scene=" + juce::String(currentScene_.load())
+        + " hasPend=" + juce::String((int)hasPendingTransition())
+        + " teState=" + juce::String(transitionStateRaw()));
+    diagStart();
     graph_.sequencer().clearStaged();   // position remise à 0 : stage obsolète
     transport_.play();
 }
@@ -1160,6 +1229,23 @@ float EngineFacade::getSceneEnergy(int idx) const noexcept
 }
 
 // ─── Patterns / sequencer (helper) ────────────────────────────────────────────
+
+void EngineFacade::syncWritePatternsFromScene(int idx) noexcept
+{
+    if (idx < 0 || idx >= kMaxScenes) return;
+    const SceneData& sc = sceneStore_.getScene(idx);
+    for (int s = 0; s < kMaxSlots; ++s)
+    {
+        const std::size_t si   = static_cast<std::size_t>(s);
+        const int         bars = sc.trackBarCounts[si] > 0 ? sc.trackBarCounts[si] : 1;
+        writePatterns_[s].numSteps = bars * 16;
+        trackBars_[s]              = bars;
+        for (int i = 0; i < kMaxSteps; ++i)
+            writePatterns_[s].steps[i] = sc.steps[si][static_cast<std::size_t>(i)];
+    }
+    // No flipPatternBuffer() — le triple-buffer audio reste intact.
+    // getStep() / getTrackStepCount() reflèteront immédiatement la nouvelle scène.
+}
 
 void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 {

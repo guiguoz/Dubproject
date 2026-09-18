@@ -243,6 +243,9 @@ public:
     void setTrackBarCount(int track, int bars) noexcept;
     int  getTrackBarCount(int track) const noexcept;
     void flipPatternBuffer() noexcept; // flip atomique après modification
+    // Sync writePatterns_ depuis SceneStore[idx], sans toucher au triple-buffer audio.
+    // À appeler dans applyScene (avant refreshStepButtons) et dans le chemin isDirectCommit.
+    void syncWritePatternsFromScene(int idx) noexcept;
 
     // ── Scènes ─────────────────────────────────────────────────────────────────
     int  currentSceneIdx() const noexcept { return currentScene_.load(std::memory_order_relaxed); }
@@ -324,6 +327,25 @@ public:
     // ── Diagnostics / debug ────────────────────────────────────────────────────
     // CPU callback budget : p99 < 50 % (§11.4)
     float getCpuLoadPercent() const noexcept { return cpuLoad_.load(); }
+
+    // ── Instrumentation stopped-nav silence (temporaire) ──────────────────────
+    // Usage : diagStart() avant play(), diagIsReady() sondé depuis timerCallback,
+    // diagReadAndClear() pour lire les compteurs accumulés sur 8 blocs post-play.
+    struct DiagCounters {
+        int32_t generated[kMaxSlots] {};  // Trigger events vus dans evBuf_
+        int32_t handled  [kMaxSlots] {};  // Triggers où slotPlayer.isLoaded=true
+        float   slotPeak [kMaxSlots] {};  // max(getSlotPeak) sur les 8 blocs
+        float   masterPeak = 0.f;
+        bool    loaded   [kMaxSlots] {};
+        bool    muted    [kMaxSlots] {};
+        float   gain     [kMaxSlots] {};
+        int     teState  = 0;
+        bool    hasPending = false;
+    };
+    void diagStart() noexcept;
+    bool diagIsReady() const noexcept;
+    DiagCounters diagReadAndClear() noexcept;
+    int  transitionStateRaw() const noexcept;
 
 private:
     // Sous-systèmes moteur
@@ -454,6 +476,15 @@ private:
     std::atomic<bool>       mixThreadStarted_ {false};
 
     void applySceneInternal(int idx) noexcept;
+
+    // ── Champs diagnostics (temporaire) ───────────────────────────────────────
+    // 0=idle, 1=running (compte les blocs), 2=ready (lu depuis message thread)
+    std::atomic<int>     diagState_      {0};
+    std::atomic<int>     diagBlocksLeft_ {0};
+    std::atomic<int32_t> diagGen_  [kMaxSlots] {};
+    std::atomic<int32_t> diagHdl_  [kMaxSlots] {};
+    std::atomic<float>   diagPeak_ [kMaxSlots] {};
+    std::atomic<float>   diagMasterPeak_ {0.f};
 };
 
 } // namespace engine

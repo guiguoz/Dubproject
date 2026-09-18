@@ -49,12 +49,25 @@ public:
             return EXCEPTION_CONTINUE_SEARCH;
         });
 #endif
-mainWindow = std::make_unique<MainWindow>(getApplicationName());
+        // ── Logger fichier (diagnostic) ───────────────────────────────────────
+        {
+            const auto dir = juce::File::getSpecialLocation(
+                juce::File::userApplicationDataDirectory).getChildFile("DubEngine");
+            dir.createDirectory();
+            const auto ts  = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
+            fileLogger_ = std::make_unique<juce::FileLogger>(
+                dir.getChildFile("diag_" + ts + ".log"),
+                "SaxFX Live — diagnostic log", 0);
+            juce::Logger::setCurrentLogger(fileLogger_.get());
+        }
+        // ─────────────────────────────────────────────────────────────────────
+        mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
     void shutdown() override
     {
         mainWindow = nullptr;
+        juce::Logger::setCurrentLogger(nullptr);
     }
 
     void systemRequestedQuit() override
@@ -120,7 +133,8 @@ mainWindow = std::make_unique<MainWindow>(getApplicationName());
     };
 
 private:
-    std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<MainWindow>    mainWindow;
+    std::unique_ptr<juce::FileLogger> fileLogger_;
 };
 
 //==============================================================================
