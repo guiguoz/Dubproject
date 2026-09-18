@@ -290,7 +290,7 @@ MainComponent::MainComponent()
     stepSeqPanel_->onPlayChanged = [this](bool playing)
     {
         if (playing) {
-            facade_.flipPatternBuffer();
+            facade_.activateSceneStopped(facade_.currentSceneIdx());
             facade_.play();
         } else {
             facade_.stop();
@@ -2125,7 +2125,8 @@ void MainComponent::timerCallback()
         juce::Logger::writeToLog("[DIAG]   scene=" + juce::String(facade_.currentSceneIdx())
             + "  teState=" + juce::String(d.teState)
             + "  hasPend=" + juce::String((int)d.hasPending)
-            + "  masterPeak=" + juce::String(d.masterPeak, 4));
+            + "  masterPeak=" + juce::String(d.masterPeak, 4)
+            + "  pendingStops=" + juce::String(d.pendingStopSnapshot));
         for (int s = 0; s < 9; ++s) {
             juce::Logger::writeToLog("[DIAG]   slot" + juce::String(s)
                 + "  gen=" + juce::String(d.generated[s])
@@ -2134,6 +2135,16 @@ void MainComponent::timerCallback()
                 + "  loaded=" + juce::String((int)d.loaded[s])
                 + "  muted=" + juce::String((int)d.muted[s])
                 + "  gain=" + juce::String(d.gain[s], 3));
+            if (d.generated[s] > 0) {
+                juce::Logger::writeToLog("[DIAG]     pcm: frames=" + juce::String(d.pcmFrames[s])
+                    + "  null=" + juce::String((int)d.pcmNull[s])
+                    + "  maxAbs=" + juce::String(d.pcmMaxAbs[s], 4));
+                juce::Logger::writeToLog("[DIAG]     voice: count=" + juce::String(d.voiceCount[s])
+                    + "  releases=" + juce::String(d.releaseCount[s]));
+                juce::Logger::writeToLog("[DIAG]     gain: param=" + juce::String(d.gain[s], 3)
+                    + "  ramp=" + juce::String(d.rampValue[s], 4)
+                    + "  eff=" + juce::String(d.effectiveGain[s], 4));
+            }
         }
         juce::Logger::writeToLog("[DIAG] ==========================================");
     }

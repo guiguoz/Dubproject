@@ -189,13 +189,34 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
     // ── Instrumentation diagnostics (temporaire — stopped-nav silence) ─────────
     if (diagState_.load(std::memory_order_relaxed) == 1) {
         for (int i = 0; i < evCount_; ++i) {
-            if (evBuf_[i].ev.type == EventType::Trigger) {
-                const int s = static_cast<int>(evBuf_[i].ev.slot);
-                if (s >= 0 && s < kMaxSlots) {
+            const int s = static_cast<int>(evBuf_[i].ev.slot);
+            if (s < 0 || s >= kMaxSlots) continue;
+            switch (evBuf_[i].ev.type) {
+                case EventType::Trigger:
                     diagGen_[s].fetch_add(1, std::memory_order_relaxed);
-                    if (graph_.slotPlayer().isLoaded(s))
-                        diagHdl_[s].fetch_add(1, std::memory_order_relaxed);
-                }
+                    if (graph_.slotPlayer().isLoaded(s)) {
+                        const int32_t hdl = diagHdl_[s].fetch_add(1, std::memory_order_relaxed);
+                        if (hdl == 0) {  // premier trigger de ce slot dans la fenêtre
+                            const float rv = graph_.slotPlayer().getRampValue(s);
+                            const float gn = graph_.slotPlayer().getGain(s);
+                            diagRampValueSnap_[s].store(rv, std::memory_order_relaxed);
+                            diagEffGainSnap_  [s].store(rv * gn, std::memory_order_relaxed);
+                            diagPcmFrames_    [s].store(graph_.slotPlayer().getPcmFrames(s), std::memory_order_relaxed);
+                            diagPcmNull_      [s].store(graph_.slotPlayer().isPcmEmpty(s) ? 1 : 0, std::memory_order_relaxed);
+                            diagPcmMaxAbs_    [s].store(graph_.slotPlayer().getPcmMaxAbsFirst64(s), std::memory_order_relaxed);
+                            diagVoiceCount_   [s].store(graph_.slotPlayer().getActiveVoiceCount(s), std::memory_order_relaxed);
+                        }
+                    }
+                    break;
+                case EventType::Release:
+                    diagReleaseCount_[s].fetch_add(1, std::memory_order_relaxed);
+                    break;
+                case EventType::PcmFlip:
+                    pushTrace(TraceEvt::Op::CommitPcm, s,
+                              graph_.slotPlayer().getPcmFrames(s));
+                    break;
+                default:
+                    break;
             }
         }
         for (int s = 0; s < kMaxSlots; ++s) {
@@ -231,6 +252,14 @@ void EngineFacade::diagStart() noexcept {
         diagGen_[s].store(0, std::memory_order_relaxed);
         diagHdl_[s].store(0, std::memory_order_relaxed);
         diagPeak_[s].store(0.f, std::memory_order_relaxed);
+        // S-C extended
+        diagVoiceCount_   [s].store(0,   std::memory_order_relaxed);
+        diagReleaseCount_ [s].store(0,   std::memory_order_relaxed);
+        diagRampValueSnap_[s].store(0.f, std::memory_order_relaxed);
+        diagEffGainSnap_  [s].store(0.f, std::memory_order_relaxed);
+        diagPcmFrames_    [s].store(0,   std::memory_order_relaxed);
+        diagPcmNull_      [s].store(0,   std::memory_order_relaxed);
+        diagPcmMaxAbs_    [s].store(0.f, std::memory_order_relaxed);
     }
     diagMasterPeak_.store(0.f, std::memory_order_relaxed);
     diagBlocksLeft_.store(8, std::memory_order_relaxed);
@@ -250,12 +279,51 @@ EngineFacade::DiagCounters EngineFacade::diagReadAndClear() noexcept {
         d.loaded   [s] = graph_.slotPlayer().isLoaded(s);
         d.muted    [s] = graph_.slotPlayer().isMuted(s);
         d.gain     [s] = graph_.slotPlayer().getGain(s);
+        // S-C extended
+        d.voiceCount   [s] = diagVoiceCount_   [s].load(std::memory_order_relaxed);
+        d.releaseCount [s] = diagReleaseCount_ [s].load(std::memory_order_relaxed);
+        d.rampValue    [s] = diagRampValueSnap_[s].load(std::memory_order_relaxed);
+        d.effectiveGain[s] = diagEffGainSnap_  [s].load(std::memory_order_relaxed);
+        d.pcmFrames    [s] = diagPcmFrames_    [s].load(std::memory_order_relaxed);
+        d.pcmNull      [s] = diagPcmNull_      [s].load(std::memory_order_relaxed) != 0;
+        d.pcmMaxAbs    [s] = diagPcmMaxAbs_    [s].load(std::memory_order_relaxed);
     }
-    d.masterPeak = diagMasterPeak_.load(std::memory_order_relaxed);
-    d.teState    = transitionStateRaw();
-    d.hasPending = hasPendingTransition();
+    d.masterPeak         = diagMasterPeak_.load(std::memory_order_relaxed);
+    d.teState            = transitionStateRaw();
+    d.hasPending         = hasPendingTransition();
+    d.pendingStopSnapshot = pendingStops_.load(std::memory_order_relaxed);
+
+    // Dump trace ring (D) — derniers kTraceRingCap events writers
+    const int head = traceHead_.load(std::memory_order_relaxed);
+    const int num  = std::min(head, kTraceRingCap);
+    if (num > 0) {
+        juce::Logger::writeToLog("[DIAG] TRACE writers (" + juce::String(num) + " derniers) :");
+        static constexpr const char* kOpNames[] =
+            {"None","ClearSlot","StopSlot","LoadSlot","ImportStart","StagePcm","CommitPcm"};
+        const int start = head - num;
+        for (int n = 0; n < num; ++n) {
+            const auto& ev = traceRing_[(start + n) & (kTraceRingCap - 1)];
+            const int opIdx = static_cast<int>(ev.op);
+            const char* name = (opIdx >= 0 && opIdx < 7) ? kOpNames[opIdx] : "?";
+            juce::String line = "[DIAG]   [b=" + juce::String(ev.block)
+                + "] " + juce::String(name) + " slot=" + juce::String(ev.slot);
+            if (ev.frames > 0)
+                line += " frames=" + juce::String(ev.frames);
+            if (ev.assetLo > 0)
+                line += " asset=0x" + juce::String::toHexString(ev.assetLo);
+            juce::Logger::writeToLog(line);
+        }
+    }
+
     diagState_.store(0, std::memory_order_relaxed);
     return d;
+}
+
+void EngineFacade::pushTrace(TraceEvt::Op op, int slot, int frames, uint32_t assetLo) noexcept {
+    const int i = traceHead_.fetch_add(1, std::memory_order_relaxed) & (kTraceRingCap - 1);
+    traceRing_[i] = {op, static_cast<uint8_t>(slot >= 0 ? slot : 0),
+                     static_cast<uint32_t>(audioBlockCounter_.load(std::memory_order_relaxed)),
+                     frames, assetLo};
 }
 
 // ─── Transport ────────────────────────────────────────────────────────────────
@@ -341,6 +409,10 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
                                      SlotRole restoredRole, bool wasManual)
 {
     if (slot < 0 || slot >= kMaxSlots) return;
+    // Incrémenter la génération avant de lancer : invalide tout worker précédent pour ce slot.
+    slotGen_[slot].fetch_add(1, std::memory_order_release);
+    const int32_t capturedGen = slotGen_[slot].load(std::memory_order_relaxed);
+    pushTrace(TraceEvt::Op::ImportStart, slot);
 
     // Enregistrer le fichier/trim ciblés DES MAINTENANT (message thread) :
     // applyScene peut relire slotFilePath() sans attendre la fin de l'import.
@@ -351,7 +423,7 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
     juce::WeakReference<EngineFacade> weakThis(this);
     auto alive = std::make_shared<std::atomic<bool>>(true);
     std::thread([weakThis, slot, filePath, cb, trimStart, trimEnd,
-                 restoredRole, wasManual, alive]() {
+                 restoredRole, wasManual, alive, capturedGen]() {
         juce::AudioFormatManager fmtMgr;
         fmtMgr.registerBasicFormats();
 
@@ -435,7 +507,7 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
         int end   = numFrames;
         if (trimStart >= 0) start = std::min(numFrames, trimStart);
         if (trimEnd   >= 0) end   = std::min(numFrames, trimEnd);
-        if (end <= start)   end   = start + 1;
+        if (end <= start)   end   = numFrames;  // trim invalide → tout le fichier
         const int numTrim = end - start;
 
         SlotPcm pcm;
@@ -472,10 +544,21 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
+            // Guard génération : si clearSlot ou activateSceneStopped a incrémenté
+            // slotGen_ pendant notre analyse, ce worker est périmé → abort.
+            if (selfLocked->slotGen_[slot].load(std::memory_order_acquire) != capturedGen)
+                return;
+
             // Chargement dans le SlotPlayer (worker thread — pas audio)
             const PlayMode mode = modeForResult(result, slot, restoredRole);
             selfLocked->graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
             selfLocked->slotLoaded_[slot].store(true, std::memory_order_release);
+            const int   loadedFrames = selfLocked->graph_.slotPlayer().getPcmFrames(slot);
+            const AssetId loadedAsset = assetIdFor(selfLocked->slotPath_[slot],
+                                                    selfLocked->slotTrimStart_[slot],
+                                                    selfLocked->slotTrimEnd_[slot]);
+            selfLocked->pushTrace(TraceEvt::Op::LoadSlot, slot, loadedFrames,
+                                  static_cast<uint32_t>(loadedAsset));
         }
 
         if (auto* selfCb = weakThis.get(); selfCb && cb) cb(slot, result);
@@ -485,6 +568,8 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
 void EngineFacade::clearSlot(int slot) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
+    slotGen_[slot].fetch_add(1, std::memory_order_release);  // invalide workers en vol
+    pushTrace(TraceEvt::Op::ClearSlot, slot);
     graph_.slotPlayer().clearSlot(slot);
     slotLoaded_[slot].store(false, std::memory_order_relaxed);
     slotPath_[slot].clear();
@@ -525,6 +610,7 @@ void EngineFacade::triggerSlot(int slot) noexcept
 void EngineFacade::stopSlot(int slot, bool /*immediate*/) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return;
+    pushTrace(TraceEvt::Op::StopSlot, slot);
     pendingStops_.fetch_or(static_cast<uint16_t>(1u << slot),
                            std::memory_order_release);
 }
@@ -1078,6 +1164,7 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
             }
         }
         graph_.slotPlayer().stagePcm(s, std::move(pcm), cfg.mode);
+        pushTrace(TraceEvt::Op::StagePcm, s);
         // Vérifier que le staging a réussi
         if (!graph_.slotPlayer().hasStagedPcm(s)) return false;
     }
@@ -1147,6 +1234,129 @@ void EngineFacade::applySceneInternal(int idx) noexcept
         graph_.slotPlayer().setSemitones(s, cfg.semitones);
         graph_.setSlotRole(s, cfg.role);
     }
+}
+
+// ─── Fix P0 — STOPPED nav + Play ─────────────────────────────────────────────
+
+void EngineFacade::activateSceneStopped(int sceneIdx) noexcept
+{
+    if (sceneIdx < 0 || sceneIdx >= kMaxScenes) return;
+    if (transport_.snapshot().playing) return;  // ne rien faire si déjà en lecture
+
+    // 1. Annuler toute transition STOP pendante (BUILD/BREAKDOWN/DUB).
+    //    Le plan DIRECT (transitionPlanValid_) n'est pas touché ici.
+    transition_.reset();
+    graph_.sequencer().clearStaged();
+    pendingScene_.store(-1, std::memory_order_relaxed);
+    pendingTransLen_.store(0, std::memory_order_relaxed);
+    // Annuler les PCM stagés pour les ENTER d'une éventuelle transition annulée.
+    for (int s = 0; s < kMaxSlots; ++s)
+        graph_.slotPlayer().clearStagedPcm(s);
+
+    // 2. Syncer les patterns depuis la SceneDefinition (sans flip audio — transport arrêté).
+    currentScene_.store(sceneIdx, std::memory_order_relaxed);
+    syncWritePatternsFromScene(sceneIdx);
+    flipPatternBuffer();
+
+    // 3. Garantir PCM valide pour chaque slot de la scène.
+    const SceneData& sc = sceneStore_.getScene(sceneIdx);
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const SlotConfig& cfg = sc.slots[s];
+
+        if (cfg.filePath.empty()) {
+            // Slot absent de cette scène → assurer état cleared (sans toucher sceneStore).
+            if (slotLoaded_[s].load(std::memory_order_acquire)) {
+                clearSlot(s);  // incrémente slotGen_, arrête voix, vide runtime
+            }
+            continue;
+        }
+
+        // Comparer l'asset runtime avec l'asset attendu par la scène.
+        const AssetId sceneAsset   = assetIdForSlot(cfg);
+        const AssetId runtimeAsset = assetIdFor(slotPath_[s], slotTrimStart_[s], slotTrimEnd_[s]);
+        const int runtimeFrames    = graph_.slotPlayer().getPcmFrames(s);
+
+        if (runtimeAsset == sceneAsset
+            && slotLoaded_[s].load(std::memory_order_acquire)
+            && runtimeFrames >= kMinValidFrames) {
+            // PCM déjà valide — mettre à jour uniquement les paramètres de lecture.
+            graph_.slotPlayer().setGain(s, cfg.gain);
+            graph_.slotPlayer().setMode(s, cfg.mode);
+            graph_.slotPlayer().setSemitones(s, cfg.semitones);
+            graph_.setSlotRole(s, cfg.role);
+            continue;
+        }
+
+        // PCM absent, invalide (frames < kMinValidFrames) ou mauvais asset → force-load.
+        loadSlotFromFileSync(s, cfg);
+    }
+}
+
+void EngineFacade::loadSlotFromFileSync(int slot, const SlotConfig& cfg) noexcept
+{
+    // Incrémenter la génération : invalide tout worker en vol pour ce slot.
+    slotGen_[slot].fetch_add(1, std::memory_order_release);
+
+    juce::AudioFormatManager fmtMgr;
+    fmtMgr.registerBasicFormats();
+    const auto file = juce::File(juce::String(cfg.filePath));
+    if (!file.existsAsFile()) {
+        clearSlot(slot);
+        return;
+    }
+    std::unique_ptr<juce::AudioFormatReader> reader(fmtMgr.createReaderFor(file));
+    if (!reader || reader->lengthInSamples <= 0 || reader->numChannels <= 0) {
+        clearSlot(slot);
+        return;
+    }
+    const int   numFrames = static_cast<int>(reader->lengthInSamples);
+    const int   numCh     = static_cast<int>(reader->numChannels);
+    const float sr        = static_cast<float>(reader->sampleRate);
+    juce::AudioBuffer<float> buf(numCh, numFrames);
+    if (!reader->read(&buf, 0, numFrames, 0, true, numCh > 1)) {
+        clearSlot(slot);
+        return;
+    }
+
+    int start = (cfg.trimStart >= 0) ? std::min(cfg.trimStart, numFrames) : 0;
+    int end   = (cfg.trimEnd   >= 0) ? std::min(cfg.trimEnd,   numFrames) : numFrames;
+    if (end <= start) end = numFrames;  // trim invalide → tout le fichier
+    const int trimFrames = end - start;
+
+    SlotPcm pcm;
+    pcm.numChannels = std::min(numCh, 2);
+    pcm.numFrames   = trimFrames;
+    pcm.sampleRate  = sr;
+    pcm.data.resize(static_cast<size_t>(trimFrames * pcm.numChannels));
+    if (pcm.numChannels == 1) {
+        const float* ch0 = buf.getReadPointer(0);
+        for (int i = 0; i < trimFrames; ++i)
+            pcm.data[static_cast<size_t>(i)] = ch0[start + i];
+    } else {
+        const float* ch0 = buf.getReadPointer(0);
+        const float* ch1 = buf.getReadPointer(1);
+        for (int i = 0; i < trimFrames; ++i) {
+            pcm.data[static_cast<size_t>(i * 2)    ] = ch0[start + i];
+            pcm.data[static_cast<size_t>(i * 2 + 1)] = ch1[start + i];
+        }
+    }
+
+    // Acquisition du mutex de slot : sérialise avec tout worker en vol.
+    // Le worker vérifiera le gen et abortera puisqu'on l'a déjà incrémenté.
+    std::lock_guard<std::mutex> lock(importSlotMutex_[slot]);
+    graph_.slotPlayer().clearSlot(slot);   // arrêt voix + marked unloaded
+    graph_.slotPlayer().loadSlot(slot, std::move(pcm), cfg.mode);
+    slotLoaded_[slot].store(true, std::memory_order_release);
+    slotPath_     [slot] = cfg.filePath;
+    slotTrimStart_[slot] = cfg.trimStart >= 0 ? cfg.trimStart : 0;
+    slotTrimEnd_  [slot] = cfg.trimEnd;
+    graph_.slotPlayer().setGain(slot, cfg.gain);
+    graph_.slotPlayer().setSemitones(slot, cfg.semitones);
+    graph_.setSlotRole(slot, cfg.role);
+
+    const AssetId loadedAsset = assetIdForSlot(cfg);
+    pushTrace(TraceEvt::Op::LoadSlot, slot, trimFrames,
+              static_cast<uint32_t>(loadedAsset));
 }
 
 // ─── Transitions de scène (Tier 1 — Phase 4a) ─────────────────────────────────

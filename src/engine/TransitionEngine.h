@@ -75,6 +75,10 @@ public:
     // Le plan doit être valide et préchargé (readiness gate déjà vérifié).
     void armWithPlan(const SceneTransitionPlan& plan) noexcept;
 
+    // Annule toute transition en cours et remet l'état à Idle.
+    // Message thread uniquement — à appeler quand le transport est arrêté.
+    void reset() noexcept { state_.store(State::Idle, std::memory_order_release); }
+
     // Densité d'une scène : fraction de slots actifs [0, 1].
     static float sceneDensity(const SceneData& scene) noexcept;
 

@@ -166,6 +166,16 @@ public:
             || voiceActive_[slot][1].load(std::memory_order_relaxed);
     }
 
+    // ── Diag getters (temporaire — S-C silence) ───────────────────────────────
+    // getPcmFrames / isPcmEmpty / getPcmMaxAbsFirst64 : audio thread only.
+    // getActiveVoiceCount / getRampValue / getRampLeft : audio thread only.
+    int   getPcmFrames(int slot) const noexcept;
+    bool  isPcmEmpty(int slot) const noexcept;
+    float getPcmMaxAbsFirst64(int slot) const noexcept;
+    int   getActiveVoiceCount(int slot) const noexcept;
+    float getRampValue(int slot) const noexcept;   // rampValue_[] — non-atomic
+    int   getRampLeft(int slot) const noexcept;
+
     // Pic de sortie du slot pour le bloc courant (VU — lu depuis message thread).
     float getSlotPeak(int slot) const noexcept {
         if (slot < 0 || slot >= kSlots) return 0.f;

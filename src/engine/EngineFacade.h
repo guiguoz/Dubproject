@@ -328,6 +328,15 @@ public:
     // CPU callback budget : p99 < 50 % (§11.4)
     float getCpuLoadPercent() const noexcept { return cpuLoad_.load(); }
 
+    // ── Fix P0 — STOPPED nav + Play ───────────────────────────────────────────
+    // Garantit que le runtime est cohérent avec SceneDefinition[sceneIdx] AVANT Play.
+    // Appelée quand transport == stopped et qu'on sélectionne une scène à jouer
+    // (nav STOPPED + bouton Play). Annule les transitions STOP en cours.
+    // Ne touche PAS au plan DIRECT (transitionPlanValid_).
+    // File I/O sync acceptable : transport arrêté, pas d'audio glitch.
+    static constexpr int kMinValidFrames = 256;  // pcm.numFrames minimum considéré valide
+    void activateSceneStopped(int sceneIdx) noexcept;
+
     // ── Instrumentation stopped-nav silence (temporaire) ──────────────────────
     // Usage : diagStart() avant play(), diagIsReady() sondé depuis timerCallback,
     // diagReadAndClear() pour lire les compteurs accumulés sur 8 blocs post-play.
@@ -341,6 +350,15 @@ public:
         float   gain     [kMaxSlots] {};
         int     teState  = 0;
         bool    hasPending = false;
+        // S-C silence — extended diag
+        int32_t voiceCount   [kMaxSlots] {};  // voix actives après 1er trigger
+        int32_t releaseCount [kMaxSlots] {};  // events Release dans la fenêtre
+        float   rampValue    [kMaxSlots] {};  // rampValue au 1er trigger
+        float   effectiveGain[kMaxSlots] {};  // gain × ramp au 1er trigger
+        int32_t pcmFrames    [kMaxSlots] {};  // pcm.numFrames au 1er trigger
+        bool    pcmNull      [kMaxSlots] {};  // pcm vide au 1er trigger
+        float   pcmMaxAbs    [kMaxSlots] {};  // max|x| 64 premières frames
+        uint16_t pendingStopSnapshot = 0;     // pendingStops_ au moment de readAndClear
     };
     void diagStart() noexcept;
     bool diagIsReady() const noexcept;
@@ -476,15 +494,47 @@ private:
     std::atomic<bool>       mixThreadStarted_ {false};
 
     void applySceneInternal(int idx) noexcept;
+    // Charge un slot depuis le fichier décrit dans cfg (sync, message thread).
+    // Incrémente slotGen_ avant loadSlot pour invalider tout worker en vol.
+    void loadSlotFromFileSync(int slot, const SlotConfig& cfg) noexcept;
 
     // ── Champs diagnostics (temporaire) ───────────────────────────────────────
     // 0=idle, 1=running (compte les blocs), 2=ready (lu depuis message thread)
     std::atomic<int>     diagState_      {0};
     std::atomic<int>     diagBlocksLeft_ {0};
+    // Token de génération par slot — invalide les workers en vol lors de clear/import
+    std::atomic<int32_t> slotGen_  [kMaxSlots] {};
+
     std::atomic<int32_t> diagGen_  [kMaxSlots] {};
     std::atomic<int32_t> diagHdl_  [kMaxSlots] {};
     std::atomic<float>   diagPeak_ [kMaxSlots] {};
     std::atomic<float>   diagMasterPeak_ {0.f};
+
+    // S-C silence — extended diag atomics
+    std::atomic<int32_t> diagVoiceCount_   [kMaxSlots] {};
+    std::atomic<int32_t> diagReleaseCount_ [kMaxSlots] {};
+    std::atomic<float>   diagRampValueSnap_[kMaxSlots] {};
+    std::atomic<float>   diagEffGainSnap_  [kMaxSlots] {};
+    std::atomic<int32_t> diagPcmFrames_    [kMaxSlots] {};
+    std::atomic<int32_t> diagPcmNull_      [kMaxSlots] {};
+    std::atomic<float>   diagPcmMaxAbs_    [kMaxSlots] {};
+
+    // ── Trace ring (D) — writers critiques slots ────────────────────────────
+    struct TraceEvt {
+        enum class Op : uint8_t {
+            None=0, ClearSlot, StopSlot, LoadSlot, ImportStart, StagePcm, CommitPcm
+        };
+        Op       op      = Op::None;
+        uint8_t  slot    = 0;
+        uint32_t block   = 0;  // audioBlockCounter_ au moment de l'event
+        int32_t  frames  = 0;  // pcmFrames (LoadSlot/CommitPcm uniquement)
+        uint32_t assetLo = 0;  // 32 bits bas de assetId (LoadSlot uniquement)
+    };
+    static constexpr int kTraceRingCap = 64;  // power of 2
+    TraceEvt         traceRing_[kTraceRingCap] = {};
+    std::atomic<int> traceHead_{0};
+    void             pushTrace(TraceEvt::Op op, int slot,
+                               int frames = 0, uint32_t assetLo = 0) noexcept;
 };
 
 } // namespace engine

@@ -518,6 +518,43 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
     }
 }
 
+// ─── Diag getters (S-C silence) ──────────────────────────────────────────────
+
+int SlotPlayer::getPcmFrames(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 0;
+    return activePcm(slot).numFrames;
+}
+bool SlotPlayer::isPcmEmpty(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return true;
+    const auto& p = activePcm(slot);
+    return p.data.empty() || p.numFrames <= 0;
+}
+float SlotPlayer::getPcmMaxAbsFirst64(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 0.f;
+    const auto& p = activePcm(slot);
+    if (p.data.empty() || p.numFrames <= 0) return 0.f;
+    const int n = std::min(64, p.numFrames) * p.numChannels;
+    float mx = 0.f;
+    for (int i = 0; i < n; ++i) {
+        const float a = std::abs(p.data[static_cast<size_t>(i)]);
+        if (a > mx) mx = a;
+    }
+    return mx;
+}
+int SlotPlayer::getActiveVoiceCount(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 0;
+    return (voiceActive_[slot][0].load(std::memory_order_relaxed) ? 1 : 0)
+         + (voiceActive_[slot][1].load(std::memory_order_relaxed) ? 1 : 0);
+}
+float SlotPlayer::getRampValue(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 1.f;
+    return rampValue_[slot];
+}
+int SlotPlayer::getRampLeft(int slot) const noexcept {
+    if (slot < 0 || slot >= kSlots) return 0;
+    return rampLeft_[slot].load(std::memory_order_relaxed);
+}
+
 // ─── processBlock ─────────────────────────────────────────────────────────────
 
 void SlotPlayer::processBlock(const TransportState& ts,
