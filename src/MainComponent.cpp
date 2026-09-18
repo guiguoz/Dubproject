@@ -1652,7 +1652,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         }
     }
 
-    // ── Diag post-device : peak max par canal de sortie ──────────────────────
+    // ── Diag post-device : peak max par canal de sortie (debug uniquement) ──────
+#if JUCE_DEBUG
     {
         const int n = std::min(numCh, static_cast<int>(kMaxDiagOutCh));
         for (int ch = 0; ch < n; ++ch)
@@ -1666,6 +1667,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                        prev, pk, std::memory_order_relaxed, std::memory_order_relaxed)) {}
         }
     }
+#endif
 }
 
 void MainComponent::releaseResources()

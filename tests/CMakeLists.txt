@@ -102,6 +102,7 @@ add_executable(EngineTests
     engine/test_build_ownership.cpp
     engine/test_pattern_ownership.cpp
     engine/test_stopped_nav_play.cpp
+    engine/test_repro_silence.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp

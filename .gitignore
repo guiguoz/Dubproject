@@ -80,3 +80,15 @@ data/dataset/
 
 # Output directory (exe, DLL, ONNX models — built artifacts)
 bin/
+
+# Scratch/session files (local only, not part of the repo)
+SESSION_STATUS*.md
+TEST_*.md
+Testing/
+build-tsan/
+tsan/
+DubEngine V2*.md
+
+# Diagnostic scratch tests (not part of the regression suite)
+tests/engine/test_diag_direct_aba.cpp
+tests/engine/test_silence_repro.cpp
