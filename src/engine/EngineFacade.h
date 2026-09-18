@@ -20,6 +20,7 @@
 #include "engine/SceneTransitionPlan.h"
 #include "engine/TransitionEngine.h"
 #include "engine/TransitionTrace.h"
+#include "engine/TransitionStatus.h"
 #include "engine/EventScheduler.h"
 #include "engine/mix/MixState.h"
 #include "engine/mix/MixWorker.h"
@@ -336,6 +337,12 @@ public:
     // File I/O sync acceptable : transport arrêté, pas d'audio glitch.
     static constexpr int kMinValidFrames = 256;  // pcm.numFrames minimum considéré valide
     void activateSceneStopped(int sceneIdx) noexcept;
+
+    // ── Snapshot état de transition pour indicateur UI (lecture seule) ───────
+    // Retourne un instantané POD des états moteur pertinents.
+    // selectedScene : index de scène affiché dans l'UI (fourni par l'appelant).
+    // Aucune allocation, lecture atomique uniquement. Message thread.
+    TransitionStatusSnapshot getTransitionStatusSnapshot(int selectedScene) const noexcept;
 
     // ── Instrumentation stopped-nav silence (temporaire) ──────────────────────
     // Usage : diagStart() avant play(), diagIsReady() sondé depuis timerCallback,

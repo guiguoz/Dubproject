@@ -241,6 +241,68 @@ void EngineFacade::processBlock(float* left, float* right, int numSamples,
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 
+// ─── Snapshot état de transition (indicateur UI) ─────────────────────────────
+
+TransitionStatusSnapshot EngineFacade::getTransitionStatusSnapshot(int selectedScene) const noexcept
+{
+    TransitionStatusSnapshot sn;
+    sn.selectedScene  = selectedScene;
+    sn.runtimeScene   = currentScene_.load(std::memory_order_relaxed);
+    sn.timeSigNum     = 4;
+    sn.timeSigDen     = 4;
+    sn.pendingScene   = -1;
+    sn.boundarySample = -1;
+    sn.policy         = 0;
+
+    const auto ts = transport_.snapshot();
+    sn.sampleRate = ts.sampleRate;
+    sn.bpm        = ts.bpm;
+    sn.playing    = ts.playing;
+    sn.nowSample  = ts.playing ? ts.samplePos : 0LL;
+    sn.state      = static_cast<uint8_t>(transition_.state());
+
+    // Priorité 1 : plan DIRECT armé (PREPARE→COMMIT path)
+    if (transitionPlanValid_.load(std::memory_order_acquire) && transitionPlan_.valid)
+    {
+        sn.pendingScene   = transitionPlan_.toScene;
+        sn.boundarySample = transitionPlan_.boundary;
+        sn.policy         = 0;  // DIRECT
+    }
+    // Priorité 2 : transition quantisée (TransitionEngine morph)
+    else if (transition_.state() != TransitionEngine::State::Idle)
+    {
+        const auto& plan = transition_.plan();
+        if (plan.valid && plan.toScene >= 0)
+        {
+            sn.pendingScene   = plan.toScene;
+            sn.boundarySample = plan.executionSample;
+            switch (plan.type)
+            {
+                case TransitionType::Build:
+                case TransitionType::Dub:
+                    sn.policy = 1; break;  // BUILD
+                case TransitionType::Breakdown:
+                    sn.policy = 2; break;  // BREAKDOWN
+                default:
+                    sn.policy = 0; break;  // DIRECT / Smooth / Cut
+            }
+        }
+    }
+    // Priorité 3 : legacy pending (index sans timing)
+    else
+    {
+        const int legacy = pendingScene_.load(std::memory_order_relaxed);
+        if (legacy >= 0)
+        {
+            sn.pendingScene   = legacy;
+            sn.boundarySample = -1;
+            sn.policy         = 0;
+        }
+    }
+
+    return sn;
+}
+
 // ─── Instrumentation diagnostics ─────────────────────────────────────────────
 
 int EngineFacade::transitionStateRaw() const noexcept {

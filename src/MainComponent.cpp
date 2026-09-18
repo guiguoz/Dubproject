@@ -100,6 +100,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(sceneUpBtn_);
     addAndMakeVisible(sceneNumLabel_);
     addAndMakeVisible(sceneDownBtn_);
+    addAndMakeVisible(transitionStatusBar_);
     addAndMakeVisible(sceneResetBtn_);
     addAndMakeVisible(sceneTrackResetBtn_);
     addAndMakeVisible(sceneCopyBtn_);
@@ -1929,18 +1930,18 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawText("TRANSPORT", sidebarX + 12, kHeaderH + 427, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // Labels KEY et VIEW — miroir des positions dans resized() (yFlow = kHeaderH+561)
-        const int masterKeyY_p = kHeaderH + 561;
-        const int viewBtnY_p   = kHeaderH + 591;
+        // Labels KEY et VIEW — miroir des positions dans resized() (yFlow = kHeaderH+585)
+        const int masterKeyY_p = kHeaderH + 585;
+        const int viewBtnY_p   = kHeaderH + 615;
         g.drawText("KEY",  sidebarX + 12, masterKeyY_p - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
         g.drawText("VIEW", sidebarX + 12, viewBtnY_p   - 11, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
 
-        // EWI SYNTH section (yFlow after PLAY = kHeaderH+679)
-        g.drawText("EWI SYNTH",  sidebarX + 12, kHeaderH + 679, kSidebarW - 24, 10,
+        // EWI SYNTH section (yFlow after PLAY = kHeaderH+703)
+        g.drawText("EWI SYNTH",  sidebarX + 12, kHeaderH + 703, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
-        g.drawText("EWI DEVICE", sidebarX + 12, kHeaderH + 733, kSidebarW - 24, 10,
+        g.drawText("EWI DEVICE", sidebarX + 12, kHeaderH + 757, kSidebarW - 24, 10,
                    juce::Justification::centredLeft);
     }
 
@@ -2107,14 +2108,15 @@ void MainComponent::resized()
         int y = kHeaderH + 436;
         sceneUpBtn_   .setBounds(sbBtnX, y, sbBtnW, 26); y += 28;
         sceneNumLabel_.setBounds(sbBtnX, y, sbBtnW, 18); y += 20;
-        sceneDownBtn_ .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
-        sceneResetBtn_.setBounds(sbBtnX, y, sbBtnW, 22); // pleine largeur
+        sceneDownBtn_        .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
+        transitionStatusBar_ .setBounds(sbBtnX, y, sbBtnW, 22); y += 24;
+        sceneResetBtn_       .setBounds(sbBtnX, y, sbBtnW, 22); // pleine largeur
         y += 25;
         sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);
 
         // ── Section sous COPY : KEY/MODE, clavier/portée, PLAY, nuage IA ──
-        // yFlow = kHeaderH + 436 + 26+28+18+20+26+30+22+25+22 + 8 = kHeaderH + 561
-        int yFlow = kHeaderH + 561;
+        // yFlow = kHeaderH + 436 + 28+20+30+24+25+22 + 0 = kHeaderH + 585
+        int yFlow = kHeaderH + 585;
 
         const int halfW = sbBtnW / 2 - 2;
 
@@ -2565,9 +2567,11 @@ void MainComponent::updateSidebarBpm(float bpm)
 
 void MainComponent::updateSceneLabel()
 {
-    sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
+    const int idx = facade_.currentSceneIdx();
+    sceneNumLabel_.setText("Scene " + juce::String(idx + 1) +
                            " / " + juce::String(kMaxScenes),
                            juce::dontSendNotification);
+    transitionStatusBar_.setSelectedScene(idx);
 }
 
 void MainComponent::captureCurrentScene()
@@ -3134,6 +3138,7 @@ void MainComponent::navigateScene(int delta)
     sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
+    transitionStatusBar_.setSelectedScene(target);
 }
 
 void MainComponent::resetCurrentScene()

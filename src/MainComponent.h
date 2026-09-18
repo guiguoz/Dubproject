@@ -14,6 +14,7 @@
 #include "ui/SpatialVisualization.h"
 #include "ui/StepSequencerPanel.h"
 #include "ui/PixelCloudComponent.h"
+#include "ui/TransitionStatusBar.h"
 
 #include <JuceHeader.h>
 #include <atomic>
@@ -153,6 +154,7 @@ private:
     juce::Label             sidebarBpmLabel_;
     ui::PixelCloudComponent aiCloud_;
     void                    triggerAI();
+    ui::TransitionStatusBar transitionStatusBar_ { facade_ };
 
     // ── Dub Delay global bus ───────────────────────────────────────────────────
     juce::ToggleButton dubDelayEnableBtn_;
