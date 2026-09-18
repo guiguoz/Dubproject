@@ -21,7 +21,9 @@
 #include <vector>
 
 //==============================================================================
-class MainComponent : public juce::AudioAppComponent, private juce::Timer
+class MainComponent : public juce::AudioAppComponent,
+                      private juce::Timer,
+                      private juce::ChangeListener
 {
   public:
     MainComponent();
@@ -40,6 +42,9 @@ class MainComponent : public juce::AudioAppComponent, private juce::Timer
 
     // ── Panic : coupe tous les slots + delays instantanément ─────────────────
     void triggerPanic() noexcept;
+
+    // ── TestTone debug 440 Hz (1 seconde, bypass moteur) ─────────────────────
+    void startTestTone() noexcept;
 
     //==========================================================================
     // Component
@@ -67,6 +72,9 @@ private:
     // Timer
     //==========================================================================
     void timerCallback() override;
+
+    // ChangeListener — audit ouvertures/fermetures device audio
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
     //==========================================================================
     // Moteur V2
@@ -215,11 +223,24 @@ private:
     bool panicArmed_       { false };
     uint8_t panicCC_       { 64 };   // CC#64 (sustain) par défaut — FCB1010 footswitch
 
+    int                audioOpenCount_  {0};   // nb fois prepareToPlay appelé (audit sessions)
+    int                audioCloseCount_ {0};   // nb fois releaseResources appelé
+    // Snapshot du dernier setup connu — permet de détecter un restart (config changée)
+    juce::AudioDeviceManager::AudioDeviceSetup lastKnownSetup_ {};
+
     std::atomic<float> currentRmsLevel_{0.0f};
     std::atomic<float> currentOutputRmsLevel_{0.0f};
     std::atomic<float> outputGain_     {1.0f};
     double             currentSampleRate_{0.0};
     int                currentBufferSize_{0};
+
+    // ── Diag post-device ──────────────────────────────────────────────────────
+    static constexpr int kMaxDiagOutCh = 8;
+    std::atomic<float>   diagOutPeak_[kMaxDiagOutCh] {};   // max peak par canal depuis dernier read
+    std::atomic<bool>    testToneActive_  {false};
+    std::atomic<bool>    testToneLogged_  {false};          // audio→msg : tone terminé
+    float                testTonePhase_   {0.f};            // audio thread uniquement
+    std::atomic<int>     testToneSamplesLeft_ {0};
 
     // ── Performance: VU dB cache (U2) ────────────────────────────────────────
     float cachedDbIn_  = -60.f;

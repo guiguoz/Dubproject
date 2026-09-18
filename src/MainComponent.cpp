@@ -668,6 +668,7 @@ MainComponent::MainComponent()
 
     setSize(1280, 900);
     setAudioChannels(1, 2);
+    deviceManager.addChangeListener(this);   // audit ouvertures device
     midiManager_.start(deviceManager);
     startTimerHz(30);
 }
@@ -679,6 +680,7 @@ MainComponent::~MainComponent()
     saxOsLookAndFeel_.reset();
     stopTimer();
     midiManager_.stop();
+    deviceManager.removeChangeListener(this);
     shutdownAudio();
 }
 
@@ -1074,6 +1076,15 @@ void MainComponent::openAudioSettings()
     options.launchAsync();
 }
 
+void MainComponent::startTestTone() noexcept
+{
+    const int sr = static_cast<int>(currentSampleRate_ > 0 ? currentSampleRate_ : 44100.0);
+    testToneSamplesLeft_.store(sr, std::memory_order_relaxed);
+    testToneLogged_.store(false, std::memory_order_relaxed);
+    testToneActive_.store(true,  std::memory_order_relaxed);
+    juce::Logger::writeToLog("[DIAG] startTestTone 440Hz (1s, sr=" + juce::String(sr) + ")");
+}
+
 void MainComponent::triggerPanic() noexcept
 {
     facade_.stopAllSlots(engine::StopMode::Instant);
@@ -1312,6 +1323,7 @@ void MainComponent::triggerAI()
 
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
+    ++audioOpenCount_;
     currentSampleRate_ = sampleRate;
     currentBufferSize_ = samplesPerBlockExpected;
 
@@ -1325,10 +1337,89 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
 
     serumSnapBuf_.assign(samplesPerBlockExpected, 0.f);
 
-    juce::Logger::writeToLog(juce::String("Audio prepared: ") + juce::String(sampleRate) +
-                             " Hz, buffer " + juce::String(samplesPerBlockExpected) + " samples (" +
-                             juce::String(1000.0 * samplesPerBlockExpected / sampleRate, 1) +
-                             " ms)");
+    {
+        juce::AudioDeviceManager::AudioDeviceSetup setup;
+        deviceManager.getAudioDeviceSetup(setup);
+        auto* dev = deviceManager.getCurrentAudioDevice();
+        const juce::String uid = dev
+            ? (setup.outputDeviceName + "@" + dev->getTypeName())
+            : setup.outputDeviceName;
+        const auto outCh = setup.outputChannels;
+        juce::String chList;
+        const int highBit = outCh.getHighestBit();
+        for (int b = 0; b <= highBit; ++b)
+            if (outCh[b]) chList += juce::String(b) + " ";
+        juce::Logger::writeToLog("[AUDIO_DEVICE] prepareToPlay #" + juce::String(audioOpenCount_)
+            + "  uid=\"" + uid + "\""
+            + "  sr=" + juce::String(sampleRate, 0)
+            + "  buf=" + juce::String(samplesPerBlockExpected)
+            + " (" + juce::String(1000.0 * samplesPerBlockExpected / sampleRate, 1) + " ms)"
+            + "  activeOutMask=0x" + juce::String::toHexString(static_cast<int>(outCh.toInteger()))
+            + "  nCh=" + juce::String(outCh.countNumberOfSetBits())
+            + "  chIdx=[" + chList.trimEnd() + "]"
+            + "  closeCount=" + juce::String(audioCloseCount_));
+    }
+}
+
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* /*source*/)
+{
+    // Snapshot du setup courant — permet de détecter un restart (config changée)
+    juce::AudioDeviceManager::AudioDeviceSetup newSetup;
+    deviceManager.getAudioDeviceSetup(newSetup);
+
+    auto* dev = deviceManager.getCurrentAudioDevice();
+
+    // Pseudo-UID : outputDeviceName@typeName — stable tant que le device ne change pas
+    const juce::String uid = dev
+        ? (newSetup.outputDeviceName + "@" + dev->getTypeName())
+        : "(null)";
+
+    // Détecter si c'est un restart (setup a changé depuis la dernière notification)
+    const bool isRestart = lastKnownSetup_.outputDeviceName.isNotEmpty()
+                        && (newSetup.outputDeviceName != lastKnownSetup_.outputDeviceName
+                            || newSetup.sampleRate    != lastKnownSetup_.sampleRate
+                            || newSetup.bufferSize    != lastKnownSetup_.bufferSize
+                            || newSetup.outputChannels != lastKnownSetup_.outputChannels);
+
+    const juce::String event = isRestart ? "RESTART" : "changed";
+
+    if (dev)
+    {
+        const auto outCh = dev->getActiveOutputChannels();
+        juce::String chList;
+        const int highBit = outCh.getHighestBit();
+        for (int b = 0; b <= highBit; ++b)
+            if (outCh[b]) chList += juce::String(b) + " ";
+
+        juce::Logger::writeToLog(
+            "[AUDIO_DEVICE] " + event
+            + "  uid=\"" + uid + "\""
+            + "  sr=" + juce::String(dev->getCurrentSampleRate(), 0)
+            + "  buf=" + juce::String(dev->getCurrentBufferSizeSamples())
+            + "  activeOutMask=0x" + juce::String::toHexString(static_cast<int>(outCh.toInteger()))
+            + "  nCh=" + juce::String(outCh.countNumberOfSetBits())
+            + "  chIdx=[" + chList.trimEnd() + "]"
+            + "  openCount=" + juce::String(audioOpenCount_)
+            + "  closeCount=" + juce::String(audioCloseCount_));
+
+        if (isRestart)
+            juce::Logger::writeToLog(
+                "[AUDIO_DEVICE] RESTART detail"
+                + juce::String("  prevDevice=\"") + lastKnownSetup_.outputDeviceName + "\""
+                + "  prevSr=" + juce::String(lastKnownSetup_.sampleRate, 0)
+                + "  prevBuf=" + juce::String(lastKnownSetup_.bufferSize)
+                + "  prevOutMask=0x" + juce::String::toHexString(
+                      static_cast<int>(lastKnownSetup_.outputChannels.toInteger())));
+    }
+    else
+    {
+        juce::Logger::writeToLog(
+            "[AUDIO_DEVICE] " + event + " — device=null (closed)"
+            + "  openCount=" + juce::String(audioOpenCount_)
+            + "  closeCount=" + juce::String(audioCloseCount_));
+    }
+
+    lastKnownSetup_ = newSetup;
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -1383,86 +1474,111 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         // ── Stereo path ───────────────────────────────────────────────────────
         float* right = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
 
-        // ── Serum gain rider (avant processStereo — Serum injecté dans la chaîne FX)
-        const float* serumMixL = nullptr;
-        const float* serumMixR = nullptr;
-        float        serumMixGain = 0.f;
-        if (serumHost_.isLoaded())
+        if (testToneActive_.load(std::memory_order_relaxed))
         {
-            const auto& sb = serumHost_.getOutputBuffer();
-            const float* sL = sb.getReadPointer(0);
-            const float* sR = sb.getReadPointer(1);
-
-            // Snapshot every 100 blocks for off-RT classification (timerCallback reads)
-            if (++serumAnalysisCounter_ >= 100)
+            // ── TestTone 440 Hz : bypass moteur, écriture directe sur canaux 0/1 ──
+            bufferToFill.clearActiveBufferRegion();
+            const float step = juce::MathConstants<float>::twoPi * 440.f
+                               / static_cast<float>(device->getCurrentSampleRate());
+            for (int i = 0; i < numSamples; ++i)
             {
-                serumAnalysisCounter_ = 0;
-                if (numSamples <= static_cast<int>(serumSnapBuf_.size()))
+                const float s = 0.25f * std::sin(testTonePhase_);
+                left[i]  = s;
+                right[i] = s;
+                testTonePhase_ += step;
+                if (testTonePhase_ >= juce::MathConstants<float>::twoPi)
+                    testTonePhase_ -= juce::MathConstants<float>::twoPi;
+            }
+            const int rem = testToneSamplesLeft_.fetch_sub(numSamples, std::memory_order_relaxed);
+            if (rem <= numSamples)
+            {
+                testToneActive_.store(false, std::memory_order_relaxed);
+                testToneLogged_.store(true,  std::memory_order_relaxed);
+            }
+        }
+        else
+        {
+            // ── Serum gain rider (avant processStereo — Serum injecté dans la chaîne FX)
+            const float* serumMixL = nullptr;
+            const float* serumMixR = nullptr;
+            float        serumMixGain = 0.f;
+            if (serumHost_.isLoaded())
+            {
+                const auto& sb = serumHost_.getOutputBuffer();
+                const float* sL = sb.getReadPointer(0);
+                const float* sR = sb.getReadPointer(1);
+
+                // Snapshot every 100 blocks for off-RT classification (timerCallback reads)
+                if (++serumAnalysisCounter_ >= 100)
                 {
-                    juce::SpinLock::ScopedTryLockType sl(serumSnapLock_);
-                    if (sl.isLocked())
+                    serumAnalysisCounter_ = 0;
+                    if (numSamples <= static_cast<int>(serumSnapBuf_.size()))
                     {
-                        for (int i = 0; i < numSamples; ++i)
-                            serumSnapBuf_[i] = (sL[i] + sR[i]) * 0.5f;
-                        serumSnapReady_ = true;
+                        juce::SpinLock::ScopedTryLockType sl(serumSnapLock_);
+                        if (sl.isLocked())
+                        {
+                            for (int i = 0; i < numSamples; ++i)
+                                serumSnapBuf_[i] = (sL[i] + sR[i]) * 0.5f;
+                            serumSnapReady_ = true;
+                        }
                     }
                 }
+
+                // Target RMS — volontairement en dessous du sampler pour ne pas masquer
+                float targetRms;
+                switch (serumContentType_.load(std::memory_order_relaxed))
+                {
+                    case engine::analysis::ContentCategory::BASS:  targetRms = 0.055f; break; // ~-25 dBFS
+                    case engine::analysis::ContentCategory::PAD:   targetRms = 0.063f; break; // ~-24 dBFS
+                    default:                            targetRms = 0.075f; break; // ~-22 dBFS (SYNTH/lead)
+                }
+
+                // Measure Serum RMS this block
+                float sumSq = 0.f;
+                for (int i = 0; i < numSamples; ++i)
+                    sumSq += (sL[i] * sL[i] + sR[i] * sR[i]) * 0.5f;
+                const float serumRms = std::sqrt(sumSq / static_cast<float>(numSamples));
+
+                // Gain rider: drive toward targetRms, duck when sampler is loud
+                float targetGain = (serumRms > 0.001f) ? targetRms / serumRms : 1.f;
+                const float mixRms = facade_.getMasterRms();
+                if (mixRms > 0.08f)
+                    targetGain *= std::max(0.5f, 1.f - (mixRms - 0.08f) * 2.5f);
+                // Clamp serré : pas de boost gratuit au-dessus de l'unité
+                targetGain = std::clamp(targetGain, 0.25f, 1.0f);
+
+                // EMA smooth (~150 ms) — prevents gain pumping
+                static constexpr float kAlpha = 0.997f;
+                const float prevG = serumGainSmooth_.load(std::memory_order_relaxed);
+                const float newG  = kAlpha * prevG + (1.f - kAlpha) * targetGain;
+                serumGainSmooth_.store(newG, std::memory_order_relaxed);
+                const float g = newG * serumUserGain_.load(std::memory_order_relaxed);
+
+                // Garder les pointeurs pour le bus Serum du moteur V2.
+                serumMixL = sL;
+                serumMixR = sR;
+                serumMixGain = g;
             }
 
-            // Target RMS — volontairement en dessous du sampler pour ne pas masquer
-            float targetRms;
-            switch (serumContentType_.load(std::memory_order_relaxed))
-            {
-                case engine::analysis::ContentCategory::BASS:  targetRms = 0.055f; break; // ~-25 dBFS
-                case engine::analysis::ContentCategory::PAD:   targetRms = 0.063f; break; // ~-24 dBFS
-                default:                            targetRms = 0.075f; break; // ~-22 dBFS (SYNTH/lead)
-            }
+            facade_.processBlock(left, right, numSamples,
+                                 v2InputScratchL_.data(), v2InputScratchR_.data(),
+                                 serumMixL, serumMixR, serumMixGain);
 
-            // Measure Serum RMS this block
-            float sumSq = 0.f;
-            for (int i = 0; i < numSamples; ++i)
-                sumSq += (sL[i] * sL[i] + sR[i] * sR[i]) * 0.5f;
-            const float serumRms = std::sqrt(sumSq / static_cast<float>(numSamples));
+            // Apply master output gain to both channels
+            const float outGain = outputGain_.load(std::memory_order_relaxed);
+            if (outGain != 1.0f)
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    left [i] *= outGain;
+                    right[i] *= outGain;
+                }
 
-            // Gain rider: drive toward targetRms, duck when sampler is loud
-            float targetGain = (serumRms > 0.001f) ? targetRms / serumRms : 1.f;
-            const float mixRms = facade_.getMasterRms();
-            if (mixRms > 0.08f)
-                targetGain *= std::max(0.5f, 1.f - (mixRms - 0.08f) * 2.5f);
-            // Clamp serré : pas de boost gratuit au-dessus de l'unité
-            targetGain = std::clamp(targetGain, 0.25f, 1.0f);
-
-            // EMA smooth (~150 ms) — prevents gain pumping
-            static constexpr float kAlpha = 0.997f;
-            const float prevG = serumGainSmooth_.load(std::memory_order_relaxed);
-            const float newG  = kAlpha * prevG + (1.f - kAlpha) * targetGain;
-            serumGainSmooth_.store(newG, std::memory_order_relaxed);
-            const float g = newG * serumUserGain_.load(std::memory_order_relaxed);
-
-            // Garder les pointeurs pour le bus Serum du moteur V2.
-            serumMixL = sL;
-            serumMixR = sR;
-            serumMixGain = g;
+            // Copy right to any additional channels (surround)
+            for (int ch = 2; ch < numCh; ++ch)
+                bufferToFill.buffer->copyFrom(ch, bufferToFill.startSample,
+                                              *bufferToFill.buffer, 1,
+                                              bufferToFill.startSample, numSamples);
         }
-
-        facade_.processBlock(left, right, numSamples,
-                             v2InputScratchL_.data(), v2InputScratchR_.data(),
-                             serumMixL, serumMixR, serumMixGain);
-
-        // Apply master output gain to both channels
-        const float outGain = outputGain_.load(std::memory_order_relaxed);
-        if (outGain != 1.0f)
-            for (int i = 0; i < numSamples; ++i)
-            {
-                left [i] *= outGain;
-                right[i] *= outGain;
-            }
-
-        // Copy right to any additional channels (surround)
-        for (int ch = 2; ch < numCh; ++ch)
-            bufferToFill.buffer->copyFrom(ch, bufferToFill.startSample,
-                                          *bufferToFill.buffer, 1,
-                                          bufferToFill.startSample, numSamples);
 
         // Output RMS on left channel
         {
@@ -1479,27 +1595,49 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     else
     {
         // ── Mono fallback path ────────────────────────────────────────────────
-        // Bus Serum (même gain rider que le chemin stéréo) → rendu par le graphe,
-        // qui applique aussi le MasterLimiter en interne.
-        const float* serumL = nullptr;
-        const float* serumR = nullptr;
-        float        serumGain = 0.f;
-        if (serumHost_.isLoaded())
+        if (testToneActive_.load(std::memory_order_relaxed))
         {
-            const auto& sb = serumHost_.getOutputBuffer();
-            serumL = sb.getReadPointer(0);
-            serumR = sb.getReadPointer(1);
-            serumGain = serumGainSmooth_.load(std::memory_order_relaxed)
-                       * serumUserGain_.load(std::memory_order_relaxed);
-        }
-        facade_.processBlock(left, left, numSamples,
-                             v2InputScratchL_.data(), v2InputScratchR_.data(),
-                             serumL, serumR, serumGain);
-
-        const float outGain = outputGain_.load(std::memory_order_relaxed);
-        if (outGain != 1.0f)
+            bufferToFill.clearActiveBufferRegion();
+            const float step = juce::MathConstants<float>::twoPi * 440.f
+                               / static_cast<float>(device->getCurrentSampleRate());
             for (int i = 0; i < numSamples; ++i)
-                left[i] *= outGain;
+            {
+                left[i] = 0.25f * std::sin(testTonePhase_);
+                testTonePhase_ += step;
+                if (testTonePhase_ >= juce::MathConstants<float>::twoPi)
+                    testTonePhase_ -= juce::MathConstants<float>::twoPi;
+            }
+            const int rem = testToneSamplesLeft_.fetch_sub(numSamples, std::memory_order_relaxed);
+            if (rem <= numSamples)
+            {
+                testToneActive_.store(false, std::memory_order_relaxed);
+                testToneLogged_.store(true,  std::memory_order_relaxed);
+            }
+        }
+        else
+        {
+            // Bus Serum (même gain rider que le chemin stéréo) → rendu par le graphe,
+            // qui applique aussi le MasterLimiter en interne.
+            const float* serumL = nullptr;
+            const float* serumR = nullptr;
+            float        serumGain = 0.f;
+            if (serumHost_.isLoaded())
+            {
+                const auto& sb = serumHost_.getOutputBuffer();
+                serumL = sb.getReadPointer(0);
+                serumR = sb.getReadPointer(1);
+                serumGain = serumGainSmooth_.load(std::memory_order_relaxed)
+                           * serumUserGain_.load(std::memory_order_relaxed);
+            }
+            facade_.processBlock(left, left, numSamples,
+                                 v2InputScratchL_.data(), v2InputScratchR_.data(),
+                                 serumL, serumR, serumGain);
+
+            const float outGain = outputGain_.load(std::memory_order_relaxed);
+            if (outGain != 1.0f)
+                for (int i = 0; i < numSamples; ++i)
+                    left[i] *= outGain;
+        }
 
         // Compute Output RMS
         {
@@ -1513,14 +1651,31 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                                          std::memory_order_relaxed);
         }
     }
+
+    // ── Diag post-device : peak max par canal de sortie ──────────────────────
+    {
+        const int n = std::min(numCh, static_cast<int>(kMaxDiagOutCh));
+        for (int ch = 0; ch < n; ++ch)
+        {
+            const float* p = bufferToFill.buffer->getReadPointer(ch, bufferToFill.startSample);
+            float pk = 0.f;
+            for (int i = 0; i < numSamples; ++i) pk = std::max(pk, std::abs(p[i]));
+            float prev = diagOutPeak_[ch].load(std::memory_order_relaxed);
+            while (pk > prev &&
+                   !diagOutPeak_[ch].compare_exchange_weak(
+                       prev, pk, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+        }
+    }
 }
 
 void MainComponent::releaseResources()
 {
+    ++audioCloseCount_;
     serumHost_.setProcessingEnabled(false);
     facade_.stopMixThread();
     facade_.releaseResources();
-    juce::Logger::writeToLog("Audio resources released.");
+    juce::Logger::writeToLog("[AUDIO_DEVICE] releaseResources #" + juce::String(audioCloseCount_)
+        + "  openCount=" + juce::String(audioOpenCount_));
 }
 
 void MainComponent::loadSerumPlugin(const juce::String& vst3Path)
@@ -2147,6 +2302,57 @@ void MainComponent::timerCallback()
             }
         }
         juce::Logger::writeToLog("[DIAG] ==========================================");
+
+        // ── Post-device peaks + info device ───────────────────────────────────
+        {
+            juce::String peakStr = "[DIAG]   outPeak:";
+            for (int ch = 0; ch < kMaxDiagOutCh; ++ch)
+                peakStr += " [" + juce::String(ch) + "]="
+                         + juce::String(diagOutPeak_[ch].exchange(0.f, std::memory_order_relaxed), 4);
+            juce::Logger::writeToLog(peakStr);
+
+            if (auto* dev = deviceManager.getCurrentAudioDevice())
+            {
+                const auto outCh = dev->getActiveOutputChannels();
+                juce::String chList;
+                const int highBit = outCh.getHighestBit();
+                for (int b = 0; b <= highBit; ++b)
+                    if (outCh[b]) chList += juce::String(b) + " ";
+                juce::Logger::writeToLog(
+                    "[DIAG]   device=\"" + dev->getName() + "\""
+                    + "  sr=" + juce::String(dev->getCurrentSampleRate(), 0)
+                    + "  buf=" + juce::String(dev->getCurrentBufferSizeSamples())
+                    + "  activeOutMask=0x" + juce::String::toHexString(
+                          static_cast<int>(outCh.toInteger()))
+                    + "  nCh=" + juce::String(outCh.countNumberOfSetBits())
+                    + "  chIdx=[" + chList.trimEnd() + "]");
+            }
+        }
+    }
+    // ── TestTone post-log ─────────────────────────────────────────────────────
+    if (testToneLogged_.exchange(false, std::memory_order_relaxed))
+    {
+        juce::String toneStr = "[DIAG]   testToneActive=1  outPeak:";
+        for (int ch = 0; ch < kMaxDiagOutCh; ++ch)
+            toneStr += " [" + juce::String(ch) + "]="
+                     + juce::String(diagOutPeak_[ch].exchange(0.f, std::memory_order_relaxed), 4);
+        juce::Logger::writeToLog(toneStr);
+        if (auto* dev = deviceManager.getCurrentAudioDevice())
+        {
+            const auto outCh = dev->getActiveOutputChannels();
+            juce::String chList;
+            const int highBit = outCh.getHighestBit();
+            for (int b = 0; b <= highBit; ++b)
+                if (outCh[b]) chList += juce::String(b) + " ";
+            juce::Logger::writeToLog(
+                "[DIAG]   device=\"" + dev->getName() + "\""
+                + "  sr=" + juce::String(dev->getCurrentSampleRate(), 0)
+                + "  buf=" + juce::String(dev->getCurrentBufferSizeSamples())
+                + "  activeOutMask=0x" + juce::String::toHexString(
+                      static_cast<int>(outCh.toInteger()))
+                + "  nCh=" + juce::String(outCh.countNumberOfSetBits())
+                + "  chIdx=[" + chList.trimEnd() + "]");
+        }
     }
     // ────────────────────────────────────────────────────────────────────────
 

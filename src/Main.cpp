@@ -125,6 +125,15 @@ public:
                     return true;
                 }
             }
+            // Ctrl+T : TestTone 440 Hz debug (1 seconde)
+            if (key == juce::KeyPress('t', juce::ModifierKeys::ctrlModifier, 0))
+            {
+                if (auto* mc = dynamic_cast<MainComponent*>(getContentComponent()))
+                {
+                    mc->startTestTone();
+                    return true;
+                }
+            }
             return DocumentWindow::keyPressed(key);
         }
 
