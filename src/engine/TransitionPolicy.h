@@ -7,6 +7,7 @@
 namespace engine {
 
 enum class PolicyType : uint8_t { Direct = 0, Build = 1, Breakdown = 2 };
+enum class PolicyMode : uint8_t { V1 = 0, V2 = 1 };
 
 struct PolicyContext {
     double  sampleRate = 44100.0;
@@ -21,6 +22,9 @@ public:
     // Pour diagnostic : forcer DIRECT (élimine BUILD/BREAKDOWN du test)
     static void setForceDirect(bool v) noexcept { forceDirect_ = v; }
     static bool isForceDirect() noexcept { return forceDirect_; }
+
+    static void setPolicyMode(PolicyMode m) noexcept { policyMode_ = m; }
+    static PolicyMode getPolicyMode() noexcept { return policyMode_; }
 
     // Choix déterministe basé sur ENTER/LEAVE nets (pas sur nombre brut de slots).
     // KEEP est sacré et ne compte pas. Replace (même slot asset différent) compte
@@ -40,6 +44,7 @@ public:
 
 private:
     static inline bool forceDirect_ = false;
+    static inline PolicyMode policyMode_ = PolicyMode::V1;
 };
 
 } // namespace engine

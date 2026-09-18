@@ -98,6 +98,7 @@ add_executable(EngineTests
     engine/test_transition_plan.cpp
     engine/test_plan_direct.cpp
     engine/test_transition_policy.cpp
+    engine/test_transition_policy_v2.cpp
     engine/test_scene_display.cpp
     engine/test_build_ownership.cpp
     engine/test_pattern_ownership.cpp

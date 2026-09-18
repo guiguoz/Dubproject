@@ -90,7 +90,8 @@ void buildDirectPlan(const SceneData& from, const SceneData& to,
         sp.semitones = b.semitones;
         sp.mode = static_cast<uint8_t>(b.mode);
         sp.muted = b.muted;
-        sp.role = static_cast<uint8_t>(b.role);
+        // LEAVE : le slot disparaît (b inactif) → conserver le rôle courant (a) pour le scheduling
+        sp.role = static_cast<uint8_t>(inA && !inB ? a.role : b.role);
 
         // Cas particulier : même slot, asset différent → on doit faire LEAVE (A) puis ENTER (B)
         // On modélise comme Enter avec deux phases, mais l'action unique ne suffit pas.
