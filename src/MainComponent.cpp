@@ -250,8 +250,16 @@ MainComponent::MainComponent()
     {
         // Moteur V2 : l'import lit/analyse le fichier (rôles, BPM, tonalité)
         // et charge le PCM dans SlotPlayer. L'UI est notifiée une fois l'analyse prête.
-        facade_.importSampleAsync(slot, path, [this](int s, const engine::AnalysisResult&) {
-            juce::MessageManager::callAsync([this, s] {
+        // sceneIdx capturé maintenant pour écrire dans la bonne scène même si l'utilisateur
+        // navigue pendant l'import async.
+        const int sceneIdx = facade_.currentSceneIdx();
+        facade_.importSampleAsync(slot, path, [this, path, sceneIdx](int s, const engine::AnalysisResult&) {
+            juce::MessageManager::callAsync([this, s, path, sceneIdx] {
+                // Persister le filePath dans sceneStore_ : applyScene peut ainsi restaurer
+                // le sample lors d'une navigation stopped sans passer par captureCurrentScene().
+                auto& sc2 = sceneStore_.getScene(sceneIdx);
+                sc2.slots[static_cast<std::size_t>(s)].filePath = path;
+                sc2.used = true;
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                 stepSeqPanel_->updateRoleStatus(s);
@@ -266,9 +274,11 @@ MainComponent::MainComponent()
         facade_.setStep(track, step, active);
         facade_.flipPatternBuffer();
         // SceneDefinition est la source de vérité — mise à jour immédiate au clic.
-        if (track >= 0 && track < engine::kMaxSlots && step >= 0 && step < engine::kMaxSteps)
-            sceneStore_.getScene(facade_.currentSceneIdx())
-                .steps[static_cast<std::size_t>(track)][static_cast<std::size_t>(step)] = active;
+        if (track >= 0 && track < engine::kMaxSlots && step >= 0 && step < engine::kMaxSteps) {
+            auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+            sc.steps[static_cast<std::size_t>(track)][static_cast<std::size_t>(step)] = active;
+            if (active) sc.used = true;  // pour compatibilité sérialisation
+        }
     };
 
     // Slot cleared: unload PCM and clear engine state
@@ -2685,7 +2695,7 @@ void MainComponent::syncV2Scene(int idx) noexcept
     auto&       es  = facade_.scene(idx);
 
     es.bpm  = sc.bpm;
-    es.used = sc.used;
+    es.used = sc.isUsedDerived();
     es.serumGain       = sc.serumGain;
     es.serumState      = sc.serumState;
     es.serumPresetName = sc.serumPresetName;
@@ -2770,7 +2780,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
                     writePatternCRC ^= static_cast<uint32_t>(t * 512u + static_cast<uint32_t>(s2) + 1u);
 
         juce::Logger::writeToLog("[DIAG] SCENE_SOURCES idx=" + juce::String(idx)
-            + " used=" + juce::String((int)sc.used)
+            + " usedStored=" + juce::String((int)sc.used)
+            + " usedDerived=" + juce::String((int)sc.isUsedDerived())
             + " storeCRC=0x" + juce::String::toHexString(storeCRC)
             + " barCRC=0x" + juce::String::toHexString(barCRC)
             + " engineSceneCRC=0x" + juce::String::toHexString(engineSceneCRC)
@@ -2801,7 +2812,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
     facade_.setCurrentScene(idx);
     stepSeqPanel_->updateAllRoleStatus();
 
-    if (!sc.used)
+    if (!sc.isUsedDerived())
     {
         // Empty scene: clear step patterns and reset all gains to unity
         for (int i = 0; i < 9; ++i)
@@ -3194,7 +3205,7 @@ void MainComponent::copyCurrentSceneToNext()
     int itemId = 1;
     for (int i = 0; i < kMaxScenes; ++i)
     {
-        if (i == facade_.currentSceneIdx() || !sceneStore_.getScene(i).used)
+        if (i == facade_.currentSceneIdx() || !sceneStore_.getScene(i).isUsedDerived())
             { ++itemId; continue; }
         menu.addItem(itemId, "Scene " + juce::String(i + 1));
         ++itemId;

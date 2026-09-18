@@ -166,3 +166,53 @@ TEST_CASE("T-NAVNOCAP-3: nav playing A->B->A avec policy V2 — SceneDefinition.
     REQUIRE(stepCRC(a) == crcA);
     REQUIRE(stepCRC(b) == crcB);
 }
+
+// ── T-NAVNOCAP-4 ──────────────────────────────────────────────────────────────
+TEST_CASE("T-NAVNOCAP-4: isUsedDerived() — steps ou filePath → true, vide → false",
+          "[nav][nocapture][used]")
+{
+    // Scène vide : aucun step, aucun filePath, used=false
+    SceneData empty;
+    empty.used = false;
+    REQUIRE(empty.isUsedDerived() == false);
+
+    // Scène avec steps mais used=false stocké (cas qui causait le bug)
+    SceneData withSteps = makeActiveScene("A", 4);
+    withSteps.used = false;
+    REQUIRE(withSteps.isUsedDerived() == true);
+
+    // Scène avec filePath uniquement, sans steps, used=false
+    SceneData withPath;
+    withPath.used = false;
+    withPath.slots[0].filePath = "drum.wav";
+    REQUIRE(withPath.isUsedDerived() == true);
+
+    // Scène avec used=true mais contenu vide → dérivé = false
+    SceneData staleUsed;
+    staleUsed.used = true;
+    REQUIRE(staleUsed.isUsedDerived() == false);
+}
+
+// ── T-NAVNOCAP-5 ──────────────────────────────────────────────────────────────
+TEST_CASE("T-NAVNOCAP-5: stepCRC non nul pour scène active, indépendamment de usedStored",
+          "[nav][nocapture][used]")
+{
+    SceneData sc = makeActiveScene("A", 4);
+    sc.used = false;  // used non positionné (scène non capturée, cas du bug)
+
+    REQUIRE(sc.isUsedDerived() == true);
+    REQUIRE(sc.steps[0][0] == true);
+
+    const uint32_t crc0 = stepCRC(sc);
+    REQUIRE(crc0 != 0u);
+
+    // buildDirectPlan + apply ne modifient pas les steps même si used=false
+    SceneData b = makeActiveScene("B", 6);
+    SceneTransitionPlan plan;
+    buildDirectPlan(sc, b, 0, 1, 50000, 44100.0, plan);
+    PolicyContext ctx{44100.0, 120.0, 4, 4, 50000};
+    TransitionPolicy::apply(plan, ctx);
+
+    REQUIRE(stepCRC(sc) == crc0);
+    REQUIRE(sc.isUsedDerived() == true);
+}

@@ -57,6 +57,17 @@ struct SceneData {
 
     std::array<int, kMaxSlots> playModeOverrides = {-1,-1,-1,-1,-1,-1,-1,-1,-1}; // -1=auto, 0=OneShot, 1=Free, 2=LoopSync
     bool         used             = false;
+
+    // Dérivé du contenu réel — source de vérité pour l'UI et le moteur.
+    // Ne pas utiliser `used` (stored) pour des décisions runtime.
+    bool isUsedDerived() const noexcept {
+        for (std::size_t i = 0; i < static_cast<std::size_t>(kMaxSlots); ++i) {
+            if (!slots[i].filePath.empty()) return true;
+            for (std::size_t s = 0; s < 512u; ++s)
+                if (steps[i][s]) return true;
+        }
+        return false;
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
