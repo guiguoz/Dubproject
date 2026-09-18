@@ -441,7 +441,7 @@ MainComponent::MainComponent()
     stepSeqPanel_->onTrackPasteRequest = [this](int slot)
     {
         if (!trackClipboard_.valid) return;
-        captureCurrentScene();
+        captureCurrentScene(CaptureReason::UserAction);
         const auto& cb = trackClipboard_;
 
         // Pattern
@@ -908,7 +908,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     data.masterKeySetByUser = masterKeySetByUser_;
 
     // ── Scenes ────────────────────────────────────────────────────────────
-    captureCurrentScene();
+    captureCurrentScene(CaptureReason::Save);
     data.currentScene = facade_.currentSceneIdx();
     for (int si = 0; si < kMaxScenes; ++si)
     {
@@ -2574,8 +2574,15 @@ void MainComponent::updateSceneLabel()
     transitionStatusBar_.setSelectedScene(idx);
 }
 
-void MainComponent::captureCurrentScene()
+void MainComponent::captureCurrentScene(CaptureReason reason)
 {
+    // Seuls UserAction et Save sont autorisés — jamais depuis navigateScene().
+    // Steps et trackBarCounts sont la source de vérité dans SceneDefinition (onStepChanged/onTrackBarCountChanged).
+    // Un appel nav écraserait filePaths/gains avec des valeurs stales du panel UI.
+    jassert(reason == CaptureReason::UserAction || reason == CaptureReason::Save);
+    juce::Logger::writeToLog("[CAPTURE] reason=" + juce::String(static_cast<int>(reason))
+        + " scene=" + juce::String(facade_.currentSceneIdx()));
+
     auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
     sc.bpm  = facade_.getBpm();
     sc.used = true;
@@ -3103,7 +3110,8 @@ void MainComponent::navigateScene(int delta)
         juce::Logger::writeToLog("[DIAG] nav stopped " + juce::String(oldIdx) + "->" + juce::String(target)
             + " hasPend=" + juce::String((int)facade_.hasPendingTransition())
             + " teState=" + juce::String(facade_.transitionStateRaw()));
-        captureCurrentScene();
+        // captureCurrentScene() retiré — steps/trackBarCounts déjà dans SceneDefinition (onStepChanged).
+        // Écrire filePaths/gains depuis le panel ici risque d'écraser MC_store avec des valeurs stales.
         facade_.setCurrentScene(target);
         applyScene(target, oldIdx);
         updateSceneLabel();
@@ -3117,9 +3125,8 @@ void MainComponent::navigateScene(int delta)
     }
 
     // Séquenceur en lecture : PREPARE → COMMIT (DIRECT)
-    // Capturer la scène courante MAINTENANT, pendant que activeBuf_ contient encore
-    // l'ancien step buffer.
-    captureCurrentScene();
+    // captureCurrentScene() retiré — steps/trackBarCounts déjà dans SceneDefinition.
+    // Les gains/mutes/filePaths sont mis à jour live par onVolumeChanged, onStepChanged, etc.
 
     // DIRECT : PREPARE complet (diff par AssetId, précharge ENTER, readiness gate).
     // Si tous les ENTER sont prêts, le plan est armé et le pattern est stagé à la

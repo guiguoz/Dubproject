@@ -296,7 +296,8 @@ private:
     void doAutosave();
 
     // Scene management
-    void captureCurrentScene();
+    enum class CaptureReason : uint8_t { UserAction = 0, Save = 1 };
+    void captureCurrentScene(CaptureReason reason = CaptureReason::UserAction);
     void applyScene(int idx, int fromIdx = -1);
     void refreshSceneEditorFromDefinition(int sceneIndex) noexcept;
     void navigateScene(int delta);
