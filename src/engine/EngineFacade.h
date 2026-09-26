@@ -296,6 +296,12 @@ public:
     // Prépare le plan DIRECT A→B, précharge les ENTER, vérifie readiness.
     // Retourne true si plan prêt à être armé (tous ENTER préchargés).
     bool prepareDirectPlan(int fromIdx, int toIdx) noexcept;
+
+    // ── DUB modifier ──────────────────────────────────────────────────────────
+    // Contrôle l'activation du modificateur DUB AUTO (throw delay sur LEAVE).
+    // Auto (défaut) : activé si churn >= 5 ou continuité < 35% et churn >= 3.
+    void setDubMode(DubMode mode) noexcept { dubMode_ = mode; }
+    DubMode getDubMode() const noexcept { return dubMode_; }
     bool hasTransitionPlan() const noexcept { return transitionPlanValid_.load(std::memory_order_acquire); }
     const SceneTransitionPlan& transitionPlan() const noexcept { return transitionPlan_; }
     void clearTransitionPlan() noexcept { transitionPlanValid_.store(false, std::memory_order_release); transitionPlan_.valid = false; }
@@ -466,6 +472,7 @@ private:
     SceneTransitionPlan transitionPlan_ = {};
     std::atomic<bool>   transitionPlanValid_ {false};
     TransitionTrace     transitionTrace_ = {};
+    DubMode             dubMode_         { DubMode::Auto };
 
     // ── Morphing PingPongDelay (Tier 2 — Phase 4a) ────────────────────────────
     struct MorphState

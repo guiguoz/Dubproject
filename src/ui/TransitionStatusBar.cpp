@@ -51,9 +51,11 @@ juce::String TransitionStatusBar::buildText(const engine::TransitionStatusSnapsh
 
     if (sn.pendingScene >= 0)
     {
-        const char* policyStr =
+        const char* policyBase =
             (sn.policy == 1) ? "BUILD" :
             (sn.policy == 2) ? "BRKDWN" : "DIRECT";
+        juce::String policyStr = policyBase;
+        if (sn.dubActive) policyStr += "+DUB";
 
         juce::String commitStr;
         if (sn.boundarySample >= 0 && sn.bpm > 0.0 && sn.sampleRate > 0.0)

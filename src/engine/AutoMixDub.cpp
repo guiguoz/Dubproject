@@ -59,6 +59,8 @@ void AutoMixDub::prepare(float sampleRate) noexcept
         lastDecisionDb_[s]    = 0.f;
         rmsAccum_[s]          = 0.f;
         rmsSamples_[s]        = 0;
+        dubSendOverride_[s]   = {};
+        dubSendActive_[s]     = false;
     }
     targets_ = {};
     for (int s = 0; s < kMaxSlots; ++s)
@@ -186,10 +188,36 @@ float AutoMixDub::advanceGainRamp(int slot, int numFrames) noexcept
     return currentGainLin_[slot];
 }
 
+// ─── scheduleSendRamp ────────────────────────────────────────────────────────
+void AutoMixDub::scheduleSendRamp(int slot, float toValue, int durSamples) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    dubSendOverride_[slot] = { currentDelaySend_[slot],
+                               std::clamp(toValue, 0.f, 1.f),
+                               std::max(1, durSamples) };
+    dubSendActive_[slot] = true;
+}
+
 // ─── advanceDelayRamp ────────────────────────────────────────────────────────
 float AutoMixDub::advanceDelayRamp(int slot, int numFrames) noexcept
 {
     if (slot < 0 || slot >= kMaxSlots) return 0.f;
+
+    if (dubSendActive_[slot]) {
+        SendRampOverride& ovr = dubSendOverride_[slot];
+        const int consumed = std::min(ovr.durLeft, numFrames);
+        if (consumed > 0) {
+            const float frac = static_cast<float>(consumed) / static_cast<float>(ovr.durLeft);
+            ovr.current += (ovr.target - ovr.current) * frac;
+            ovr.durLeft -= consumed;
+        }
+        if (ovr.durLeft <= 0) {
+            ovr.current = ovr.target;
+            dubSendActive_[slot] = false;
+        }
+        currentDelaySend_[slot] = ovr.current;
+        return currentDelaySend_[slot];
+    }
 
     float targetLin;
     {

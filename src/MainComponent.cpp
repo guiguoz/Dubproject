@@ -605,6 +605,26 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(dubDelayDivCombo_);
 
+    // ── DUB mode (Auto / Force / Off) ─────────────────────────────────────────
+    dubModeLabel_.setText("DUB AUTO", juce::dontSendNotification);
+    dubModeLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
+    dubModeLabel_.setColour(juce::Label::textColourId, juce::Colour(0xFF888888));
+    dubModeLabel_.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(dubModeLabel_);
+
+    dubModeCombo_.addItem("Auto",       1);
+    dubModeCombo_.addItem("Force DUB",  2);
+    dubModeCombo_.addItem("No DUB",     3);
+    dubModeCombo_.setSelectedId(1, juce::dontSendNotification);
+    dubModeCombo_.onChange = [this] {
+        const auto id = dubModeCombo_.getSelectedId();
+        const auto m = (id == 2) ? engine::DubMode::Force
+                     : (id == 3) ? engine::DubMode::Disable
+                                 : engine::DubMode::Auto;
+        facade_.setDubMode(m);
+    };
+    addAndMakeVisible(dubModeCombo_);
+
     static const char* kNoteNames[12] = {
         "C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"
     };
@@ -960,6 +980,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     data.dubDelayTone     = static_cast<float>(dubDelayToneSlider_    .getValue());
     data.dubDelayDrive    = static_cast<float>(dubDelayDriveSlider_   .getValue());
     data.dubDelayDiv      = dubDelayDivCombo_.getSelectedId() - 1;
+    data.dubMode          = dubModeCombo_.getSelectedId() - 1;
 
     // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
     data.midiLearnEntries.clear();
@@ -1278,6 +1299,13 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         facade_.delay().setTone    (data.dubDelayTone);
         facade_.delay().setDrive   (data.dubDelayDrive);
         facade_.delay().setDiv     (data.dubDelayDiv);
+    }
+
+    // ── v25 — DUB AUTO mode ───────────────────────────────────────────────────
+    if (data.version >= 25)
+    {
+        dubModeCombo_.setSelectedId(data.dubMode + 1, juce::dontSendNotification);
+        facade_.setDubMode(static_cast<engine::DubMode>(data.dubMode));
     }
 
     // ── v12 — MIDI learn bindings ─────────────────────────────────────────────
@@ -2116,6 +2144,12 @@ void MainComponent::resized()
         sceneNumLabel_.setBounds(sbBtnX, y, sbBtnW, 18); y += 20;
         sceneDownBtn_        .setBounds(sbBtnX, y, sbBtnW, 26); y += 30;
         transitionStatusBar_ .setBounds(sbBtnX, y, sbBtnW, 22); y += 24;
+        {
+            const int halfB = sbBtnW / 2 - 2;
+            dubModeLabel_.setBounds(sbBtnX,             y,  halfB, 12);
+            dubModeCombo_.setBounds(sbBtnX + halfB + 4, y, halfB + 4, 18);
+        }
+        y += 22;
         sceneResetBtn_       .setBounds(sbBtnX, y, sbBtnW, 22); // pleine largeur
         y += 25;
         sceneCopyBtn_.setBounds(sbBtnX, y, sbBtnW, 22);

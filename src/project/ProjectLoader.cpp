@@ -296,6 +296,10 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     // swing (absent in older projects → 0.0 = straight, backwards-compat)
     data.swing = getFloat(root, "swing", 0.f);
 
+    // v25 — DUB AUTO mode (absent → 0 = Auto)
+    if (data.version >= 25)
+        data.dubMode = juce::jlimit(0, 2, static_cast<int>(root.getProperty("dubMode", 0)));
+
     return data;
 }
 
@@ -514,6 +518,8 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
     // swing (always saved; readers default to 0 when absent for backwards-compat)
     if (data.swing > 0.f)
         root->setProperty("swing", static_cast<double>(data.swing));
+
+    root->setProperty("dubMode", data.dubMode);
 
     const juce::String json = juce::JSON::toString(juce::var(root.get()), true);
     return juce::File(juce::String(filePath)).replaceWithText(json);

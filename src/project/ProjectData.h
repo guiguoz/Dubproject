@@ -127,6 +127,8 @@ struct ProjectData
     std::string                      serumPresetName;
     // swing global [0..1] : 0=straight, 0.5=swing, 1.0=shuffle (absent → 0)
     float                            swing { 0.f };
+    // v25 — DUB AUTO mode (0=Auto, 1=Force, 2=Disable)
+    int                              dubMode { 0 };
 };
 
 } // namespace project

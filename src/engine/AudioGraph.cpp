@@ -85,6 +85,15 @@ void AudioGraph::processBlock(const TransportState& ts,
     std::fill(slotMixL_.begin(), slotMixL_.begin() + numFrames, 0.f);
     std::fill(slotMixR_.begin(), slotMixR_.begin() + numFrames, 0.f);
 
+    // Intercepter les events SendRamp (DUB modifier) avant de passer à SlotPlayer
+    for (int e = 0; e < numEvents; ++e) {
+        if (events[e].ev.type == EventType::SendRamp) {
+            const int s = events[e].ev.slot;
+            autoMix_.scheduleSendRamp(s, events[e].ev.b,
+                                      static_cast<int>(events[e].ev.a));
+        }
+    }
+
     slotPlayer_.processBlock(ts, nullptr, numFrames, events, numEvents, slotLp, slotRp);
 
     // ── Sidechain kick → BASS/PAD uniquement (règle 3 AutoMix V2) ──────────────

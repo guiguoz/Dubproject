@@ -167,4 +167,122 @@ void buildDirectPlan(const SceneData& from, const SceneData& to,
     });
 }
 
+// ── applyDubModifier ──────────────────────────────────────────────────────────
+void applyDubModifier(SceneTransitionPlan& plan,
+                      const SceneData& from, const SceneData& to,
+                      float sampleRate, double samplesPerStep,
+                      DubMode mode) noexcept
+{
+    if (mode == DubMode::Disable) return;
+
+    // ── 1. Analyse churn / continuité ────────────────────────────────────────
+    int leaveCount = 0, enterCount = 0;
+    float continuityPoints = 0.f, totalPointsA = 0.f;
+
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const bool inA = from.slots[s].active && !from.slots[s].filePath.empty();
+        const bool inB = to.slots[s].active   && !to.slots[s].filePath.empty();
+        const auto role = static_cast<SlotRole>(plan.slots[s].role);
+        const float weight = (role == SlotRole::Kick || role == SlotRole::Bass) ? 2.f : 1.f;
+
+        if (inA) totalPointsA += weight;
+
+        switch (plan.slots[s].action) {
+            case SlotPlanAction::Leave: ++leaveCount; break;
+            case SlotPlanAction::Enter: ++enterCount; break;
+            case SlotPlanAction::Keep:
+            case SlotPlanAction::Morph:
+                if (inA) continuityPoints += weight;
+                break;
+        }
+        (void)inB;
+    }
+
+    const int churn = leaveCount + enterCount;
+    const float continuityWeighted = (totalPointsA > 0.f) ? (continuityPoints / totalPointsA) : 1.f;
+
+    // ── 2. Décision DUB ──────────────────────────────────────────────────────
+    const bool dubOn = (mode == DubMode::Force)
+        || (mode == DubMode::Auto && ((churn >= 5) || (continuityWeighted < 0.35f && churn >= 3)));
+
+    if (!dubOn) return;
+
+    // ── 3. Paramètres DUB ───────────────────────────────────────────────────
+    const int rampSamples = std::max(1, static_cast<int>(std::round(sampleRate * 0.010f)));
+    const int tailSamples = std::max(1, static_cast<int>(std::round(sampleRate * 1.2f)));
+    const float sendTarget = (churn >= 7) ? 0.70f : (churn >= 5) ? 0.55f : 0.35f;
+
+    bool anyDubbed = false;
+
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (plan.slots[s].action != SlotPlanAction::Leave) continue;
+
+        // ── Eligibilité par rôle ─────────────────────────────────────────────
+        const auto role = static_cast<SlotRole>(plan.slots[s].role);
+        if (role == SlotRole::Kick || role == SlotRole::Bass) continue;
+
+        // Rôles conditionnels : uniquement si churn >= 5
+        const bool conditional = (role == SlotRole::Snare || role == SlotRole::Perc
+                                || role == SlotRole::Drum  || role == SlotRole::Unknown);
+        if (conditional && churn < 5) continue;
+
+        // ── Trouver leaveAt (GainRamp→0 pour ce slot) ───────────────────────
+        int64_t leaveAt = plan.boundary;
+        for (int i = 0; i < plan.numEvents; ++i) {
+            const PlanEvent& pe = plan.events[i];
+            if (pe.slot == static_cast<uint8_t>(s)
+                && pe.type == PlanEventType::GainRamp
+                && pe.b == 0.f) {
+                leaveAt = pe.atSample;
+                break;
+            }
+        }
+
+        // ── Garde "feeds audio" pour OneShot ─────────────────────────────────
+        const auto pm = from.slots[s].mode;
+        if (pm == PlayMode::OneShot && samplesPerStep > 0.0) {
+            const int64_t feedWindowSamples = static_cast<int64_t>(samplesPerStep * 2.0);
+            const int64_t feedStart = leaveAt - feedWindowSamples;
+
+            const int patLen = std::max(1, from.trackBarCounts[s] * 16);
+            const int64_t spsi = static_cast<int64_t>(samplesPerStep);
+            const int stepBegin = static_cast<int>((feedStart > 0 ? feedStart : 0) / (spsi > 0 ? spsi : 1));
+            const int stepEnd   = static_cast<int>(leaveAt / (spsi > 0 ? spsi : 1));
+
+            bool hasTrigger = false;
+            for (int step = stepBegin; step <= stepEnd && !hasTrigger; ++step) {
+                const int stepInPat = step % patLen;
+                if (stepInPat >= 0 && stepInPat < 512
+                    && from.steps[static_cast<size_t>(s)][static_cast<size_t>(stepInPat)])
+                    hasTrigger = true;
+            }
+            if (!hasTrigger) continue;
+        }
+        // Free / LoopSync : toujours eligible (feeds audio par construction)
+
+        // ── Émettre SendRamp events ──────────────────────────────────────────
+        const int64_t rampUpAt = std::max(leaveAt - static_cast<int64_t>(rampSamples), plan.boundary);
+        const uint8_t su = static_cast<uint8_t>(s);
+
+        if (plan.numEvents < 96)
+            plan.events[plan.numEvents++] = { rampUpAt, PlanEventType::SendRamp, su,
+                                              static_cast<float>(rampSamples), sendTarget };
+        if (plan.numEvents < 96)
+            plan.events[plan.numEvents++] = { leaveAt,  PlanEventType::SendRamp, su,
+                                              static_cast<float>(tailSamples),  0.f };
+
+        anyDubbed = true;
+    }
+
+    if (anyDubbed) {
+        plan.dubActive = true;
+        // Re-trier (les SendRamp peuvent précéder ou suivre d'autres events au même temps)
+        std::sort(plan.events, plan.events + plan.numEvents,
+                  [](const PlanEvent& l, const PlanEvent& r) {
+                      if (l.atSample != r.atSample) return l.atSample < r.atSample;
+                      return static_cast<int>(l.type) < static_cast<int>(r.type);
+                  });
+    }
+}
+
 } // namespace engine

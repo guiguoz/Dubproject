@@ -40,7 +40,8 @@ struct SlotPlan {
 // PcmFlip  : activation du PCM préchargé (pas de trigger)
 // Release  : fade-out voice (après LEAVE)
 // ModeSet/RoleSet/MuteSet : écritures atomiques à T
-enum class PlanEventType : uint8_t { GainRamp = 0, PcmFlip = 1, Release = 2, ModeSet = 3, SemitoneSet = 4, RoleSet = 5, MuteSet = 6 };
+// SendRamp : a = durée samples, b = target send linéaire [0,1] (DUB modifier)
+enum class PlanEventType : uint8_t { GainRamp = 0, PcmFlip = 1, Release = 2, ModeSet = 3, SemitoneSet = 4, RoleSet = 5, MuteSet = 6, SendRamp = 7 };
 
 struct PlanEvent {
     int64_t atSample = 0;
@@ -49,13 +50,16 @@ struct PlanEvent {
     float   a = 0.f, b = 0.f;
 };
 
+// ── Mode DUB (modifier de plan) ───────────────────────────────────────────────
+enum class DubMode : uint8_t { Auto = 0, Force = 1, Disable = 2 };
+
 // ── Plan complet ─────────────────────────────────────────────────────────────
 struct SceneTransitionPlan {
     int32_t fromScene = -1;
     int32_t toScene = -1;
     int64_t boundary = 0; // == executionSample, frontière sample-accurate
     SlotPlan  slots[kMaxSlots];
-    PlanEvent events[64];
+    PlanEvent events[96];  // 64 base + 32 DUB (2 SendRamp × 9 slots × marge)
     uint8_t   numEvents = 0;
     bool      morphActive = false;
     float     morphFrom[4] = {};
@@ -63,6 +67,8 @@ struct SceneTransitionPlan {
     int64_t   morphStart = 0;
     int64_t   morphDur = 0; // samples
     bool      valid = false;
+    uint8_t   policy = 0;    // 0=DIRECT, 1=BUILD, 2=BREAKDOWN (propagé au snapshot)
+    bool      dubActive = false;
 };
 
 // Diff A→B par contenu (pas d'index). Pattern ne participe PAS à KEEP/MORPH du
@@ -82,5 +88,14 @@ void buildDirectPlan(const SceneData& from, const SceneData& to,
                      int fromIdx, int toIdx, int64_t boundary,
                      double sampleRate,
                      SceneTransitionPlan& out) noexcept;
+
+// Applique le modificateur DUB au plan existant (après buildDirectPlan + TransitionPolicy::apply).
+// Ajoute des events SendRamp pour les slots LEAVE éligibles.
+// from/to : scènes source et destination (pour steps et mode OneShot).
+// samplesPerStep : pour la fenêtre feed-check OneShot (0 = désactive le check).
+void applyDubModifier(SceneTransitionPlan& plan,
+                      const SceneData& from, const SceneData& to,
+                      float sampleRate, double samplesPerStep,
+                      DubMode mode) noexcept;
 
 } // namespace engine

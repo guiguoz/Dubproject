@@ -10,6 +10,7 @@ struct TransitionStatusSnapshot {
     int      runtimeScene    = -1;   // scène réellement active au moteur
     int      pendingScene    = -1;   // -1 si aucune transition armée
     uint8_t  policy          = 0;    // 0=DIRECT, 1=BUILD, 2=BREAKDOWN
+    bool     dubActive       = false; // DUB modifier actif sur cette transition
     uint8_t  state           = 0;    // 0=Idle,1=Preparing,2=Armed,3=Executing,4=Settling
     bool     playing         = false;
     int64_t  nowSample       = 0;

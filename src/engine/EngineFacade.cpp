@@ -266,7 +266,8 @@ TransitionStatusSnapshot EngineFacade::getTransitionStatusSnapshot(int selectedS
     {
         sn.pendingScene   = transitionPlan_.toScene;
         sn.boundarySample = transitionPlan_.boundary;
-        sn.policy         = 0;  // DIRECT
+        sn.policy         = transitionPlan_.policy;
+        sn.dubActive      = transitionPlan_.dubActive;
     }
     // Priorité 2 : transition quantisée (TransitionEngine morph)
     else if (transition_.state() != TransitionEngine::State::Idle)
@@ -1166,6 +1167,14 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
             }
         }
         TransitionPolicy::apply(plan, pctx);
+        plan.policy = static_cast<uint8_t>(ptype);
+    }
+
+    // DUB modifier : après policy (les atSample LEAVE sont définitifs)
+    {
+        const double spstep = transport_.snapshot().samplesPerStep;
+        applyDubModifier(plan, from, to,
+                         static_cast<float>(sampleRate_), spstep, dubMode_);
     }
 
     // Gate d'activation ENTER : avant PcmFlip, les triggers B pour ce slot sont ignorés

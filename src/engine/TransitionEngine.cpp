@@ -113,6 +113,7 @@ void TransitionEngine::compileDirectPlan(EventScheduler& scheduler) noexcept {
             case PlanEventType::RoleSet:  ev.type = EventType::RoleSet;  ev.a = pe.a; ev.b = pe.b; break;
             case PlanEventType::MuteSet:  ev.type = (pe.a > 0.5f) ? EventType::Mute : EventType::Unmute; break;
             case PlanEventType::SemitoneSet: ev.type = EventType::TransposeSet; ev.a = pe.a; break;
+            case PlanEventType::SendRamp:    ev.type = EventType::SendRamp; ev.a = pe.a; ev.b = pe.b; break;
             default: continue;
         }
         scheduler.push(ev);

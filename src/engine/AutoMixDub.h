@@ -64,7 +64,12 @@ public:
     float advanceGainRamp(int slot, int numFrames) noexcept;
 
     // Thread audio : avance la rampe de send delay (τ = 120 ms).
+    // Si un override DUB est actif, utilise une rampe linéaire sample-accurate.
     float advanceDelayRamp(int slot, int numFrames) noexcept;
+
+    // Thread audio : arme une rampe DUB send linéaire (event SendRamp compilé).
+    // Prioritaire sur le lissage exponentiel AutoMix jusqu'à épuisement de la rampe.
+    void scheduleSendRamp(int slot, float toValue, int durSamples) noexcept;
 
     // Informe AutoMix de la réduction de gain du limiteur (Règle 6).
     void notifyLimiterReduction(float gainReductionDb) noexcept;
@@ -95,6 +100,14 @@ private:
 
     float currentGainLin_  [kMaxSlots] = {};
     float currentDelaySend_[kMaxSlots] = {};
+
+    struct SendRampOverride {
+        float current  = 0.f;
+        float target   = 0.f;
+        int   durLeft  = 0;
+    };
+    SendRampOverride dubSendOverride_[kMaxSlots];
+    bool             dubSendActive_  [kMaxSlots] = {};
 
     // Rampe exponentielle : coefficients (calculés dans prepare)
     float gainTauCoef_  = 0.f;   // exp(-1/(τ_gain * sr))
