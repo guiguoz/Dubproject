@@ -4,7 +4,7 @@ Les projets sont des fichiers **JSON** UTF-8 avec l'extension `.saxfx`. La **sou
 
 ## Version actuelle (écriture)
 
-À l'enregistrement, le champ racine **`version`** est toujours **`19`** (nombre entier JSON).
+À l'enregistrement, le champ racine **`version`** est toujours **`25`** (nombre entier JSON).
 
 Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v16.
 
@@ -29,20 +29,28 @@ Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire pa
 | 17 | `serumPresetName` à la racine — nom preset Serum saisi manuellement (click-to-edit) |
 | 18 | `serumState` + `serumPresetName` déplacés dans `scenes[]` — preset Serum **par scène** ; migration v<18 : copie du root vers toutes les scènes utilisées |
 | 19 | Migration : `userGains[i] < 0.50` réinitialisé à 1.0 pour les projets v≤18 (gains snare/hat calibrés trop bas par ancien magic mix) |
+| 20 | Params dub delay **par scène** : `dubDelayFeedback`, `dubDelayWet`, `dubDelayTone`, `dubDelayDrive` dans `scenes[]` |
+| 21 | `pitchOffsets[9]` par scène — décalage en demi-tons par slot |
+| 22 | `masterKeySetByUser` à la racine — intention tonalité persistée explicitement (ne plus déduire de `masterKeyRoot`) |
+| 23 | `playModeOverrides[9]` par scène — override de PlayMode par slot (-1=auto, 0=OneShot, 1=Free, 2=LoopSync) |
+| 24 | `slotRoles[9]` + `roleManual[9]` par scène — rôles DSP persistés + flag manuel |
+| 25 | `dubMode` à la racine — mode DUB AUTO (0=Auto, 1=Force, 2=Disable) |
 
-## Structure JSON v19 (vue d'ensemble)
+## Structure JSON v25 (vue d'ensemble)
 
 Racine :
 
 | Clé | Type | Description |
 |-----|------|-------------|
-| `version` | `number` | Toujours `18` à l'écriture |
+| `version` | `number` | Toujours `25` à l'écriture |
 | `projectName` | `string` | Nom du projet |
 | `bpm` | `number` | Tempo **maître** global (float) |
 | `masterKeyRoot` | `number` | 0=C … 11=B |
 | `masterKeyMajor` | `bool` | Mode majeur / mineur |
 | `currentScene` | `number` | Index de scène courante (0–7) |
 | `swing` | `number` | Swing global 0.0–1.0 (v14) |
+| `masterKeySetByUser` | `bool` | Tonalité définie manuellement (v22) |
+| `dubMode` | `number` | Mode DUB AUTO : 0=Auto, 1=Force, 2=Disable (v25) |
 | `slotMix` | `array` | États **Magic mix** (un objet par slot concerné, seulement si `applied`) |
 | `scenes` | `array` | Scènes utilisées (`used: true`) |
 | `dubDelayEnabled` | `bool` | Bus dub delay activé (v11) |
@@ -92,12 +100,20 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
 | `serumGain` | `number` — gain Serum pour cette scène | v15 |
 | `serumState` | `string` — état preset Serum base64 pour cette scène (v18) | v18 |
 | `serumPresetName` | `string` — nom du preset Serum pour cette scène (v18) | v18 |
+| `dubDelayFeedback` | `number` — feedback dub delay pour cette scène | v20 |
+| `dubDelayWet` | `number` — wet dub delay pour cette scène | v20 |
+| `dubDelayTone` | `number` — tone EQ dub delay pour cette scène | v20 |
+| `dubDelayDrive` | `number` — drive dub delay pour cette scène | v20 |
+| `pitchOffsets` | `array` de 9 `number` — décalage semitones par slot | v21 |
+| `playModeOverrides` | `array` de 9 `number` — override PlayMode par slot (-1=auto) | v23 |
+| `slotRoles` | `array` de 9 `number` — rôles DSP par slot (-1=Unknown) | v24 |
+| `roleManual` | `array` de 9 `bool` — true si rôle posé manuellement | v24 |
 
 ## Exemple minimal (illustratif)
 
 ```json
 {
-  "version": 18,
+  "version": 25,
   "projectName": "Exemple",
   "bpm": 120.0,
   "masterKeyRoot": 0,

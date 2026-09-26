@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include "engine/SceneTransitionPlan.h"
+#include "engine/AutoMixDub.h"
 using namespace engine;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -148,4 +150,73 @@ TEST_CASE("DUB_PLAN_NOOVERFLOW: 9 slots LEAVE éligibles → numEvents <= 96",
     REQUIRE(plan.dubActive);
     // 9 LEAVE × 2 base events = 18, + 9 × 2 SendRamp = 18 → total 36
     REQUIRE(countSendRamps(plan) == 18);
+}
+
+// ── DUB_TAIL_TIMING ───────────────────────────────────────────────────────────
+TEST_CASE("DUB_TAIL_TIMING: ramp-up et tail ne sont pas au même sample (évite conflit même bloc)",
+          "[dub][policy][timing]")
+{
+    const float sr = 44100.f;
+    const int64_t boundary = 44100;  // = 1 s
+
+    SceneData from = makeScene({{SlotRole::Loop, PlayMode::Free}});
+    SceneData to;
+
+    SceneTransitionPlan plan;
+    buildDirectPlan(from, to, 0, 1, boundary, static_cast<double>(sr), plan);
+    applyDubModifier(plan, from, to, sr, 0.0, DubMode::Force);
+
+    // Trouver les 2 SendRamp pour slot 0
+    int64_t rampUpSample = -1, tailSample = -1;
+    for (int i = 0; i < plan.numEvents; ++i) {
+        if (plan.events[i].type != PlanEventType::SendRamp) continue;
+        if (plan.events[i].slot != 0) continue;
+        if (plan.events[i].b > 0.f) rampUpSample = plan.events[i].atSample;
+        else                          tailSample   = plan.events[i].atSample;
+    }
+
+    REQUIRE(rampUpSample != -1);
+    REQUIRE(tailSample   != -1);
+    // Le tail doit être APRÈS le ramp-up
+    REQUIRE(tailSample > rampUpSample);
+    // L'écart doit être exactement rampSamples (round(sr * 0.010))
+    const int64_t expectedGap = static_cast<int64_t>(std::round(sr * 0.010f));
+    REQUIRE(tailSample - rampUpSample == expectedGap);
+}
+
+// ── DUB_SEND_RETURNS_TO_ZERO ──────────────────────────────────────────────────
+TEST_CASE("DUB_SEND_RETURNS_TO_ZERO: après ramp-up + tail, le send AutoMixDub revient à 0",
+          "[dub][policy][automix]")
+{
+    const float sr = 44100.f;
+    const int blockSize = 512;
+    const int rampSamples = static_cast<int>(std::round(sr * 0.010f));  // ~441
+    const int tailSamples = static_cast<int>(std::round(sr * 1.2f));    // ~52920
+
+    AutoMixDub mix;
+    mix.prepare(sr);
+
+    // Armer ramp-up (slot 0 : 0→0.55 sur rampSamples)
+    mix.scheduleSendRamp(0, 0.55f, rampSamples);
+
+    // Avancer jusqu'à la fin du ramp-up (un seul bloc > rampSamples suffit car frac=1.0)
+    mix.advanceDelayRamp(0, rampSamples);   // consomme durLeft exact → current snaps to target
+    // Le send doit être exactement 0.55
+    const float afterRamp = mix.advanceDelayRamp(0, 1);
+    REQUIRE(afterRamp >= 0.50f);
+
+    // Armer tail (slot 0 : 0.55→0 sur tailSamples)
+    mix.scheduleSendRamp(0, 0.f, tailSamples);
+
+    // Avancer jusqu'à la fin du tail
+    {
+        int processed = 0;
+        while (processed < tailSamples + blockSize) {
+            mix.advanceDelayRamp(0, blockSize);
+            processed += blockSize;
+        }
+    }
+    // Le send doit être essentiellement 0
+    const float afterTail = mix.advanceDelayRamp(0, 1);
+    REQUIRE(afterTail < 0.001f);
 }

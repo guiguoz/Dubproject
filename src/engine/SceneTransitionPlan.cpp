@@ -264,11 +264,15 @@ void applyDubModifier(SceneTransitionPlan& plan,
         const int64_t rampUpAt = std::max(leaveAt - static_cast<int64_t>(rampSamples), plan.boundary);
         const uint8_t su = static_cast<uint8_t>(s);
 
+        // Tail décalé de rampSamples pour éviter que les 2 events firers dans le même bloc
+        // (cas DIRECT : leaveAt == boundary → rampUpAt == boundary sans ce décalage).
+        const int64_t tailAt = leaveAt + static_cast<int64_t>(rampSamples);
+
         if (plan.numEvents < 96)
             plan.events[plan.numEvents++] = { rampUpAt, PlanEventType::SendRamp, su,
                                               static_cast<float>(rampSamples), sendTarget };
         if (plan.numEvents < 96)
-            plan.events[plan.numEvents++] = { leaveAt,  PlanEventType::SendRamp, su,
+            plan.events[plan.numEvents++] = { tailAt,   PlanEventType::SendRamp, su,
                                               static_cast<float>(tailSamples),  0.f };
 
         anyDubbed = true;
