@@ -90,6 +90,11 @@ public:
     }
     void clearStaged() noexcept {
         stagedActive_.store(false, std::memory_order_release);
+        // Annuler aussi les gates ENTER : sinon, si une transition est abandonnée
+        // en cours de route, les slotActiveAt_ restent à un sample futur → les
+        // slots silencieux au redémarrage du transport (blockStart repart de 0).
+        for (int s = 0; s < kMaxSlots; ++s)
+            slotActiveAt_[s].store(0, std::memory_order_release);
     }
     bool hasStaged() const noexcept {
         return stagedActive_.load(std::memory_order_acquire);
