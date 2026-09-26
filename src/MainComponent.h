@@ -15,6 +15,7 @@
 #include "ui/StepSequencerPanel.h"
 #include "ui/PixelCloudComponent.h"
 #include "ui/TransitionStatusBar.h"
+#include "ui/WaveformCache.h"
 
 #include <JuceHeader.h>
 #include <atomic>
@@ -116,7 +117,6 @@ private:
 
     // ── EWI Synth UI ─────────────────────────────────────────────────────────
     juce::TextButton                    serumLoadBtn_;
-    juce::TextButton                    swamLoadBtn_;
     juce::TextButton                    serumShowUiBtn_;
     juce::Label                         serumStatusLabel_;
     juce::TextEditor                    ewiDeviceEditor_;
@@ -180,6 +180,7 @@ private:
     using SceneData = ::engine::SceneData;
 
     ::engine::SceneStore sceneStore_;
+    WaveformCache        waveformCache_;
 
     // ── Info musicale (preset Serum + portée gammes) ──────────────────────────
     ui::ScaleStaffComponent scaleStaff_;

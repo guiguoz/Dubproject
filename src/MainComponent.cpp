@@ -164,15 +164,6 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(serumLoadBtn_);
 
-    styleSideBtn(swamLoadBtn_, "SWAM");
-    swamLoadBtn_.onClick = [this]
-    {
-        static const juce::String kSwamPath {
-            "C:\\Program Files\\Common Files\\VST3\\SWAM\\Trumpets\\SWAM Trumpet.vst3"
-        };
-        loadSerumPlugin(kSwamPath);
-    };
-    addAndMakeVisible(swamLoadBtn_);
 
     serumStatusLabel_.setText("not loaded", juce::dontSendNotification);
     serumStatusLabel_.setFont(juce::Font(juce::FontOptions{}.withHeight(9.f)));
@@ -699,16 +690,21 @@ MainComponent::~MainComponent()
 
 void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
 {
-    // Cette fonction ne fait plus que signaler le slot comme chargé et mettre à
-    // jour la waveform depuis le snapshot V2.
-    juce::ignoreUnused(path);
-
     stepSeqPanel_->setSlotLoaded(slot, true);
+    stepSeqPanel_->setSlotWaveform(slot, {});   // placeholder immédiat
 
-    {
-        auto snap = facade_.getSlotPcmSnapshot(slot);
-        stepSeqPanel_->setSlotWaveform(slot, computeEnvelope(snap));
-    }
+    const auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+    const int ts = sc.slots[static_cast<std::size_t>(slot)].trimStart;
+    const int te = sc.slots[static_cast<std::size_t>(slot)].trimEnd;
+    const engine::AssetId id = engine::assetIdFor(path, ts, te);
+
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+    waveformCache_.request(slot, path, ts, te, id,
+        [safeThis](int s, std::vector<float> env)
+        {
+            if (auto* mc = safeThis.getComponent())
+                mc->stepSeqPanel_->setSlotWaveform(s, std::move(env));
+        });
 }
 
 void MainComponent::updateSpatialSlot(int slot)
@@ -2142,10 +2138,9 @@ void MainComponent::resized()
         // ── EWI SYNTH section (labels drawn in paint()) ──────────────────────
         // "EWI SYNTH" header at yFlow (10px), then buttons 12px below
         {
-            const int thirdB = (sbBtnW - 8) / 3;
-            serumLoadBtn_  .setBounds(sbBtnX,                    yFlow + 12, thirdB, 22);
-            swamLoadBtn_   .setBounds(sbBtnX + thirdB + 4,       yFlow + 12, thirdB, 22);
-            serumShowUiBtn_.setBounds(sbBtnX + 2 * (thirdB + 4), yFlow + 12, thirdB, 22);
+            const int halfB = (sbBtnW - 4) / 2;
+            serumLoadBtn_  .setBounds(sbBtnX,            yFlow + 12, halfB, 22);
+            serumShowUiBtn_.setBounds(sbBtnX + halfB + 4, yFlow + 12, halfB, 22);
         }
         yFlow += 38; // 12+22+4
         serumStatusLabel_.setBounds(sbBtnX, yFlow,      sbBtnW, 12); yFlow += 16; // 12+4

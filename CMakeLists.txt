@@ -103,6 +103,7 @@ target_sources(SaxFXLive PRIVATE
     src/ui/RotaryKnob.cpp
     src/ui/ScaleStaffComponent.cpp
     src/ui/TransitionStatusBar.cpp
+    src/ui/WaveformCache.cpp
     # ── Moteur V2 (engine/) ────────────────────────────────────────────────────
     src/engine/SlotPlayer.cpp
     src/engine/StretchConform.cpp
