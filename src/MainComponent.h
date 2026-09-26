@@ -303,6 +303,7 @@ private:
     void captureCurrentScene(CaptureReason reason = CaptureReason::UserAction);
     void applyScene(int idx, int fromIdx = -1);
     void refreshSceneEditorFromDefinition(int sceneIndex) noexcept;
+    void prefetchNeighborScenes(int sceneIdx) noexcept;
     void navigateScene(int delta);
     void resetCurrentScene();
     void resetCurrentSceneFull();

@@ -4,6 +4,7 @@
 #include <vector>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <array>
 #include <memory>
 #include <atomic>
@@ -31,6 +32,12 @@ public:
     // Annule le job en cours pour ce slot (navigation rapide / clearSlot).
     void cancel(int slot);
 
+    // Préchargement silencieux (pas de slot tracking, pas de callback).
+    // Cache hit ou job en cours → no-op. Sinon : thread détaché, écrit dans le cache.
+    // Appeler pour les scènes voisines après applyScene / refreshSceneEditorFromDefinition.
+    void prefetch(const std::string& filePath, int trimStart, int trimEnd,
+                  engine::AssetId assetId) noexcept;
+
     // Calcul peak-amplitude en `bins` valeurs [0..1].
     // Partagé avec MainComponent::computeEnvelope (même algo).
     static std::vector<float> computeEnvelope(const std::vector<float>& pcm,
@@ -47,6 +54,7 @@ private:
     struct State
     {
         std::unordered_map<engine::AssetId, std::vector<float>> cache;
+        std::unordered_set<engine::AssetId>                     pending; // prefetch en vol
     };
 
     std::shared_ptr<State>                       state_;

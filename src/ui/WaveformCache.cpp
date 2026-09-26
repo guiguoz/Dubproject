@@ -73,6 +73,38 @@ void WaveformCache::request(int slot, const std::string& filePath,
     }).detach();
 }
 
+void WaveformCache::prefetch(const std::string& filePath, int trimStart, int trimEnd,
+                              engine::AssetId assetId) noexcept
+{
+    if (assetId == 0 || filePath.empty()) return;
+    if (state_->cache.count(assetId))   return;  // déjà en cache
+    if (state_->pending.count(assetId)) return;  // déjà en vol
+
+    state_->pending.insert(assetId);
+    auto state = state_;
+    try
+    {
+        std::thread([filePath, trimStart, trimEnd, assetId, state = std::move(state)]() mutable
+        {
+            auto pcm = loadAndDecode(filePath, trimStart, trimEnd);
+            if (pcm.empty())
+            {
+                juce::MessageManager::callAsync([state, assetId]
+                    { state->pending.erase(assetId); });
+                return;
+            }
+            auto env = computeEnvelope(pcm);
+            juce::MessageManager::callAsync(
+                [state, assetId, env = std::move(env)]() mutable
+                {
+                    state->pending.erase(assetId);
+                    state->cache.emplace(assetId, std::move(env));
+                });
+        }).detach();
+    }
+    catch (...) { state_->pending.erase(assetId); }
+}
+
 std::vector<float> WaveformCache::computeEnvelope(const std::vector<float>& pcm, int bins)
 {
     if (pcm.empty() || bins <= 0) return {};

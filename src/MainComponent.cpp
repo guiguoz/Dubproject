@@ -3092,6 +3092,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
         }
         spatialViz_.setSaxActive(true);
     }
+
+    prefetchNeighborScenes(idx);
 }
 
 
@@ -3135,6 +3137,25 @@ void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
 
         stepSeqPanel_->setSlotRoleInfoDirect(i, loaded,
             engine::SlotRoleInfo{ sl.role, sl.isRoleManual });
+    }
+
+    prefetchNeighborScenes(sceneIndex);
+}
+
+void MainComponent::prefetchNeighborScenes(int sceneIdx) noexcept
+{
+    for (const int delta : { -1, +1 })
+    {
+        const int ni = sceneIdx + delta;
+        if (ni < 0 || ni >= kMaxScenes) continue;
+        const auto& sc = sceneStore_.getScene(ni);
+        for (int i = 0; i < 9; ++i)
+        {
+            const auto& sl = sc.slots[static_cast<std::size_t>(i)];
+            if (sl.filePath.empty()) continue;
+            const engine::AssetId id = engine::assetIdFor(sl.filePath, sl.trimStart, sl.trimEnd);
+            waveformCache_.prefetch(sl.filePath, sl.trimStart, sl.trimEnd, id);
+        }
     }
 }
 
