@@ -2,7 +2,10 @@
 #include <catch2/catch_approx.hpp>
 #include <vector>
 #include <cmath>
+#include <atomic>
+#include <memory>
 #include "engine/SceneTransitionPlan.h"
+#include "ui/WaveformThreadPool.h"
 
 using Catch::Approx;
 
@@ -109,3 +112,61 @@ TEST_CASE("WAVEFORM-9: assetIdFor normalises case and separators", "[waveform]")
 //   1. Projet avec scène A (slot 0 = X.wav) et scène B (slot 0 = Y.wav)
 //   2. Transport arrêté → nav A→B : waveform slot 0 doit changer (Y.wav)
 //   3. Nav rapide A→B→A : waveform finale = celle de X.wav (job B annulé)
+
+// ─── Tests WaveformThreadPool ─────────────────────────────────────────────────
+
+// Le pool draine la queue complète avant que les workers quittent.
+TEST_CASE("POOL_QUIT_WHILE_JOBS: destructor drains all jobs without deadlock", "[pool]")
+{
+    std::atomic<int> count{0};
+    {
+        WaveformThreadPool pool(2);
+        for (int i = 0; i < 10; ++i)
+        {
+            auto token = std::make_shared<std::atomic<bool>>(false);
+            pool.enqueue(token,
+                []() -> std::vector<float> { return std::vector<float>(50, 0.5f); },
+                [&count](std::vector<float>) { ++count; });
+        }
+        // pool destructor : stopping_=true, cv_.notify_all(), workers drainent puis joignent
+    }
+    CHECK(count.load() == 10);
+}
+
+// Token déjà à true avant enqueue → worker annule avant IO, onResult jamais appelé.
+TEST_CASE("POOL_NAV_STRESS: pre-cancelled tokens suppress onResult", "[pool]")
+{
+    WaveformThreadPool pool(2);
+    std::atomic<int> count{0};
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto token = std::make_shared<std::atomic<bool>>(true);  // annulé avant enqueue
+        pool.enqueue(token,
+            []() -> std::vector<float> { return std::vector<float>(100, 0.1f); },
+            [&count](std::vector<float>) { ++count; });
+    }
+
+    pool.waitForIdle();
+    CHECK(count.load() == 0);
+}
+
+// Deux enqueueUnique avec le même assetId : second retourne false, résultat livré une seule fois.
+TEST_CASE("POOL_DEDUP: enqueueUnique delivers result exactly once", "[pool]")
+{
+    WaveformThreadPool pool(1);  // un seul worker pour la déterminisme
+    std::atomic<int> count{0};
+
+    const engine::AssetId id = engine::assetIdFor("some/file.wav", -1, -1);
+    auto compute  = []() -> std::vector<float> { return std::vector<float>(100, 0.5f); };
+    auto onResult = [&count](std::vector<float>) { ++count; };
+
+    const bool first  = pool.enqueueUnique(id, compute, onResult);
+    const bool second = pool.enqueueUnique(id, compute, onResult);
+
+    pool.waitForIdle();
+
+    CHECK(first  == true);
+    CHECK(second == false);
+    CHECK(count.load() == 1);
+}

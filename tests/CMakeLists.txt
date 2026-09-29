@@ -120,6 +120,7 @@ add_executable(EngineTests
     ../src/engine/AudioGraph.cpp
     ../src/engine/OfflineRender.cpp
     ../src/engine/fx/PingPongDelay.cpp
+    ../src/ui/WaveformThreadPool.cpp
 )
 
 target_include_directories(EngineTests PRIVATE
