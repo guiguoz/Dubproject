@@ -3189,6 +3189,15 @@ void MainComponent::navigateScene(int delta)
     // captureCurrentScene() retiré — steps/trackBarCounts déjà dans SceneDefinition.
     // Les gains/mutes/filePaths sont mis à jour live par onVolumeChanged, onStepChanged, etc.
 
+    // Sync MC→engine pour la scène CIBLE avant de préparer le plan.
+    // onStepChanged met à jour MC-side sceneStore_ + writePatterns_ mais PAS
+    // facade_.scene(idx).steps. prepareDirectPlan lit to.steps pour stager le
+    // buffer pas depuis from.steps.
+    // NE PAS sync FROM : cfg.active de la scène courante est posé par le dernier
+    // applyScene et reflète l'état audio live. Le recalculer ici depuis les steps
+    // pourrait marquer des slots sans step actif comme inactifs → Leave → coupure.
+    syncV2Scene(target);
+
     // DIRECT : PREPARE complet (diff par AssetId, précharge ENTER, readiness gate).
     // Si tous les ENTER sont prêts, le plan est armé et le pattern est stagé à la
     // même frontière que les GainRamps/PcmFlips — COMMIT audio sample-accurate.

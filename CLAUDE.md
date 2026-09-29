@@ -63,7 +63,22 @@ Worker threads → ONNX inference, BPM detection, pitch shifting
 - **SpinLock Serum** : `serumSnapLock_` doit protéger tout appel à `FeatureExtractor::extract()`
   dans `timerCallback()`.
 
-### 3. Crossfade adaptatif (SceneManager)
+### 3. Double SceneStore — MC-side vs engine-side
+
+Il existe **deux copies** de chaque `SceneData` :
+
+| Copie | Accès | Mise à jour |
+|-------|-------|-------------|
+| `sceneStore_.getScene(idx)` (MC-side) | `MainComponent` uniquement | `onStepChanged`, `onVolumeChanged`, etc. |
+| `facade_.scene(idx)` (engine-side) | `EngineFacade` + transition engine | `syncV2Scene(idx)` ou `syncV2Scenes()` |
+
+**Règle critique :**
+- `onStepChanged` / `onTrackBarCountChanged` mettent à jour MC-side + `writePatterns_` **mais PAS** `facade_.scene(idx).steps`.
+- `prepareDirectPlan` lit `facade_.scene(toIdx).steps` pour stager le step-buffer — appeler `syncV2Scene(target)` avant si les steps ont pu changer depuis le dernier `applyScene`.
+- **Ne jamais appeler `syncV2Scene(fromIdx)` juste avant `prepareDirectPlan`** : cela recalcule `cfg.active` depuis les steps, ce qui peut marquer comme inactifs des slots en cours de lecture → Leave → coupure son.
+- `cfg.active` de la scène FROM est posé par `applyScene` et reflète l'état audio live ; ne pas l'écraser.
+
+### 4. Crossfade adaptatif (SceneManager)
 
 `SceneManager::armAdaptiveCrossfade()` choisit durée + courbe via `chooseProfile()` (public) :
 
@@ -85,7 +100,7 @@ Appliqué dans `applyScene()` avant `armAdaptiveCrossfade`.
 configuré dans `onTypesDetected`. Guard anti-rebuild si la config n'a pas changé.
 API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI thread uniquement.
 
-### 4. SerumHost — format état VST3
+### 5. SerumHost — format état VST3
 
 - `getProgramName(getCurrentProgram())` retourne toujours **"Prog 1"** (capital P) —
   Serum V2 VST3 ne remonte pas le vrai nom via l'API standard JUCE.
@@ -96,7 +111,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 - Fallback `presetNameSource_ = Manual` : si l'utilisateur saisit un nom manuellement,
   il n'est jamais écrasé par le scan automatique.
 
-### 5. Conventions importantes
+### 6. Conventions importantes
 
 - **`processAdd` = wet-only additif** : ne pas remplacer le buffer de sortie.
 - **Delay sends** : configurés par l'IA (`SmartSamplerEngine::onTypesDetected`), ne pas
