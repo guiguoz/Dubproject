@@ -32,6 +32,7 @@ add_executable(SaxFXTests
     test_ewi_filter.cpp
     test_slot_dynamics_ab.cpp
     test_scene_manager.cpp
+    test_step_sequencer.cpp
     test_p0_load.cpp
     # DSP sources (pure C++, no JUCE)
     ../src/dsp/WsolaShifter.cpp

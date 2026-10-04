@@ -2,6 +2,7 @@
 
 #include "Sampler.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 
@@ -156,6 +157,9 @@ public:
         playing_.store(false, std::memory_order_relaxed);
         activeBuf_.store(0, std::memory_order_relaxed);
         preparedBuf_.store(-1, std::memory_order_relaxed);
+        pendingTransLen_.store(0, std::memory_order_relaxed);
+        sceneEndFlag_.store(false, std::memory_order_relaxed);
+        sceneEndSent_.store(false, std::memory_order_relaxed);
         swapBufs_[0] = StepBuf{};
         swapBufs_[1] = StepBuf{};
     }
@@ -174,7 +178,7 @@ public:
     /// Thread-safe (atomic write, audio thread reads).
     void setSwing(float amount) noexcept
     {
-        swingTarget_.store(juce::jlimit(0.f, 1.f, amount), std::memory_order_relaxed);
+        swingTarget_.store(std::clamp(amount, 0.f, 1.f), std::memory_order_relaxed);
     }
 
     float getSwing() const noexcept { return swingTarget_.load(std::memory_order_relaxed); }
@@ -243,19 +247,35 @@ public:
             const int globalStep = nextFireStepIdx_ % kMaxSteps;
             stepAtomic_.store(globalStep, std::memory_order_relaxed);
 
-            const int transLen = pendingTransLen_.load(std::memory_order_relaxed);
-            const bool atSceneBoundary = (transLen > 0 && globalStep % transLen == transLen - 1);
+            const int transLen = pendingTransLen_.load(std::memory_order_acquire);
 
-            if (atSceneBoundary)
-                sceneEndFlag_.store(true, std::memory_order_release);
-
-            // Bar-quantized flip: activate the new step buffer BEFORE triggering step 0.
-            // prepareStepBuffer() was called from navigateScene() (message thread) well
-            // before this point, so the buffer is ready regardless of timer latency.
-            if (transLen > 0 && globalStep % transLen == 0)
+            // Fin de cycle → drapeau consommé par timerCallback() (applyScene).
+            // Garanti EXACTEMENT UNE FOIS par armement :
+            //   - normalement au dernier pas du cycle (≡ transLen-1) ;
+            //   - si l'armement a eu lieu après ce pas (fenêtre ≡ transLen-1 → ≡0),
+            //     ce drapeau serait manqué → il est émis au flip lui-même, pile
+            //     sur la frontière (jamais avant — applyScene ne peut pas démarrer
+            //     un crossfade avant la fin de cycle, pas de coupure prématurée).
+            // sceneEndSent_ garantit une seule émission par armement (GUI reset
+            // dans setPendingTransitionLen avant l'armement visible).
+            if (transLen > 0)
             {
-                flipIfPrepared();
-                pendingTransLen_.store(0, std::memory_order_relaxed);
+                const bool lastStepOfCycle = (globalStep % transLen == transLen - 1);
+                const bool atFlip          = (globalStep % transLen == 0);
+
+                if ((lastStepOfCycle || atFlip) && !sceneEndSent_.exchange(true))
+                {
+                    sceneEndFlag_.store(true, std::memory_order_release);
+                }
+
+                // Bar-quantized flip: activate the new step buffer BEFORE triggering step 0.
+                // prepareStepBuffer() was called from navigateScene() (message thread) well
+                // before this point, so the buffer is ready regardless of timer latency.
+                if (atFlip)
+                {
+                    flipIfPrepared();
+                    pendingTransLen_.store(0, std::memory_order_relaxed);
+                }
             }
 
             // Always trigger regardless of scene boundary: the bass/kick on step 0
@@ -301,6 +321,10 @@ public:
     /// Fige la longueur de scène utilisée pour détecter la fin de cycle.
     void setPendingTransitionLen(int steps) noexcept
     {
+        // Réinitialiser le garant « une seule émission » AVANT d'armer :
+        // l'audio thread ne verra transLen > 0 qu'après (release/acquire).
+        if (steps > 0)
+            sceneEndSent_.store(false, std::memory_order_release);
         pendingTransLen_.store(steps, std::memory_order_release);
     }
 
@@ -336,6 +360,9 @@ private:
     std::atomic<int>   stepAtomic_      { 0 };
     std::atomic<bool>  sceneEndFlag_    { false };
     std::atomic<int>   pendingTransLen_ { 0 };
+    // Une seule émission de sceneEndFlag_ par armement — écrit par le GUI
+    // (reset dans setPendingTransitionLen) puis uniquement par l'audio thread.
+    std::atomic<bool>  sceneEndSent_    { false };
 };
 
 } // namespace dsp

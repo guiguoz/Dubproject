@@ -345,8 +345,15 @@ MainComponent::MainComponent()
                 sceneManager_.setCurrentIdx(pending);
                 applyScene(sceneManager_.currentIdx());
                 updateSceneLabel();
-                stepSequencer_.setPendingTransitionLen(0);
             }
+            // Dans TOUS les cas : purger le drapeau fin-de-cycle. Pendant un
+            // stop, pendingScene est consommé AVANT le drapeau : le timer
+            // (condition pendingIdx() >= 0) ne le lirait plus → drapeau « collé »
+            // qui serait consommé à la PROCHAINE navigation → applyScene exécuté
+            // à l'armement même, c'est-à-dire avant la frontière → coupe le son
+            // dès la demande de transition.
+            stepSequencer_.setPendingTransitionLen(0);
+            stepSequencer_.consumeSceneEnd();
         }
     };
 
@@ -3294,7 +3301,10 @@ void MainComponent::navigateScene(int delta)
     }
 
     // P0.3 — bloquer si une transition quantisée est déjà en cours
-    if (stepSequencer_.hasPendingTransition())
+    // (buffer armé OU scène en attente de consommation par le timer : sans ce
+    // second test, une navigation dans la fenêtre flip→consommation écrase la
+    // cible en attente et la transition précédente n'est jamais appliquée.)
+    if (stepSequencer_.hasPendingTransition() || sceneManager_.hasPendingScene())
     {
         DBG("navigateScene: transition already pending, ignoring.");
         return;
@@ -3306,8 +3316,14 @@ void MainComponent::navigateScene(int delta)
     // retournera les données de la nouvelle scène, corrompant la capture.
     captureCurrentScene();
 
-    // Figer la longueur de la scène courante AVANT de stocker pendingScene_,
-    // pour que la détection de fin de cycle soit stable dans le thread audio.
+    // ── Sync de transition (MC-side → engine-side) ────────────────────────────
+    // CONTRAT : cette synchronisation ne recopie QUE les patterns (steps +
+    // trackBarCounts) dans le double-buffer inactif. Aucun état « live » du
+    // moteur audio (gains, mutes, loaded, voix, buffer actif) n'est modifié ici :
+    // ils sont exclusivement possédés par applyScene(), appelé UNIQUEMENT à la
+    // frontière de fin de cycle par timerCallback() via consumeSceneEnd().
+    // Recalculer un état actif depuis les steps à l'armement ferait diverger le
+    // moteur de l'état audio en cours → fade/coupure avant la frontière.
     int sceneLen = 1;
     for (int i = 0; i < 9; ++i)
         sceneLen = std::max(sceneLen, stepSequencer_.getTrackStepCount(i));
