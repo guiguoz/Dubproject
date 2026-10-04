@@ -74,9 +74,10 @@ Il existe **deux copies** de chaque `SceneData` :
 
 **Règle critique :**
 - `onStepChanged` / `onTrackBarCountChanged` mettent à jour MC-side + `writePatterns_` **mais PAS** `facade_.scene(idx).steps`.
-- `prepareDirectPlan` lit `facade_.scene(toIdx).steps` pour stager le step-buffer — appeler `syncV2Scene(target)` avant si les steps ont pu changer depuis le dernier `applyScene`.
-- **Ne jamais appeler `syncV2Scene(fromIdx)` juste avant `prepareDirectPlan`** : cela recalcule `cfg.active` depuis les steps, ce qui peut marquer comme inactifs des slots en cours de lecture → Leave → coupure son.
-- `cfg.active` de la scène FROM est posé par `applyScene` et reflète l'état audio live ; ne pas l'écraser.
+- `prepareDirectPlan` lit `facade_.scene(toIdx).steps` (et `from.steps` pour le diff) — sync `steps` + `trackBarCounts` des deux scènes depuis MC-side avant d'appeler `prepareDirectPlan`.
+- **Ne jamais appeler `syncV2Scene(idx)` juste avant `prepareDirectPlan`** : recalcule `cfg.active` depuis les steps, peut diverger de l'état audio live → Leave/Enter incorrects → Breakdown policy → fades avant frontière = coupure son.
+- Sync correct : copier uniquement `esEng.steps = scMC.steps; esEng.trackBarCounts = scMC.trackBarCounts;` pour chaque scène — sans toucher `cfg.active`.
+- `cfg.active` des deux scènes est posé par leur dernier `applyScene` (via `syncV2Scene` complet) et reflète l'état audio live ; ne pas l'écraser en navigation.
 
 ### 4. Crossfade adaptatif (SceneManager)
 
