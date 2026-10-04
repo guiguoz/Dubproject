@@ -115,9 +115,9 @@ public:
         // Per-track controls
         for (int t = 0; t < 9; ++t)
         {
-            // Repère fixe de piste : numéro stable du slot (indépendant du rôle)
+            // Repère fixe de piste : nom sémantique du slot (indépendant du rôle détecté)
             static constexpr const char* kFixedNames[9] = {
-                "1", "2", "3", "4", "5", "6", "7", "8", "9"
+                "MST", "BSS", "KCK", "SNR", "HAT", "PAD", "SYN", "PRC", "DRM"
             };
             fixedLabels_[t].setText(kFixedNames[t], juce::dontSendNotification);
             fixedLabels_[t].setFont(juce::Font(juce::FontOptions{}.withHeight(9.f).withStyle("Bold")));

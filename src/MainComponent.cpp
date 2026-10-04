@@ -345,10 +345,26 @@ MainComponent::MainComponent()
 
         if (!facade_.isMagicActive())
         {
-            // Revert : effacer les tags + reset spatial viz. Le PCM n'est jamais
-            // modifié en V2 → aucun re-trim / re-reload nécessaire.
-            for (int i = 0; i < 9; ++i)
-                stepSeqPanel_->setSlotContentType(i, "");
+            // Revert : restaurer le tag de rôle par défaut pour les slots chargés
+            // (ne jamais effacer complètement — le type reste visible).
+            {
+                using MT = engine::mix::MixContentType;
+                static constexpr MT kDefaultTypes[9] = {
+                    MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+                    MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
+                };
+                const auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+                for (int i = 0; i < 9; ++i)
+                {
+                    const auto& sl    = sc.slots[static_cast<std::size_t>(i)];
+                    const bool loaded = !sl.filePath.empty();
+                    if (!loaded) { stepSeqPanel_->setSlotContentType(i, ""); continue; }
+                    const auto mt = (sl.role != engine::SlotRole::Unknown
+                                     && sl.role != engine::SlotRole::Fx)
+                        ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
+                    stepSeqPanel_->setSlotContentType(i, engine::mix::contentTypeName(mt));
+                }
+            }
             stepSeqPanel_->setMagicActive(false);
             spatialViz_.resetAll();
         }
@@ -711,6 +727,15 @@ MainComponent::~MainComponent()
 void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
 {
     stepSeqPanel_->setSlotLoaded(slot, true);
+    if (slot >= 0 && slot < 9)
+    {
+        using MT = engine::mix::MixContentType;
+        static constexpr MT kDefaultTypes[9] = {
+            MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+            MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
+        };
+        stepSeqPanel_->setSlotContentType(slot, engine::mix::contentTypeName(kDefaultTypes[slot]));
+    }
     stepSeqPanel_->setSlotWaveform(slot, {});   // placeholder immédiat
 
     const auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
@@ -2840,6 +2865,22 @@ void MainComponent::applyScene(int idx, int fromIdx)
     syncV2Scene(idx);
     facade_.setCurrentScene(idx);
     stepSeqPanel_->updateAllRoleStatus();
+    {
+        using MT = engine::mix::MixContentType;
+        static constexpr MT kDefaultTypes[9] = {
+            MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+            MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
+        };
+        for (int i = 0; i < 9; ++i)
+        {
+            const auto& sl    = sc.slots[static_cast<std::size_t>(i)];
+            const bool loaded = !sl.filePath.empty();
+            const auto mt = (loaded && sl.role != engine::SlotRole::Unknown
+                             && sl.role != engine::SlotRole::Fx)
+                ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
+            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "");
+        }
+    }
 
     if (!sc.isUsedDerived())
     {
@@ -3110,6 +3151,12 @@ void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
 
     stepSeqPanel_->resetViewToStart();
 
+    using MT = engine::mix::MixContentType;
+    static constexpr MT kDefaultTypes[9] = {
+        MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
+        MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
+    };
+
     for (int i = 0; i < 9; ++i)
     {
         const auto sz    = static_cast<std::size_t>(i);
@@ -3137,6 +3184,13 @@ void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
 
         stepSeqPanel_->setSlotRoleInfoDirect(i, loaded,
             engine::SlotRoleInfo{ sl.role, sl.isRoleManual });
+
+        {
+            const auto mt = (loaded && sl.role != engine::SlotRole::Unknown
+                             && sl.role != engine::SlotRole::Fx)
+                ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
+            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "");
+        }
     }
 
     prefetchNeighborScenes(sceneIndex);
