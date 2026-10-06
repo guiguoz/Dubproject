@@ -362,7 +362,8 @@ MainComponent::MainComponent()
                     const auto mt = (sl.role != engine::SlotRole::Unknown
                                      && sl.role != engine::SlotRole::Fx)
                         ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
-                    stepSeqPanel_->setSlotContentType(i, engine::mix::contentTypeName(mt));
+                    stepSeqPanel_->setSlotContentType(i, engine::mix::contentTypeName(mt),
+                                                     sl.isRoleManual);
                 }
             }
             stepSeqPanel_->setMagicActive(false);
@@ -377,7 +378,8 @@ MainComponent::MainComponent()
                 const bool loaded = !facade_.slotFilePath(i).empty();
                 if (loaded)
                     stepSeqPanel_->setSlotContentType(
-                        i, engine::mix::contentTypeName(type));
+                        i, engine::mix::contentTypeName(type),
+                        facade_.getSlotRoleInfo(i).manual);
 
                 // pan/width/depth sont appliqués au runtime par le worker V2
                 // (setSlotMixState) ; on ne fait que refléter l'état ici.
@@ -431,6 +433,17 @@ MainComponent::MainComponent()
     {
         facade_.setSlotRoleChoice(slot, typeIndex);
         stepSeqPanel_->updateRoleStatus(slot);
+        // Mettre à jour le tag amber immédiatement (orange si forcé, amber si auto).
+        {
+            const auto info = facade_.getSlotRoleInfo(slot);
+            if (info.role != engine::SlotRole::Unknown)
+            {
+                const auto mt = engine::roleToMixType(info.role);
+                if (mt != engine::mix::MixContentType::OTHER)
+                    stepSeqPanel_->setSlotContentType(slot,
+                        engine::mix::contentTypeName(mt), info.manual);
+            }
+        }
         stepSeqPanel_->repaint();   // contour manuel peint en paintOverChildren : immédiat
         // Re-lancer l'IA avec le nouveau type
         triggerAI();
@@ -734,7 +747,12 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
             MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
             MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
         };
-        stepSeqPanel_->setSlotContentType(slot, engine::mix::contentTypeName(kDefaultTypes[slot]));
+        const auto& scRef = sceneStore_.getScene(facade_.currentSceneIdx());
+        const auto& slRef = scRef.slots[static_cast<std::size_t>(slot)];
+        const auto mt = (slRef.role != engine::SlotRole::Unknown
+                         && slRef.role != engine::SlotRole::Fx)
+            ? engine::roleToMixType(slRef.role) : kDefaultTypes[slot];
+        stepSeqPanel_->setSlotContentType(slot, engine::mix::contentTypeName(mt), slRef.isRoleManual);
     }
     stepSeqPanel_->setSlotWaveform(slot, {});   // placeholder immédiat
 
@@ -2878,7 +2896,8 @@ void MainComponent::applyScene(int idx, int fromIdx)
             const auto mt = (loaded && sl.role != engine::SlotRole::Unknown
                              && sl.role != engine::SlotRole::Fx)
                 ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
-            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "");
+            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "",
+                                              loaded && sl.isRoleManual);
         }
     }
 
@@ -3189,7 +3208,8 @@ void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
             const auto mt = (loaded && sl.role != engine::SlotRole::Unknown
                              && sl.role != engine::SlotRole::Fx)
                 ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
-            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "");
+            stepSeqPanel_->setSlotContentType(i, loaded ? engine::mix::contentTypeName(mt) : "",
+                                              loaded && sl.isRoleManual);
         }
     }
 

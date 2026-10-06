@@ -391,7 +391,8 @@ public:
 
     /// Set the content-type tag shown in the loaded indicator (e.g. "KICK", "BASS").
     /// Pass empty string to restore the normal ●/○ indicator.
-    void setSlotContentType(int slot, const std::string& typeName)
+    /// forced=true = type forcé manuellement → couleur orange vif (vs amber auto).
+    void setSlotContentType(int slot, const std::string& typeName, bool forced = false)
     {
         if (slot < 0 || slot >= 9) return;
         if (typeName.empty())
@@ -413,8 +414,10 @@ public:
             loadedIndicators_[slot].setFont(
                 juce::Font(juce::FontOptions{}.withHeight(8.f).withStyle("Bold")));
             loadedIndicators_[slot].setText(typeName, juce::dontSendNotification);
+            // Forcé manuellement → orange vif ; auto (rôle de piste) → amber discret.
             loadedIndicators_[slot].setColour(
-                juce::Label::textColourId, juce::Colour(0xFFFFCC44));  // amber
+                juce::Label::textColourId,
+                forced ? juce::Colour(0xFFFF8C00) : juce::Colour(0xFFFFCC44));
         }
     }
 
