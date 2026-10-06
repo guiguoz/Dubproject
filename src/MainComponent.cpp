@@ -250,6 +250,8 @@ MainComponent::MainComponent()
                 // le sample lors d'une navigation stopped sans passer par captureCurrentScene().
                 auto& sc2 = sceneStore_.getScene(sceneIdx);
                 sc2.slots[static_cast<std::size_t>(s)].filePath = path;
+                sc2.slots[static_cast<std::size_t>(s)].delaySend =
+                    engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
                 sc2.used = true;
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
@@ -433,9 +435,12 @@ MainComponent::MainComponent()
     {
         facade_.setSlotRoleChoice(slot, typeIndex);
         stepSeqPanel_->updateRoleStatus(slot);
-        // Mettre à jour le tag amber immédiatement (orange si forcé, amber si auto).
+        // Sync MC-side + mettre à jour le tag amber (orange si forcé, amber si auto).
         {
             const auto info = facade_.getSlotRoleInfo(slot);
+            auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+            sc.slots[static_cast<std::size_t>(slot)].role = info.role;
+            sc.slots[static_cast<std::size_t>(slot)].isRoleManual = info.manual;
             if (info.role != engine::SlotRole::Unknown)
             {
                 const auto mt = engine::roleToMixType(info.role);
@@ -2682,6 +2687,11 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
         // temps réel sont pilotés par l'AutoMix V2 depuis les rôles).
         sc.slots[idx].delaySend =
             engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(i));
+        {
+            const auto roleInfo = facade_.getSlotRoleInfo(i);
+            sc.slots[idx].role = roleInfo.role;
+            sc.slots[idx].isRoleManual = roleInfo.manual;
+        }
         // steps et trackBarCounts sont maintenant mis à jour en temps réel
         // (onStepChanged, onTrackBarCountChanged) — ne pas écraser depuis writePatterns_.
     }
