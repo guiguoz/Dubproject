@@ -82,11 +82,19 @@ public:
     // L'édition live (flipPatternBuffer) reste immédiate.
     // Discipline : un seul stage en cours (navigateScene est bloqué pendant
     // une transition) ; toute publication immédiate annule le stage.
+    //
+    // Surcharge 3 arguments : la scène ENTRANTE redémarre sur son step 0 à la
+    // frontière (phase recalée), quelles que soient les longueurs respectives
+    // des patterns sortant/entrant. Sans le 3e argument, la phase est conservée
+    // (comportement historique : index = step % numSteps).
     void stageForBoundary(const TrackPattern staged[kMaxSlots],
                           int64_t boundarySample) noexcept {
-        for (int s = 0; s < kMaxSlots; ++s) staged_[s] = staged[s];
-        stagedBoundary_.store(boundarySample, std::memory_order_release);
-        stagedActive_.store(true, std::memory_order_release);
+        stageForBoundaryImpl(staged, boundarySample, kKeepPhase);
+    }
+    void stageForBoundary(const TrackPattern staged[kMaxSlots],
+                          int64_t boundarySample,
+                          int64_t boundaryStep) noexcept {
+        stageForBoundaryImpl(staged, boundarySample, boundaryStep);
     }
     void clearStaged() noexcept {
         stagedActive_.store(false, std::memory_order_release);
@@ -95,6 +103,10 @@ public:
         // slots silencieux au redémarrage du transport (blockStart repart de 0).
         for (int s = 0; s < kMaxSlots; ++s)
             slotActiveAt_[s].store(0, std::memory_order_release);
+        // Un stage annulé = aucun recalage de phase en attente : on repart de la
+        // grille globale (sinon la base resterait à un step > 0 et le transport
+        // redémarrant à 0 jouerait un pattern décalé).
+        resetPatternPhase();
     }
     bool hasStaged() const noexcept {
         return stagedActive_.load(std::memory_order_acquire);
@@ -165,8 +177,15 @@ public:
             for (int slot = 0; slot < kMaxSlots; ++slot) {
                 const TrackPattern* pat = patterns_.readBuffer(slot);
                 if (pat->numSteps <= 0) continue;
-                const int32_t stepInPattern =
-                    static_cast<int32_t>(step % static_cast<int64_t>(pat->numSteps));
+                // Base de phase : un step antérieur à la frontière appartient au
+                // cycle PRÉCÉDENT (sa base a été jouée par l'ancien pattern). Seul
+                // cas atteignable : la fenêtre de swing relâchée après la
+                // frontière — sans ce garde, ce step déclencherait la DERNIÈRE
+                // case du pattern entrant (index négatif bouclé), soit un coup
+                // fantôme pile à la bascule.
+                const int64_t base = phaseBase_[slot].load(std::memory_order_acquire);
+                if (base > 0 && step < base) continue;
+                const int32_t stepInPattern = stepInPatternFor(slot, step, pat->numSteps);
                 if (!pat->steps[stepInPattern]) continue;
                 // Gate ENTER : avant PcmFlip, ignorer les triggers de B
                 if (triggerSample < slotActiveAt_[slot].load(std::memory_order_acquire)) continue;
@@ -197,10 +216,57 @@ public:
         slotActiveAt_[slot].store(0, std::memory_order_release);
     }
 
+    // ── Phase de pattern (recalage à la frontière de transition) ─────────────
+    // phaseBase_[slot] = index de step GLOBAL qui correspond au step 0 du pattern
+    // de ce slot. 0 (défaut) = grille globale depuis le démarrage du transport.
+    // Posé à la frontière de transition pour que la scène entrante démarre sur
+    // son propre step 0, même si la frontière n'est pas un multiple de sa
+    // longueur (ex. A = 3 mesures → frontière au step 48, B = 2 mesures → 48 % 32
+    // vaudrait 16 sans recalage).
+    int64_t phaseBase(int slot) const noexcept {
+        if (slot < 0 || slot >= kMaxSlots) return 0;
+        return phaseBase_[slot].load(std::memory_order_acquire);
+    }
+    void resetPatternPhase() noexcept {
+        for (int s = 0; s < kMaxSlots; ++s)
+            phaseBase_[s].store(0, std::memory_order_release);
+    }
+    // Longueur du pattern publié (ce que l'audio joue réellement) — pour l'UI.
+    int32_t numStepsForSlot(int slot) const noexcept {
+        if (slot < 0 || slot >= kMaxSlots) return 16;
+        const int32_t n = patterns_.readBuffer(slot)->numSteps;
+        return n > 0 ? n : 16;
+    }
+
 private:
+    static constexpr int64_t kKeepPhase = INT64_MIN;   // « ne pas recaler la phase »
+
+    // Index du step DANS le pattern du slot, base de phase déduite.
+    int32_t stepInPatternFor(int slot, int64_t step, int32_t numSteps) const noexcept {
+        if (numSteps <= 0) return 0;
+        const int64_t base = phaseBase_[slot].load(std::memory_order_acquire);
+        int64_t rel = step - base;
+        rel %= numSteps;
+        if (rel < 0) rel += numSteps;   // les steps antérieurs à la base bouclent en fin de pattern
+        return static_cast<int32_t>(rel);
+    }
+
+    void stageForBoundaryImpl(const TrackPattern staged[kMaxSlots],
+                              int64_t boundarySample,
+                              int64_t phaseBaseStep) noexcept {
+        for (int s = 0; s < kMaxSlots; ++s) staged_[s] = staged[s];
+        stagedBoundary_.store(boundarySample, std::memory_order_release);
+        stagedPhaseBase_.store(phaseBaseStep, std::memory_order_release);
+        stagedActive_.store(true, std::memory_order_release);
+    }
+
     // Publie le pattern stagé (audio thread, à la frontière).
     // Copie bornée sans allocation ; aucun lock, UI, I/O.
     void publishStaged() noexcept {
+        const int64_t base = stagedPhaseBase_.load(std::memory_order_acquire);
+        if (base != kKeepPhase)
+            for (int s = 0; s < kMaxSlots; ++s)
+                phaseBase_[s].store(base, std::memory_order_release);
         for (int s = 0; s < kMaxSlots; ++s)
             *patterns_.writeBuffer(s) = staged_[s];
         patterns_.publish();
@@ -211,8 +277,12 @@ private:
 
     // Pattern stagé pour flip quantisé (scènes) + frontière absolue.
     TrackPattern staged_[kMaxSlots] = {};
-    std::atomic<int64_t> stagedBoundary_ { 0 };
-    std::atomic<bool>    stagedActive_   { false };
+    std::atomic<int64_t> stagedBoundary_  { 0 };
+    std::atomic<int64_t> stagedPhaseBase_ { kKeepPhase };
+    std::atomic<bool>    stagedActive_    { false };
+
+    // Base de phase par slot (voir phaseBase()).
+    std::atomic<int64_t> phaseBase_[kMaxSlots] = {};
 
     // Gate d'activation par slot (voir ci-dessus)
     std::atomic<int64_t> slotActiveAt_[kMaxSlots] = {};

@@ -67,8 +67,12 @@ void TransitionEngine::requestTransition(int fromScene, int toScene,
     for (int i = 0; i < kMaxSlots; ++i)
         plan_.slotActions[i] = diffSlot(from.slots[i], to.slots[i]);
 
-    // Frontière d'exécution : prochaine frontière de 16 steps
-    plan_.executionSample = nextBoundary(ts, 16);
+    // Frontière d'exécution : fin du cycle de la scène courante (même règle que
+    // le plan DIRECT — « prochaine mesure » coupait les scènes multi-mesures au
+    // milieu de leur pattern). Le recalage de phase de la scène entrante n'existe
+    // que sur le chemin DIRECT (stageForBoundary) : ce chemin legacy sert au
+    // rendu offline et aux tests.
+    plan_.executionSample = planTransitionBoundary(ts, from).sample;
 
     hasDirectPlan_ = false;
     state_.store(State::Armed, std::memory_order_release);

@@ -1142,7 +1142,16 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     if (transition_.state() != TransitionEngine::State::Idle) return false;
     const SceneData& from = sceneStore_.getScene(fromIdx);
     const SceneData& to   = sceneStore_.getScene(toIdx);
-    int64_t boundary = nextBoundary(transport_.snapshot(), 16);
+    // Frontière = FIN DU CYCLE de la scène courante (et non « prochaine mesure ») :
+    // le pattern de A va au bout de son cycle, puis le plan COMMIT au même sample.
+    // La scène entrante est recalée sur son step 0 à cette frontière (stageForBoundary
+    // 3 args), donc elle repart du début de son pattern même si les deux cycles
+    // ont des longueurs différentes (A = 4 mesures → B = 3 mesures, etc.).
+    const TransportState tsSnap = transport_.snapshot();
+    TransitionBoundary tb = planTransitionBoundary(tsSnap, from);
+    int64_t boundary     = tb.sample;
+    int64_t boundaryStep = tb.step;
+    const int cycleSteps = tb.cycleSteps;
     SceneTransitionPlan plan;
     buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
     if (!plan.valid) return false;
@@ -1150,17 +1159,21 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
 
     // Policy pure : ajuste les atSample (BUILD/BREAKDOWN) sans toucher au DSP
     {
-        PolicyContext pctx{ sampleRate_, transport_.snapshot().bpm, 4, 4, boundary };
-        // Pour BREAKDOWN, vérifier que T-measure est dans le futur, sinon décaler T d'une mesure
+        PolicyContext pctx{ sampleRate_, tsSnap.bpm, 4, 4, boundary };
+        // Pour BREAKDOWN, vérifier que T-measure est dans le futur, sinon décaler T d'un cycle
         PolicyType ptype = TransitionPolicy::choose(plan);
         if (ptype == PolicyType::Breakdown) {
             const int64_t measure = TransitionPolicy::samplesPerBeat(pctx) * 4;
-            int64_t earliest = transport_.snapshot().samplePos;
-            // Si le premier LEAVE (T-measure) est déjà passé, décaler d'une mesure
+            int64_t earliest = tsSnap.samplePos;
+            // Si le premier LEAVE (T-measure) est déjà passé, décaler d'un cycle complet
             if (boundary - measure < earliest) {
-                boundary = nextBoundary(transport_.snapshot(), 32); // next next bar
+                boundaryStep += cycleSteps;                        // cycle suivant
+                boundary      = sampleOfStep(tsSnap, boundaryStep);
                 // Si encore trop tôt (rare), boucler
-                while (boundary - measure < earliest) boundary += measure;
+                while (boundary - measure < earliest) {
+                    boundaryStep += cycleSteps;
+                    boundary      = sampleOfStep(tsSnap, boundaryStep);
+                }
                 buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
                 if (!plan.valid) return false;
                 pctx.boundary = boundary;
@@ -1265,6 +1278,7 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     }
 
     // Stage pattern B à la même frontière (sample-accurate, même sample que GainRamps)
+    // + recalage de phase : la scène entrante démarre sur le step 0 de son pattern.
     {
         StepBuf nextBuf;
         for (int i = 0; i < kMaxSlots; ++i) {
@@ -1274,7 +1288,7 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
             for (int s = 0; s < kMaxSteps; ++s)
                 nextBuf.steps[i][s] = to.steps[static_cast<size_t>(i)][static_cast<size_t>(s)];
         }
-        stageStepBufferForBoundary(nextBuf, boundary);
+        stageStepBufferForBoundary(nextBuf, boundary, boundaryStep);
     }
 
     // Mettre à jour slotPath_/trim pour les slots stagés (évite re-import dans applyScene)
@@ -1286,10 +1300,9 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
         }
     }
 
-    // Figer longueur pour détection fin de cycle (comme avant)
-    int sceneLen = 1;
-    for (int i = 0; i < kMaxSlots; ++i) sceneLen = std::max(sceneLen, getTrackStepCount(i));
-    setPendingTransitionLen(sceneLen);
+    // Durée affichée / garde anti-re-navigation : le cycle de la scène courante
+    // (c'est lui qu'on attend), pas la longueur de la scène cible.
+    setPendingTransitionLen(cycleSteps);
     setPendingScene(toIdx);
 
     return true;
@@ -1545,6 +1558,13 @@ void EngineFacade::prepareStepBuffer(const StepBuf& buf) noexcept
 void EngineFacade::stageStepBufferForBoundary(const StepBuf& buf,
                                               int64_t boundarySample) noexcept
 {
+    stageStepBufferForBoundary(buf, boundarySample, kKeepPhaseBase);
+}
+
+void EngineFacade::stageStepBufferForBoundary(const StepBuf& buf,
+                                              int64_t boundarySample,
+                                              int64_t boundaryStep) noexcept
+{
     TrackPattern staged[kMaxSlots];
     for (int s = 0; s < kMaxSlots; ++s)
     {
@@ -1553,7 +1573,10 @@ void EngineFacade::stageStepBufferForBoundary(const StepBuf& buf,
         for (int i = 0; i < kMaxSteps; ++i)
             staged[s].steps[i] = buf.steps[s][i];
     }
-    graph_.sequencer().stageForBoundary(staged, boundarySample);
+    if (boundaryStep == kKeepPhaseBase)
+        graph_.sequencer().stageForBoundary(staged, boundarySample);
+    else
+        graph_.sequencer().stageForBoundary(staged, boundarySample, boundaryStep);
 }
 
 int64_t EngineFacade::transitionExecutionSample() const noexcept
@@ -1575,6 +1598,18 @@ int32_t EngineFacade::getCurrentStep() const noexcept
     const TransportState ts = transport_.snapshot();
     if (!ts.playing) return 0;
     return static_cast<int32_t>(stepIndexAt(ts, ts.samplePos) % kMaxSteps);
+}
+
+int32_t EngineFacade::getTrackStep(int track) const noexcept
+{
+    if (track < 0 || track >= kMaxSlots) return 0;
+    const TransportState ts = transport_.snapshot();
+    if (!ts.playing) return 0;
+    const int64_t g = stepIndexAt(ts, ts.samplePos);
+    const int32_t n = graph_.sequencer().numStepsForSlot(track);
+    int64_t rel = (g - graph_.sequencer().phaseBase(track)) % n;
+    if (rel < 0) rel += n;
+    return static_cast<int32_t>(rel);
 }
 
 double EngineFacade::getCurrentPhase() const noexcept

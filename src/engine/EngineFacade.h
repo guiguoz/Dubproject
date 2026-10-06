@@ -287,6 +287,10 @@ public:
     // generateEvents (même sample que les GainRamps). Annulé par
     // prepareStepBuffer()/setCurrentScene()/stop()/play().
     void stageStepBufferForBoundary(const StepBuf& buf, int64_t boundarySample) noexcept;
+    // Idem + recalage de phase : la scène entrante démarre sur le step 0 de son
+    // pattern à `boundaryStep` (index de step global de la frontière).
+    void stageStepBufferForBoundary(const StepBuf& buf, int64_t boundarySample,
+                                    int64_t boundaryStep) noexcept;
     // Sample de la frontière armée (plan_.executionSample), ou -1 si aucune
     // transition armée.
     int64_t transitionExecutionSample() const noexcept;
@@ -327,7 +331,13 @@ public:
 
     // ── Playhead / séquenceur (pour l'UI) ──────────────────────────────────────
     // Index du step courant (0 .. kMaxSteps-1), récupéré depuis le Transport V2.
+    // Grille GLOBALE : à n'utiliser que pour des affichages absolus. Pour le
+    // playhead d'une piste, utiliser getTrackStep() (tient compte du recalage de
+    // phase post-transition).
     int32_t getCurrentStep() const noexcept;
+    // Index du step courant DANS le pattern de la piste (0 .. n-1), avec la même
+    // base de phase que l'audio → l'affichage ne peut pas diverger du son.
+    int32_t getTrackStep(int track) const noexcept;
     // Phase fractionnaire du beat courant [0..∞), pour animation de playhead.
     double getCurrentPhase() const noexcept;
 
@@ -391,6 +401,9 @@ private:
     // Dimensionné au maximum de EventScheduler (256 events).
     static constexpr int kMaxEvBuf = 256;
     EventWithOffset     evBuf_[kMaxEvBuf];
+
+    // Sentinelle « ne pas recaler la phase » pour stageStepBufferForBoundary.
+    static constexpr int64_t kKeepPhaseBase = INT64_MIN;
     int                 evCount_ = 0;
 
     // État — thread-safe : écrit par message thread, lu par audio thread.

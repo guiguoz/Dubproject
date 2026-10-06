@@ -4,9 +4,45 @@
 #include <cstdint>
 #include <string>
 #include <array>
+#include <algorithm>
 #include "engine/SceneStore.h"
+#include "engine/Transport.h"   // nextCycleStep / sampleOfStep (frontière de cycle)
 
 namespace engine {
+
+// ── Frontière de transition de scène (règle unique : fin du cycle courant) ───
+//
+// Cycle d'une scène = longueur de sa plus longue piste, en steps. Les patterns
+// d'une même scène peuvent avoir des longueurs différentes ; la plus longue
+// borne le cycle (même définition que le `sceneLen` de la V1 : les bar counts
+// de l'UI étant en pratique des multiples — 1/2/4/8/16/32 — le plus long est
+// aussi le PPCM de tous, donc toutes les pistes retombent sur leur step 0).
+inline int sceneCycleSteps(const SceneData& sc) noexcept {
+    int len = 16;   // une mesure minimum : jamais de bascule infra-mesure
+    for (int i = 0; i < kMaxSlots; ++i) {
+        const int bars = sc.trackBarCounts[static_cast<std::size_t>(i)];
+        if (bars > 0) len = std::max(len, bars * 16);
+    }
+    return len;
+}
+
+// Frontière d'exécution d'une transition depuis `from` : fin du cycle en cours.
+// `step` = index global (monotone) du step frontière ; `sample` = son sample
+// absolu ; `cycleSteps` = longueur de cycle retenue (UI / durée d'attente).
+struct TransitionBoundary {
+    int64_t step       = 0;
+    int64_t sample     = 0;
+    int     cycleSteps = 16;
+};
+
+inline TransitionBoundary planTransitionBoundary(const TransportState& ts,
+                                                 const SceneData& from) noexcept {
+    TransitionBoundary b{};
+    b.cycleSteps = sceneCycleSteps(from);
+    b.step       = nextCycleStep(ts, b.cycleSteps);
+    b.sample     = sampleOfStep(ts, b.step);
+    return b;
+}
 
 // ── AssetId : identité stable d'un asset (chemin canonique + trims) ───────────
 // Préparé hors audio. 0 = vide. Aucune string en COMMIT.

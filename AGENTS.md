@@ -72,6 +72,40 @@ Ordre logique stéréo :
 
 ## Transitions adaptatives entre scènes
 
+### Quantification : frontière = fin du cycle de la scène courante
+
+Une navigation en lecture passe par `EngineFacade::prepareDirectPlan()` (PREPARE →
+COMMIT audio sample-accurate → CLEANUP). La frontière d'exécution n'est **pas** la
+prochaine mesure : c'est la **fin du cycle de la scène courante**.
+
+- Cycle d'une scène = `sceneCycleSteps(SceneData)` (`src/engine/SceneTransitionPlan.h`) =
+  longueur de sa **plus longue piste** (`trackBarCounts[i] * 16`, minimum 1 mesure).
+  Même définition que le `sceneLen` de la V1 : les bar counts de l'UI étant en pratique
+  des multiples (1/2/4/8/16/32), le plus long est aussi le PPCM de toutes les pistes.
+- `planTransitionBoundary(ts, from)` retourne `{ step, sample, cycleSteps }` ;
+  `nextCycleStep()`/`sampleOfStep()` sont dans `src/engine/Transport.h`. Si la position est
+  exactement sur une frontière, on retourne la **suivante** (un cycle complet s'écoule).
+- Aucun plafond : une scène de 16/32 mesures va au bout de son cycle (à 120 BPM, 32 mesures
+  ≈ 64 s). `setPendingTransitionLen(cycleSteps)` reflète cette attente.
+
+**Recalage de phase** : à la frontière, la scène entrante redémarre sur **son** step 0.
+`Sequencer::stageForBoundary(patterns, sample, boundaryStep)` pose une base de phase par
+piste (`phaseBase_[slot]`) et l'index joué devient `(step - phaseBase) mod numSteps` au lieu
+de `step mod numSteps`. Sans ce recalage, une bascule sur une frontière qui n'est pas un
+multiple de la longueur de la scène entrante la faisait repartir au milieu de son pattern
+(ex. A = 4 mesures → B = 3 mesures : 64 % 48 = 16). Le recalage s'applique à **toutes** les
+pistes de la scène entrante (y compris KEEP) : après une transition, tout part du step 0.
+La surcharge à 2 arguments (sans `boundaryStep`) conserve la phase historique.
+
+La base de phase est remise à 0 par `Sequencer::clearStaged()` (appelé par `play()`,
+`stop()`, `setCurrentScene()`, `prepareStepBuffer()`) : un transport qui redémarre à 0 ne
+peut pas jouer un pattern décalé.
+
+**UI** : `EngineFacade::getTrackStep(track)` donne l'index dans le pattern avec la même base
+de phase que l'audio — le playhead (`StepSequencerPanel`) ne doit PAS recalculer
+`getCurrentStep() % numSteps` (désynchro garantie après une transition).
+`getCurrentStep()` reste la grille globale (affichages absolus / debug).
+
 `SceneStore::armAdaptiveCrossfade()` est appelé depuis `applyScene()` dans MainComponent.
 L'énergie de chaque scène est calculée par `engine::SceneEnergy::compute(engine::SceneData)` (`src/engine/SceneEnergy.h`) :
 - Score 0.0–1.0 basé sur densité de pas + mutes (pas d'analyse audio)

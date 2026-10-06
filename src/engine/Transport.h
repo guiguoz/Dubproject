@@ -49,12 +49,20 @@ inline int64_t samplesUntilStep(const TransportState& ts, int64_t stepIndex) noe
     return sampleOfStep(ts, stepIndex) - ts.samplePos;
 }
 
+// Index (global, monotone) du premier step de la PROCHAINE frontière qui est un
+// multiple de stepsPerCycle. Strictement supérieur au step courant : si la
+// position est exactement sur une frontière, on retourne la suivante — un cycle
+// complet doit s'écouler (c'est ce que veut dire « finir le cycle courant »).
+inline int64_t nextCycleStep(const TransportState& ts, int64_t stepsPerCycle) noexcept {
+    if (stepsPerCycle <= 0) return stepIndexAt(ts, ts.samplePos);
+    const int64_t cur = stepIndexAt(ts, ts.samplePos);
+    return (cur / stepsPerCycle + 1) * stepsPerCycle;
+}
+
 // Sample absolu de la prochaine frontière qui est un multiple de stepsPerCycle.
 inline int64_t nextBoundary(const TransportState& ts, int64_t stepsPerCycle) noexcept {
     if (stepsPerCycle <= 0) return ts.samplePos;
-    int64_t cur     = stepIndexAt(ts, ts.samplePos);
-    int64_t nextStep = (cur / stepsPerCycle + 1) * stepsPerCycle;
-    return sampleOfStep(ts, nextStep);
+    return sampleOfStep(ts, nextCycleStep(ts, stepsPerCycle));
 }
 
 // ─── Spinlock non-récursif (basé sur atomic_flag) ──────────────────────────

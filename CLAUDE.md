@@ -112,7 +112,26 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 - Fallback `presetNameSource_ = Manual` : si l'utilisateur saisit un nom manuellement,
   il n'est jamais écrasé par le scan automatique.
 
-### 6. Conventions importantes
+### 6. Quantification des transitions de scène
+
+- **Frontière = fin du cycle de la scène courante**, pas la prochaine mesure :
+  `planTransitionBoundary(ts, from)` (`engine/SceneTransitionPlan.h`) →
+  `sceneCycleSteps()` = plus longue piste (`trackBarCounts × 16`), `nextCycleStep()`
+  (`engine/Transport.h`). Utilisé par `EngineFacade::prepareDirectPlan()` **et**
+  `TransitionEngine::requestTransition()` (chemin offline). Ne jamais revenir à
+  `nextBoundary(ts, 16)` pour une navigation : les scènes multi-mesures étaient coupées
+  au milieu de leur pattern.
+- **La scène entrante redémarre sur son step 0** : `stageStepBufferForBoundary(buf, sample,
+  boundaryStep)` → `Sequencer::stageForBoundary(..., boundaryStep)` pose `phaseBase_[slot]` ;
+  l'index joué est `(step - phaseBase) mod numSteps`. Le recalage couvre toutes les pistes
+  de la scène entrante. `clearStaged()` remet la base à 0 (play/stop/setCurrentScene).
+- **Playhead UI** : `facade_.getTrackStep(t)` (base de phase moteur). Ne JAMAIS recalculer
+  `getCurrentStep() % numSteps` côté UI.
+- **Null-test** : les scènes de la fixture sont toutes à 1 mesure → cycle 16 pas →
+  `nextCycleStep` ≡ `nextBoundary` ; un correctif de timing ne doit pas modifier le rendu
+  de référence (vérifié : hashAudio/hashRms inchangés).
+
+### 7. Conventions importantes
 
 - **`processAdd` = wet-only additif** : ne pas remplacer le buffer de sortie.
 - **Delay sends** : configurés par l'IA (`SmartSamplerEngine::onTypesDetected`), ne pas

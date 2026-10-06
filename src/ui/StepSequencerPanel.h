@@ -831,15 +831,16 @@ public:
 
         if (!facade_ || !facade_->isPlaying()) return;
 
-        const int globalStep = facade_->getCurrentStep();
         const juce::Colour playheadCol(0xFF4CDFA8);  // primary green
 
         // Per-track playhead (each track has its own step count)
         const int tStepW = gridW / kViewSteps;  // fixed 32-step window
         for (int t = 0; t < 9; ++t)
         {
-            const int nSteps    = trackStepCounts_[t];
-            const int trackStep = globalStep % nSteps;
+            // Index fourni par le moteur : même base de phase que l'audio (la
+            // scène entrante redémarre à son step 0 après une transition), donc
+            // l'affichage ne peut pas diverger du son.
+            const int trackStep = facade_->getTrackStep(t);
             // Only draw if the current step is in the visible page
             const int visStep   = trackStep - viewOffsetSteps_;
             if (visStep < 0 || visStep >= kViewSteps) continue;
@@ -858,7 +859,7 @@ public:
         // Beat group dots above grid (8 groups of 4 for the 32-step window)
         const int tStepW0    = gridW / kViewSteps;
         const int nSteps0    = trackStepCounts_[0];
-        const int trackStep0 = globalStep % nSteps0;
+        const int trackStep0 = facade_->getTrackStep(0);   // base de phase moteur
         const int visStep0   = trackStep0 - viewOffsetSteps_;
         for (int b = 0; b < 8; ++b)
         {
@@ -1084,9 +1085,7 @@ private:
         // Auto-scroll view to follow playhead when pattern is longer than 32 steps
         if (facade_ && facade_->isPlaying())
         {
-            const int globalStep = (facade_) ? facade_->getCurrentStep() : 0;
-            const int maxSteps   = trackStepCounts_[0];  // all tracks same length
-            const int trackStep  = globalStep % maxSteps;
+            const int trackStep  = facade_->getTrackStep(0);   // base de phase moteur
 
             // If playhead is outside the visible 32-step window, scroll to it
             if (trackStep < viewOffsetSteps_ || trackStep >= viewOffsetSteps_ + 32)
