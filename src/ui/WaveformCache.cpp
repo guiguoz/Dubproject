@@ -109,8 +109,8 @@ std::vector<float> WaveformCache::loadAndDecode(const std::string& path, int tri
     const int total = static_cast<int>(reader->lengthInSamples);
     if (total <= 0) return {};
 
-    const int start = (trimStart >= 0) ? std::min(trimStart, total) : 0;
-    const int end   = (trimEnd   >= 0) ? std::min(trimEnd,   total) : total;
+    const int start = (trimStart > 0) ? std::min(trimStart, total) : 0;
+    const int end   = (trimEnd   > 0) ? std::min(trimEnd,   total) : total;
     const int len   = std::max(0, end - start);
     if (len == 0) return {};
 

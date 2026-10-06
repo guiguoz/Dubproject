@@ -376,7 +376,7 @@ public:
     const std::string& getSlotFilePath(int slot) const
     {
         static const std::string empty;
-        if (slot < 0 || slot >= 8) return empty;
+        if (slot < 0 || slot >= 9) return empty;
         return slotFilePaths_[static_cast<std::size_t>(slot)];
     }
 
@@ -477,6 +477,12 @@ public:
         if (slot < 0 || slot >= 9) return;
         slotEnvelopes_[static_cast<std::size_t>(slot)] = std::move(envelope);
         repaint();
+    }
+
+    int getSlotEnvelopeSize(int slot) const noexcept
+    {
+        if (slot < 0 || slot >= 9) return 0;
+        return static_cast<int>(slotEnvelopes_[static_cast<std::size_t>(slot)].size());
     }
 
     /// Update the slot's BPM indicator after auto-match processing.

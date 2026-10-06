@@ -2969,10 +2969,24 @@ void MainComponent::applyScene(int idx, int fromIdx)
             // Slot doit être vidé
             facade_.clearSlot(i);
             stepSeqPanel_->setSlotFilePath(i, "");
+            stepSeqPanel_->setSlotWaveform(i, {});
         }
         else if (!newPath.empty())
         {
-            // Même fichier déjà chargé : skip reload → pas de coupure audio
+            // Même fichier déjà chargé : skip reload → pas de coupure audio.
+            // Waveform absente si ce slot n'a jamais été affiché dans cette session UI.
+            if (stepSeqPanel_->getSlotEnvelopeSize(i) == 0)
+            {
+                const int ts2 = sc.slots[sidx].trimStart;
+                const int te2 = sc.slots[sidx].trimEnd;
+                const engine::AssetId id2 = engine::assetIdFor(newPath, ts2, te2);
+                juce::Component::SafePointer<MainComponent> safeThis2(this);
+                waveformCache_.request(i, newPath, ts2, te2, id2,
+                    [safeThis2](int s, std::vector<float> env) {
+                        if (auto* mc = safeThis2.getComponent())
+                            mc->stepSeqPanel_->setSlotWaveform(s, std::move(env));
+                    });
+            }
         }
 
         facade_.setSlotMuted(i, sc.slots[i].muted);
@@ -3196,8 +3210,18 @@ void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
         stepSeqPanel_->setSlotLoaded     (i, loaded);
         if (!loaded)
             stepSeqPanel_->setSlotWaveform(i, {});
-        // Slot non vide : conserver la waveform déjà affichée (l'envelope est calculée
-        // à l'import et reste valide tant que le fichier n'a pas changé).
+        else if (stepSeqPanel_->getSlotEnvelopeSize(i) == 0)
+        {
+            // Slot chargé mais enveloppe absente (1ère affichage de cette scène en DIRECT).
+            const engine::AssetId wid = engine::assetIdFor(sl.filePath, sl.trimStart, sl.trimEnd);
+            juce::Component::SafePointer<MainComponent> safeThis(this);
+            waveformCache_.request(i, sl.filePath, sl.trimStart, sl.trimEnd, wid,
+                [safeThis](int s, std::vector<float> env) {
+                    if (auto* mc = safeThis.getComponent())
+                        mc->stepSeqPanel_->setSlotWaveform(s, std::move(env));
+                });
+        }
+        // Slot non vide avec enveloppe : conserver la waveform déjà affichée.
         stepSeqPanel_->setSlotMuted      (i, sl.muted);
         stepSeqPanel_->setSlotVolume     (i, sl.userGain);
         stepSeqPanel_->setSlotPitchOffset(i, sl.semitones);
