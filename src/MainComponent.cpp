@@ -2903,6 +2903,9 @@ void MainComponent::applyScene(int idx, int fromIdx)
         {
             const auto& sl    = sc.slots[static_cast<std::size_t>(i)];
             const bool loaded = !sl.filePath.empty();
+            // Samples partagés entre scènes : préserver le tag si le fichier n'a pas changé.
+            if (loaded && sl.filePath == stepSeqPanel_->getSlotFilePath(i))
+                continue;
             const auto mt = (loaded && sl.role != engine::SlotRole::Unknown
                              && sl.role != engine::SlotRole::Fx)
                 ? engine::roleToMixType(sl.role) : kDefaultTypes[i];
