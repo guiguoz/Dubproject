@@ -1186,13 +1186,13 @@ bool EngineFacade::canPrepareDirectPlan(int fromIdx, int toIdx) noexcept
                                                           assetIdForSlot(b));
         if (action != SlotPlanAction::Enter) continue;
 
+        const AssetId targetAsset = assetIdForSlot(b);
+        if (targetAsset == 0) return false;
+
         // Vérifie que le PCM stagé correspond bien à la cible (pas un reste du plan B annulé).
         const bool stagedForTarget = graph_.slotPlayer().hasStagedPcm(s)
                                   && transitionPlan_.slots[s].asset == targetAsset;
         if (stagedForTarget) continue;
-
-        const AssetId targetAsset = assetIdForSlot(b);
-        if (targetAsset == 0) return false;
 
         const AssetId cur = assetIdFor(slotPath_[s], slotTrimStart_[s], slotTrimEnd_[s]);
         if (cur == targetAsset && slotLoaded_[s].load(std::memory_order_acquire)) continue;
