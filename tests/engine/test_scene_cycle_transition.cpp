@@ -177,25 +177,100 @@ TEST_CASE("Recalage — sans 3e argument, la phase historique est conservée",
     REQUIRE(seq.phaseBase(0) == 0);
 }
 
-TEST_CASE("Recalage — un stage annulé remet la phase à zéro", "[transition][cycle][phase]")
+TEST_CASE("Recalage — clearStaged NE touche PAS la base de phase", "[transition][cycle][phase]")
 {
+    // Invariant : la base de phase appartient au transport, pas au stage.
+    // clearStaged() annule le flip pattern mais ne remet pas phaseBase à 0.
+    // C'est resetPatternPhase() qui est prévu pour ça (appelé par play()).
+    //
+    // NOTE : stageForBoundary() écrit dans stagedPhaseBase_, pas dans phaseBase_[].
+    // La base effective n'est posée dans phaseBase_[] qu'à publishStaged() (audio).
+    // Le test simule donc d'abord le bloc audio traversant la frontière, puis
+    // vérifie que clearStaged() ne touche pas à la base déjà publiée.
     Sequencer seq;
     const TransportState ts = makeTs();
+    TrackPattern patA{}; patA.numSteps = 16; patA.steps[0] = true;
+    *seq.patterns().writeBuffer(0) = patA; seq.patterns().publish();
+
     TrackPattern staged[kMaxSlots] = {};
     staged[0].numSteps = 32; staged[0].steps[0] = true;
+    const int64_t boundaryStep = 48;
+    const int64_t boundary = sampleOfStep(ts, boundaryStep);
+    seq.stageForBoundary(staged, boundary, boundaryStep);
 
-    seq.stageForBoundary(staged, sampleOfStep(ts, 48), 48);
-    // clearStaged() est appelé par play()/stop()/setCurrentScene() : si la base
-    // de phase survivait, un transport redémarrant à 0 jouerait un pattern décalé.
+    // Bloc audio traversant la frontière → publishStaged() → phaseBase_ = 48
+    {
+        EventScheduler sched;
+        const int64_t blockStart = boundary - 512;
+        TransportState blk = ts;
+        blk.blockStart = blockStart;
+        blk.samplePos  = blockStart + 1024;
+        seq.generateEvents(blk, blockStart, 1024, 0.f, sched);
+    }
+    REQUIRE(seq.phaseBase(0) == boundaryStep);  // publiée par l'audio
+    REQUIRE(seq.hasStaged() == false);           // stage consommé
+
+    // clearStaged() NE doit PAS remettre phaseBase à 0
     seq.clearStaged();
+    REQUIRE(seq.hasStaged() == false);
+    REQUIRE(seq.phaseBase(0) == boundaryStep);  // base préservée
+
+    // resetPatternPhase() remet bien à 0 (appelé par play()/navigation arrêtée).
+    seq.resetPatternPhase();
     REQUIRE(seq.phaseBase(0) == 0);
 
-    TrackPattern patA{}; patA.numSteps = 32; patA.steps[0] = true;
-    *seq.patterns().writeBuffer(0) = patA; seq.patterns().publish();
+    TrackPattern patB{}; patB.numSteps = 32; patB.steps[0] = true;
+    *seq.patterns().writeBuffer(0) = patB; seq.patterns().publish();
     const auto trigs = collectTriggers(seq, ts, 0, 0, 64);
     REQUIRE(trigs.size() == 2);
     REQUIRE(trigs[0] == sampleOfStep(ts, 0));
     REQUIRE(trigs[1] == sampleOfStep(ts, 32));
+}
+
+TEST_CASE("Recalage — la base de phase survit au republish post-commit (régression D1)",
+          "[transition][cycle][phase]")
+{
+    // Régression : applyScene appelle prepareStepBuffer → clearStaged ~33 ms après
+    // la frontière. Avant le correctif, cela remettait phaseBase à 0 et B démarrait
+    // au milieu de son pattern (ex. frontière=64, B=48 pas → index 64%48=16).
+    Sequencer seq;
+    const TransportState ts = makeTs();
+
+    // Pattern A en cours de lecture
+    TrackPattern patA{}; patA.numSteps = 64; patA.steps[0] = true;
+    *seq.patterns().writeBuffer(0) = patA; seq.patterns().publish();
+
+    // Stage B (48 pas) pour la frontière au step 64
+    TrackPattern stagedB[kMaxSlots] = {};
+    stagedB[0].numSteps = 48; stagedB[0].steps[0] = true;
+    const int64_t boundaryStep = 64;
+    const int64_t boundary = sampleOfStep(ts, boundaryStep);
+    seq.stageForBoundary(stagedB, boundary, boundaryStep);
+
+    // Bloc audio traversant la frontière → publishStaged() pose phaseBase = 64
+    {
+        EventScheduler sched;
+        const int64_t blockStart = boundary - 512;
+        const int32_t blockLen   = 1024;
+        TransportState blk = ts;
+        blk.blockStart = blockStart;
+        blk.samplePos  = blockStart + blockLen;
+        seq.generateEvents(blk, blockStart, blockLen, 0.f, sched);
+    }
+    REQUIRE(seq.phaseBase(0) == boundaryStep);  // base posée par publishStaged
+
+    // Simuler le tick timer : clearStaged() + republier B (équivalent prepareStepBuffer)
+    seq.clearStaged();
+    *seq.patterns().writeBuffer(0) = stagedB[0]; seq.patterns().publish();
+
+    // RÉGRESSION : avant le correctif, phaseBase retombait à 0 → index = 64%48 = 16
+    REQUIRE(seq.phaseBase(0) == boundaryStep);  // base préservée — échouait avant fix
+
+    // Vérifier que B déclenche bien sur son step 0 (= global step 64), pas sur 16
+    const int64_t expectedFirst = sampleOfStep(ts, 64);   // B step 0 ← correct
+    const auto trigs = collectTriggers(seq, ts, 0, boundaryStep, boundaryStep + 49);
+    REQUIRE(!trigs.empty());
+    REQUIRE(trigs[0] == expectedFirst);  // 352800 ; avant fix : sampleOfStep(ts, 80) = 441000
 }
 
 TEST_CASE("Recalage — swing : pas de coup fantôme sur la fin du pattern entrant",

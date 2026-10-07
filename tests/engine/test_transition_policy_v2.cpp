@@ -108,11 +108,13 @@ TEST_CASE("T-POLICYV2-BREAKDOWN-ROLES: LEAVE slots quittent selon leur role (Fx/
     REQUIRE(TransitionPolicy::choose(plan) == PolicyType::Breakdown);
     TransitionPolicy::apply(plan, ctx);
 
-    const int64_t beat = TransitionPolicy::samplesPerBeat(ctx);
-    REQUIRE(gainRampAt(plan, 2) == T - 3 * beat); // Fx   → -3 beats
-    REQUIRE(gainRampAt(plan, 3) == T - 2 * beat); // Pad  → -2 beats
-    REQUIRE(gainRampAt(plan, 4) == T - 1 * beat); // Perc → -1 beat
-    REQUIRE(gainRampAt(plan, 5) == T);             // Kick → beat 0
+    // Option A (clamp cycle sortant intangible) : tous les LEAVE restent à T.
+    // L'étalement par rôle (Fx -3 beats, Pad -2, Perc -1) était avant la frontière
+    // → clampé. Les fades s'enchaînent immédiatement à T, pas avant.
+    REQUIRE(gainRampAt(plan, 2) == T); // Fx   → clamped to T
+    REQUIRE(gainRampAt(plan, 3) == T); // Pad  → clamped to T
+    REQUIRE(gainRampAt(plan, 4) == T); // Perc → clamped to T
+    REQUIRE(gainRampAt(plan, 5) == T); // Kick → T (inchangé)
 }
 
 // ── T-POLICYV2-BREAKDOWN-INVARIANT ───────────────────────────────────────────

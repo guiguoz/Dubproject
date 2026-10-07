@@ -103,10 +103,10 @@ public:
         // slots silencieux au redémarrage du transport (blockStart repart de 0).
         for (int s = 0; s < kMaxSlots; ++s)
             slotActiveAt_[s].store(0, std::memory_order_release);
-        // Un stage annulé = aucun recalage de phase en attente : on repart de la
-        // grille globale (sinon la base resterait à un step > 0 et le transport
-        // redémarrant à 0 jouerait un pattern décalé).
-        resetPatternPhase();
+        // NE PAS toucher à phaseBase_ ici : la base de phase appartient au
+        // transport, pas au stage. Un republish de pattern post-commit (applyScene)
+        // ne doit pas effacer la base posée par publishStaged() à la frontière.
+        // resetPatternPhase() est appelé explicitement par play()/navigation arrêtée.
     }
     bool hasStaged() const noexcept {
         return stagedActive_.load(std::memory_order_acquire);

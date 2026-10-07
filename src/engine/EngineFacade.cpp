@@ -396,7 +396,8 @@ void EngineFacade::play() noexcept {
         + " hasPend=" + juce::String((int)hasPendingTransition())
         + " teState=" + juce::String(transitionStateRaw()));
     diagStart();
-    graph_.sequencer().clearStaged();   // position remise à 0 : stage obsolète
+    graph_.sequencer().clearStaged();          // stage obsolète au redémarrage
+    graph_.sequencer().resetPatternPhase();    // transport repart de 0 → base à 0
     transport_.play();
 }
 
@@ -1113,7 +1114,8 @@ void EngineFacade::reloadSlotPcm(int slot, std::vector<float> mono, float sample
 void EngineFacade::setCurrentScene(int idx) noexcept
 {
     if (idx < 0 || idx >= kMaxScenes) return;
-    graph_.sequencer().clearStaged();   // application directe : annule le stage
+    graph_.sequencer().clearStaged();          // application directe : annule le stage
+    graph_.sequencer().resetPatternPhase();    // navigation → transport figé, phase à 0
     currentScene_.store(idx, std::memory_order_relaxed);
     applySceneInternal(idx);
 }
@@ -1331,6 +1333,7 @@ void EngineFacade::activateSceneStopped(int sceneIdx) noexcept
     //    Le plan DIRECT (transitionPlanValid_) n'est pas touché ici.
     transition_.reset();
     graph_.sequencer().clearStaged();
+    graph_.sequencer().resetPatternPhase();    // navigation arrêtée → base à 0
     pendingScene_.store(-1, std::memory_order_relaxed);
     pendingTransLen_.store(0, std::memory_order_relaxed);
     // Annuler les PCM stagés pour les ENTER d'une éventuelle transition annulée.

@@ -83,6 +83,10 @@ static int v2BreakdownBeatOffset(SlotRole r) noexcept {
 }
 
 static void shiftSlotEvents(SceneTransitionPlan& plan, int s, int64_t newAt, PolicyType p) noexcept {
+    // Option A — clamp cycle sortant intangible : si le décalage amènerait un événement
+    // avant la frontière (Breakdown), ne pas décaler ce slot. Les événements restent à leur
+    // position d'origine (GainRamp = boundary, Release = boundary + fade) → invariant préservé.
+    if (newAt < plan.boundary) return;
     for (int i = 0; i < plan.numEvents; ++i) {
         if (plan.events[i].slot != s) continue;
         const auto type = plan.events[i].type;

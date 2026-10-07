@@ -61,15 +61,33 @@ TEST_CASE("Policy: BREAKDOWN 6->2 distributes LEAVE", "[policy][breakdown]") {
     PolicyContext ctx{44100.0,120.0,4,4,20000};
     REQUIRE(TransitionPolicy::choose(plan)==PolicyType::Breakdown);
     TransitionPolicy::apply(plan, ctx);
-    int64_t measure = TransitionPolicy::samplesPerBeat(ctx)*4;
-    // First LEAVE at T-measure, last at T
+    // Option A (clamp) : tous les LEAVE sont clamped à la frontière — le cycle sortant
+    // est intangible (aucun pré-fade). Les GainRamp restent à T = 20000.
     int64_t minAt = INT64_MAX, maxAt = INT64_MIN;
     for(int i=0;i<plan.numEvents;++i) if(plan.events[i].type==PlanEventType::GainRamp && plan.slots[plan.events[i].slot].action==SlotPlanAction::Leave){
         minAt = std::min(minAt, plan.events[i].atSample);
         maxAt = std::max(maxAt, plan.events[i].atSample);
     }
-    REQUIRE(minAt==20000 - measure);
+    REQUIRE(minAt==20000);   // clamped : pas d'événement avant la frontière
     REQUIRE(maxAt==20000);
+}
+
+TEST_CASE("Policy: aucun événement de transition ne précède la frontière (D2 clamp)",
+          "[policy][breakdown][clamp]")
+{
+    // Régression D2 : avant Option A, Breakdown plaçait les LEAVE à T-1mesure.
+    // Résultat : la scène sortante était atténuée une mesure avant sa fin.
+    SceneData from=makeSceneWithSlots(8,{"a.wav","b.wav","c.wav","d.wav","e.wav","f.wav","g.wav","h.wav"});
+    SceneData to=makeSceneWithSlots(2,{"a.wav","b.wav"});
+    const int64_t boundary = 1000000;
+    SceneTransitionPlan plan; buildDirectPlan(from,to,0,1,boundary,44100.0,plan);
+    PolicyContext ctx{44100.0,120.0,4,4,boundary};
+    REQUIRE(TransitionPolicy::choose(plan)==PolicyType::Breakdown);
+    TransitionPolicy::apply(plan, ctx);
+    // Tous les événements (quelle que soit leur nature) doivent être >= boundary.
+    // Avant le correctif : minAt = 911800 (= 1000000 - 88200, soit T-1mesure).
+    for(int i=0;i<plan.numEvents;++i)
+        REQUIRE(plan.events[i].atSample >= boundary);
 }
 
 TEST_CASE("BREAKDOWN invariant: ReleaseAt == LeaveAt + fadeSamples per LEAVE", "[policy][breakdown][invariant]") {
