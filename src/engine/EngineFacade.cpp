@@ -1162,25 +1162,8 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     // Policy pure : ajuste les atSample (BUILD/BREAKDOWN) sans toucher au DSP
     {
         PolicyContext pctx{ sampleRate_, tsSnap.bpm, 4, 4, boundary };
-        // Pour BREAKDOWN, vérifier que T-measure est dans le futur, sinon décaler T d'un cycle
+        // D2 (Option A) : shiftSlotEvents() clamp tout event avant boundary → guard obsolète
         PolicyType ptype = TransitionPolicy::choose(plan);
-        if (ptype == PolicyType::Breakdown) {
-            const int64_t measure = TransitionPolicy::samplesPerBeat(pctx) * 4;
-            int64_t earliest = tsSnap.samplePos;
-            // Si le premier LEAVE (T-measure) est déjà passé, décaler d'un cycle complet
-            if (boundary - measure < earliest) {
-                boundaryStep += cycleSteps;                        // cycle suivant
-                boundary      = sampleOfStep(tsSnap, boundaryStep);
-                // Si encore trop tôt (rare), boucler
-                while (boundary - measure < earliest) {
-                    boundaryStep += cycleSteps;
-                    boundary      = sampleOfStep(tsSnap, boundaryStep);
-                }
-                buildDirectPlan(from, to, fromIdx, toIdx, boundary, sampleRate_, plan);
-                if (!plan.valid) return false;
-                pctx.boundary = boundary;
-            }
-        }
         TransitionPolicy::apply(plan, pctx);
         plan.policy = static_cast<uint8_t>(ptype);
     }
