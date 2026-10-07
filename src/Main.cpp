@@ -106,11 +106,16 @@ public:
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
         }
 
-        // Escape quitte le plein écran — remonte ici si aucun enfant ne consomme la touche.
+        // Escape annule une transition armée si présente ; sinon quitte le plein écran.
+        // Remonte ici si aucun enfant ne consomme la touche.
         bool keyPressed(const juce::KeyPress& key) override
         {
             if (key == juce::KeyPress::escapeKey)
             {
+                if (auto* mc = dynamic_cast<MainComponent*>(getContentComponent()))
+                    if (mc->cancelPendingTransition())
+                        return true;
+
                 if (auto* peer = getPeer(); peer != nullptr && peer->isFullScreen())
                 {
                     peer->setFullScreen(false);

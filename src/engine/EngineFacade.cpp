@@ -1127,6 +1127,75 @@ void EngineFacade::requestTransition(int toScene) noexcept
                                    sceneStore_, transport_.snapshot());
 }
 
+bool EngineFacade::cancelPendingTransition() noexcept
+{
+    if (!transitionPlanValid_.load(std::memory_order_acquire) || !transitionPlan_.valid)
+        return false;
+
+    // Trop tard : le COMMIT audio a déjà eu lieu (Armed → Executing).
+    if (transition_.state() != TransitionEngine::State::Armed)
+        return false;
+
+    const int from = transitionPlan_.fromScene;
+    const int to   = transitionPlan_.toScene;
+
+    // 1. Stage pattern + gates ENTER — NE PAS toucher phaseBase_ (invariant D1).
+    graph_.sequencer().clearStaged();
+
+    // 2. PCM stagés : évite qu'un futur plan committe un PCM d'une préparation abandonnée (H1/H2).
+    for (int s = 0; s < kMaxSlots; ++s)
+        graph_.slotPlayer().clearStagedPcm(s);
+
+    // 3. Restauration exacte des valeurs pré-ARM pour les slots ENTER.
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (transitionPlan_.slots[s].action != SlotPlanAction::Enter) continue;
+        slotPath_[s]      = preArmPath_[s];
+        slotTrimStart_[s] = preArmTrimStart_[s];
+        slotTrimEnd_[s]   = preArmTrimEnd_[s];
+    }
+
+    // 4. Plan + machine à états + flags UI-side.
+    clearTransitionPlan();
+    transition_.reset();
+    setPendingTransitionLen(0);
+    setPendingScene(-1);
+
+    transitionTrace_.push({TraceEntry::Type::Cancelled, -1,
+                           static_cast<int32_t>(from), static_cast<int32_t>(to),
+                           255, 0.f, 0.f});
+    return true;
+}
+
+bool EngineFacade::canPrepareDirectPlan(int fromIdx, int toIdx) noexcept
+{
+    if (fromIdx < 0 || fromIdx >= kMaxScenes || toIdx < 0 || toIdx >= kMaxScenes) return false;
+    if (fromIdx == toIdx) return false;
+
+    const SceneData& from = sceneStore_.getScene(fromIdx);
+    const SceneData& to   = sceneStore_.getScene(toIdx);
+
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const SlotConfig& a = from.slots[s];
+        const SlotConfig& b = to.slots[s];
+        const SlotPlanAction action = classifySlotForPlan(a, b,
+                                                          assetIdForSlot(a),
+                                                          assetIdForSlot(b));
+        if (action != SlotPlanAction::Enter) continue;
+
+        if (graph_.slotPlayer().hasStagedPcm(s)) continue;
+
+        const AssetId targetAsset = assetIdForSlot(b);
+        if (targetAsset == 0) return false;
+
+        const AssetId cur = assetIdFor(slotPath_[s], slotTrimStart_[s], slotTrimEnd_[s]);
+        if (cur == targetAsset && slotLoaded_[s].load(std::memory_order_acquire)) continue;
+
+        const juce::File f(juce::String(b.filePath));
+        if (!f.existsAsFile() || f.getSize() <= 0) return false;
+    }
+    return true;
+}
+
 // DETTE PREPARE synchrone — documentée, non migrée ce milestone :
 // prepareDirectPlan fait actuellement du file I/O JUCE synchrone sur le
 // message thread (AudioFormatManager::createReaderFor + read). Sur des
@@ -1190,7 +1259,10 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     // Readiness gate : tous les ENTER doivent être préchargés
     for (int s = 0; s < kMaxSlots; ++s) {
         if (plan.slots[s].action != SlotPlanAction::Enter) continue;
-        if (graph_.slotPlayer().hasStagedPcm(s)) continue;
+        // H1/H2 : purge un éventuel PCM stagé d'une préparation abandonnée avant
+        // de re-précharger — sinon il serait committé pour la mauvaise cible.
+        if (graph_.slotPlayer().hasStagedPcm(s))
+            graph_.slotPlayer().clearStagedPcm(s);
         const SlotConfig& cfg = to.slots[s];
         const AssetId targetAsset = assetIdForSlot(cfg);
         if (targetAsset == 0) return false; // fichier manquant → pas d'ARM
@@ -1277,12 +1349,17 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     }
 
     // Mettre à jour slotPath_/trim pour les slots stagés (évite re-import dans applyScene)
+    // + capture pré-ARM : cancelPendingTransition() restaure ces valeurs si l'annulation
+    // survient avant COMMIT (sinon le prochain diff par AssetId croit le slot déjà sur
+    // l'asset de la cible et saute un PcmFlip).
     for (int s = 0; s < kMaxSlots; ++s) {
-        if (plan.slots[s].action == SlotPlanAction::Enter) {
-            slotPath_[s] = to.slots[s].filePath;
-            slotTrimStart_[s] = to.slots[s].trimStart;
-            slotTrimEnd_[s] = to.slots[s].trimEnd;
-        }
+        if (plan.slots[s].action != SlotPlanAction::Enter) continue;
+        preArmPath_[s]      = slotPath_[s];
+        preArmTrimStart_[s] = slotTrimStart_[s];
+        preArmTrimEnd_[s]   = slotTrimEnd_[s];
+        slotPath_[s]      = to.slots[s].filePath;
+        slotTrimStart_[s] = to.slots[s].trimStart;
+        slotTrimEnd_[s]   = to.slots[s].trimEnd;
     }
 
     // Durée affichée / garde anti-re-navigation : le cycle de la scène courante

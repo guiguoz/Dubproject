@@ -45,6 +45,9 @@ class MainComponent : public juce::AudioAppComponent,
     // ── Panic : coupe tous les slots + delays instantanément ─────────────────
     void triggerPanic() noexcept;
 
+    // ── Annulation de transition armée (message thread) ──────────────────────
+    bool cancelPendingTransition();
+
     // ── TestTone debug 440 Hz (1 seconde, bypass moteur) ─────────────────────
     void startTestTone() noexcept;
 

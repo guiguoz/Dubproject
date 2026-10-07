@@ -3270,15 +3270,38 @@ void MainComponent::prefetchNeighborScenes(int sceneIdx) noexcept
     }
 }
 
+bool MainComponent::cancelPendingTransition()
+{
+    if (facade_.cancelPendingTransition())
+    {
+        updateSceneLabel();
+        juce::Logger::writeToLog("[NAV] transition annulée — retour à Scene "
+            + juce::String(facade_.currentSceneIdx() + 1));
+        return true;
+    }
+    juce::Logger::writeToLog("[NAV] annulation refusée (COMMIT déjà engagé ou rien d'armé)");
+    return false;
+}
+
 void MainComponent::navigateScene(int delta)
 {
-    const int target = juce::jlimit(0, kMaxScenes - 1, facade_.currentSceneIdx() + delta);
-    if (target == facade_.currentSceneIdx()) return;
+    const int current = facade_.currentSceneIdx();
+    const int target  = juce::jlimit(0, kMaxScenes - 1, current + delta);
+    const int pending = facade_.pendingSceneIdx();
+
+    // ── ANNULATION : re-clic sur la cible pendante, ou retour sur la scène courante ──
+    if (pending >= 0 && facade_.isPlaying() && (target == current || target == pending))
+    {
+        cancelPendingTransition();
+        return;
+    }
+
+    if (target == current) return;
 
     if (!facade_.isPlaying())
     {
         // Séquenceur arrêté : changement immédiat, sans risque de coupure
-        const int oldIdx = facade_.currentSceneIdx();
+        const int oldIdx = current;
         juce::Logger::writeToLog("[DIAG] nav stopped " + juce::String(oldIdx) + "->" + juce::String(target)
             + " hasPend=" + juce::String((int)facade_.hasPendingTransition())
             + " teState=" + juce::String(facade_.transitionStateRaw()));
@@ -3290,24 +3313,31 @@ void MainComponent::navigateScene(int delta)
         return;
     }
 
-    // P0.3 — bloquer si une transition quantisée est déjà en cours
-    if (facade_.hasPendingTransition())
+    // ── Fenêtre COMMIT (audio a compilé, timer pas encore appliqué) ──
+    // transition_ n'est plus Idle mais plus Armed non plus → prepareDirectPlan échouerait.
+    if (pending >= 0 && !facade_.hasPendingTransition())
     {
+        juce::Logger::writeToLog("[NAV] COMMIT en cours — navigation ignorée");
         return;
     }
 
-    // Séquenceur en lecture : PREPARE → COMMIT (DIRECT)
-    // captureCurrentScene() retiré — steps/trackBarCounts déjà dans SceneDefinition.
-    // Les gains/mutes/filePaths sont mis à jour live par onVolumeChanged, onStepChanged, etc.
+    // ── RE-CIBLAGE : transition armée + nouvelle cible ──
+    if (pending >= 0)
+    {
+        if (!facade_.canPrepareDirectPlan(current, target))
+        {
+            juce::Logger::writeToLog("[NAV] scene " + juce::String(target + 1)
+                + " non préchargeable — transition vers " + juce::String(pending + 1)
+                + " maintenue");
+            return;
+        }
+        if (!cancelPendingTransition()) return;
+    }
 
+    // Séquenceur en lecture : PREPARE → COMMIT (DIRECT)
     // Sync MC→engine steps+trackBarCounts pour les DEUX scènes avant prepareDirectPlan.
-    // onStepChanged met à jour MC-side sceneStore_ + writePatterns_ mais PAS facade_.scene().steps.
-    // prepareDirectPlan lit to.steps pour stager le buffer ; buildDirectPlan lit from.steps pour diff.
     // On sync UNIQUEMENT steps+trackBarCounts — PAS cfg.active.
-    // cfg.active est posé par le dernier applyScene (syncV2Scene complet) et reflète l'état audio live.
-    // Le recalculer ici depuis les steps risque de diverger de ce qui joue → Leave/Enter incorrects
-    // → Breakdown policy → fades avant la frontière = coupure son.
-    for (const int idx : { facade_.currentSceneIdx(), target })
+    for (const int idx : { current, target })
     {
         const auto& scMC = sceneStore_.getScene(idx);
         auto& esEng      = facade_.scene(idx);
@@ -3315,21 +3345,14 @@ void MainComponent::navigateScene(int delta)
         esEng.trackBarCounts = scMC.trackBarCounts;
     }
 
-    // DIRECT : PREPARE complet (diff par AssetId, précharge ENTER, readiness gate).
-    // Si tous les ENTER sont prêts, le plan est armé et le pattern est stagé à la
-    // même frontière que les GainRamps/PcmFlips — COMMIT audio sample-accurate.
-    // Si un ENTER manque (fichier absent/échec preload) → pas d'ARM, A continue
-    // sans aucune mutation audible (pas de demi-scène).
-    if (facade_.prepareDirectPlan(facade_.currentSceneIdx(), target)) {
-        // Plan armé — le COMMIT audio fera tout (gains, modes, PcmFlip, pattern)
-        // au même sample T. Le timer ne fera que CLEANUP/UI (voir timerCallback).
+    if (facade_.prepareDirectPlan(current, target)) {
+        // Plan armé — le COMMIT audio fera tout au même sample T.
     } else {
-        // Échec readiness (sample manquant) → transition non armée, on reste sur A.
-        // Pas de fallback partiel : on signale et on sort.
         juce::Logger::writeToLog("prepareDirectPlan: scene " + juce::String(target) + " not ready — transition aborted");
+        updateSceneLabel();
         return;
     }
-    sceneNumLabel_.setText("Scene " + juce::String(facade_.currentSceneIdx() + 1) +
+    sceneNumLabel_.setText("Scene " + juce::String(current + 1) +
                            " \xe2\x86\x92 " + juce::String(target + 1),  // →
                            juce::dontSendNotification);
     transitionStatusBar_.setSelectedScene(target);

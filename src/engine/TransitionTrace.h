@@ -10,7 +10,8 @@ namespace engine {
 
 struct TraceEntry {
     enum class Type : uint8_t {
-        Prepared = 0, Ready, Armed, Keep, Morph, Leave, Enter, PcmFlip, GainRamp, Release, Done
+        Prepared = 0, Ready, Armed, Keep, Morph, Leave, Enter, PcmFlip, GainRamp, Release, Done,
+        Cancelled
     };
     Type    type = Type::Prepared;
     int64_t atSample = 0; // absolu

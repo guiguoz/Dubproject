@@ -301,6 +301,15 @@ public:
     // Retourne true si plan prêt à être armé (tous ENTER préchargés).
     bool prepareDirectPlan(int fromIdx, int toIdx) noexcept;
 
+    // Annule une transition DIRECT armée AVANT son COMMIT audio (message thread).
+    // Idempotent : retourne false si rien n'est armé, ou si le COMMIT a déjà eu lieu.
+    // Ne touche PAS la base de phase (cf. D1).
+    bool cancelPendingTransition() noexcept;
+
+    // Préflight léger : les slots ENTER de toIdx sont-ils préchargeables depuis fromIdx ?
+    // Vérifie asset id + PCM déjà stagé/chargé + fichier présent. Sans décodage audio.
+    bool canPrepareDirectPlan(int fromIdx, int toIdx) noexcept;
+
     // ── DUB modifier ──────────────────────────────────────────────────────────
     // Contrôle l'activation du modificateur DUB AUTO (throw delay sur LEAVE).
     // Auto (défaut) : activé si churn >= 5 ou continuité < 35% et churn >= 3.
@@ -426,6 +435,13 @@ private:
     std::string        slotPath_  [kMaxSlots];
     int                slotTrimStart_[kMaxSlots] { 0 };
     int                slotTrimEnd_  [kMaxSlots] { -1 };
+
+    // Valeurs pré-ARM de slotPath_/trim pour les slots ENTER : restaurées si la
+    // transition est annulée avant COMMIT (cancelPendingTransition).
+    // Message thread uniquement, comme slotPath_ lui-même.
+    std::string        preArmPath_     [kMaxSlots];
+    int                preArmTrimStart_[kMaxSlots] { 0 };
+    int                preArmTrimEnd_  [kMaxSlots] { -1 };
 
     // Mutex par slot : sérialise la phase critique d'import (stopSlot → loadSlot)
     // pour éviter que deux imports simultanés sur le même slot corrompent le PCM.
