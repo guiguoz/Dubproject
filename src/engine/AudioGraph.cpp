@@ -96,6 +96,23 @@ void AudioGraph::processBlock(const TransportState& ts,
 
     slotPlayer_.processBlock(ts, nullptr, numFrames, events, numEvents, slotLp, slotRp);
 
+    // ── Règle 1 AutoMix V2 : mesure post-player + gain staging en rampe ─────────
+    // Ordre §7.1/§7.4 : mesure AVANT application du gain (boucle ouverte → pas de
+    // pompage), gain appliqué AVANT sidechain et bus.
+    // advanceGainRamp() est STATEFUL : un appel par slot et par bloc, exactement.
+    for (int s = 0; s < kMaxSlots; ++s)
+        autoMix_.updateFeatures(s, slotLp[s], slotRp[s], numFrames);
+    for (int s = 0; s < kMaxSlots; ++s) {
+        const float gPrev = autoMix_.currentGainLinear(s);
+        const float gNew  = autoMix_.advanceGainRamp(s, numFrames);
+        if (gPrev == 1.f && gNew == 1.f) continue;
+        const float step = (numFrames > 0) ? (gNew - gPrev) / static_cast<float>(numFrames) : 0.f;
+        float g = gPrev;
+        float* L = slotLp[s];
+        float* R = slotRp[s];
+        for (int i = 0; i < numFrames; ++i) { g += step; L[i] *= g; R[i] *= g; }
+    }
+
     // ── Sidechain kick → BASS/PAD uniquement (règle 3 AutoMix V2) ──────────────
     // Appliqué échantillon par échantillon sur slotBuf_ pour un ducking fluide.
     {

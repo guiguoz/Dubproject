@@ -2380,7 +2380,9 @@ void MainComponent::timerCallback()
                 + "  peak=" + juce::String(d.slotPeak[s], 4)
                 + "  loaded=" + juce::String((int)d.loaded[s])
                 + "  muted=" + juce::String((int)d.muted[s])
-                + "  gain=" + juce::String(d.gain[s], 3));
+                + "  gain=" + juce::String(d.gain[s], 3)
+                + "  autoMix=" + juce::String(d.autoMixGain[s], 3)
+                + "  tgt=" + juce::String(d.autoMixTargetDb[s], 1) + "dB");
             if (d.generated[s] > 0) {
                 juce::Logger::writeToLog("[DIAG]     pcm: frames=" + juce::String(d.pcmFrames[s])
                     + "  null=" + juce::String((int)d.pcmNull[s])

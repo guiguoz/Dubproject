@@ -226,10 +226,13 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // Changement INTENTIONNEL du rendu. Régénéré via NULL0.
     // v24 : EQ OTHER neutre (HP 30Hz seulement) — slot MST/LOOP classifiés OTHER
     //       ne subissent plus HP 60Hz + highShelf -3dB → léger gain dans le mix.
-    //   hashAudio = 0x86f0ab033b5a6fe0
-    //   hashRms   = 0x79918a409b0f2794
-    CHECK(hashAudio == 0x86f0ab033b5a6fe0ull);
-    CHECK(hashRms   == 0x79918a409b0f2794ull);
+    // v25 : AutoMix règle 1 câblée — gain staging par rôle (mesure post-player,
+    //       rampes 30 ms, hystérésis ±1 dB) + règle 6 effective (trim global
+    //       limiteur). Slots affectés : tous les slots actifs non-KICK.
+    //   hashAudio = 0x3f9b193bbbb750ca
+    //   hashRms   = 0x784f4d94d5cf78d4
+    CHECK(hashAudio == 0x3f9b193bbbb750caull);
+    CHECK(hashRms   == 0x784f4d94d5cf78d4ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

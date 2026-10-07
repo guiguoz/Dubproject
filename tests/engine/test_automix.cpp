@@ -176,6 +176,87 @@ TEST_CASE("T-MX5: two identical runs produce identical decisions", "[automix]") 
         REQUIRE(run1[i] == run2[i]);
 }
 
+// ─── T-MX6 : règle 1 de bout en bout (mesure → décision → application) ───────
+TEST_CASE("T-MX6: rule 1 end-to-end — kick ref, bass corrected +9 dB (clamped)", "[automix]") {
+    AutoMixDub mix;
+    mix.prepare(kSR);
+    SlotRole roles[kMaxSlots] = {};
+    roles[0] = SlotRole::Kick;
+    roles[1] = SlotRole::Bass;
+
+    // 45 blocs ≈ 0,52 s : dépasse la fenêtre RMS de 400 ms
+    // Kick 0,5 (RMS 0,5), bass 0,05 (RMS 0,05) → erreur = −2 + 20 = +18 → borné +9 dB
+    for (int b = 0; b < 45; ++b) {
+        std::vector<float> kick(static_cast<size_t>(kBlock), 0.5f);
+        std::vector<float> bass(static_cast<size_t>(kBlock), 0.05f);
+        mix.updateFeatures(0, kick.data(), kick.data(), kBlock);
+        mix.updateFeatures(1, bass.data(), bass.data(), kBlock);
+    }
+    mix.computeTargets(roles);
+
+    REQUIRE(mix.targets().gainDb[0] == Catch::Approx(0.f).margin(0.01f));  // kick = ref
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.01f));  // bornée +9 dB
+
+    // Rampes : 20 blocs ≈ 230 ms (τ = 30 ms) → convergence > 99 %
+    // Cible lin ≈ 10^(9/20) ≈ 2,818
+    float g = 1.f;
+    for (int b = 0; b < 20; ++b) g = mix.advanceGainRamp(1, kBlock);
+    REQUIRE(g > 2.7f);
+    REQUIRE(g < 2.9f);
+}
+
+// ─── T-MX7 : silence → aucune correction ──────────────────────────────────────
+TEST_CASE("T-MX7: silent mix produces zero correction (gain stays 1)", "[automix]") {
+    AutoMixDub mix;
+    mix.prepare(kSR);
+    SlotRole roles[kMaxSlots] = {};
+    for (int s = 0; s < kMaxSlots; ++s) roles[s] = SlotRole::Bass;
+
+    std::vector<float> silence(static_cast<size_t>(kBlock), 0.f);
+    for (int b = 0; b < 45; ++b)
+        for (int s = 0; s < kMaxSlots; ++s)
+            mix.updateFeatures(s, silence.data(), silence.data(), kBlock);
+    mix.computeTargets(roles);
+
+    for (int s = 0; s < kMaxSlots; ++s)
+        REQUIRE(mix.targets().gainDb[s] == Catch::Approx(0.f).margin(0.01f));
+
+    for (int s = 0; s < kMaxSlots; ++s)
+        REQUIRE(mix.advanceGainRamp(s, kBlock) == Catch::Approx(1.f).margin(0.001f));
+}
+
+// ─── T-MX8 : hystérésis ±1 dB ─────────────────────────────────────────────────
+TEST_CASE("T-MX8: hysteresis +-1 dB suppresses small corrections", "[automix]") {
+    AutoMixDub mix;
+    mix.prepare(kSR);
+    SlotRole roles[kMaxSlots] = {};
+    roles[0] = SlotRole::Kick;
+    roles[1] = SlotRole::Bass;
+
+    // Nourrir deux fenêtres complètes (≈ 70 blocs) pour chaque niveau
+    auto feed = [&](float kickAmp, float bassAmp) {
+        for (int b = 0; b < 70; ++b) {
+            std::vector<float> kick(static_cast<size_t>(kBlock), kickAmp);
+            std::vector<float> bass(static_cast<size_t>(kBlock), bassAmp);
+            mix.updateFeatures(0, kick.data(), kick.data(), kBlock);
+            mix.updateFeatures(1, bass.data(), bass.data(), kBlock);
+        }
+        mix.computeTargets(roles);
+    };
+
+    // Niveau 1 : bass 0,05 → erreur +18 → borné +9 dB
+    feed(0.5f, 0.05f);
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.05f));
+
+    // Niveau 2 : bass 0,149 → erreur ≈ +8,5 dB, écart vs +9 = 0,5 < 1 → inchangé
+    feed(0.5f, 0.149f);
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.05f));
+
+    // Niveau 3 : bass 0,168 → erreur ≈ +7,5 dB, écart vs +9 = 1,5 > 1 → mise à jour
+    feed(0.5f, 0.168f);
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(7.5f).margin(0.2f));
+}
+
 // ─── Test de fumée PingPongDelay porté ───────────────────────────────────────
 #include "engine/fx/PingPongDelay.h"
 TEST_CASE("PingPongDelay smoke test: prepare, process, no NaN", "[fx]") {
