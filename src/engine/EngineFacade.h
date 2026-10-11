@@ -227,6 +227,7 @@ public:
     float getSlotOutputPeak(int slot)    const noexcept;
     bool  isSlotPlaying(int slot)        const noexcept;
     bool  isSlotLoaded(int slot)         const noexcept;
+    PlayMode slotMode(int slot)          const noexcept; // mode retenu par le moteur (après modeForResult)
 
     // Snapshot PCM mono du slot (UI waveforms/éditeur) — message thread.
     std::vector<float> getSlotPcmSnapshot(int slot) const noexcept;

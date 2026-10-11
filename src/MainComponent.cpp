@@ -252,6 +252,10 @@ MainComponent::MainComponent()
                 sc2.slots[static_cast<std::size_t>(s)].filePath = path;
                 sc2.slots[static_cast<std::size_t>(s)].delaySend =
                     engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
+                // §4.7 : persister le mode retenu par le moteur (modeForResult dans EngineFacade).
+                // Guard obligatoire : isSlotLoaded == false → slotMode retourne Free (slot hors bornes).
+                if (facade_.isSlotLoaded(s))
+                    sc2.slots[static_cast<std::size_t>(s)].mode = facade_.slotMode(s);
                 sc2.used = true;
                 // PR2 §4.6 : push miroir (MagicMix lit cfg.active depuis le miroir)
                 syncV2Scene(sceneIdx);

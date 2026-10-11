@@ -1037,6 +1037,12 @@ bool EngineFacade::isSlotLoaded(int slot) const noexcept
     return slotLoaded_[slot].load(std::memory_order_acquire);
 }
 
+PlayMode EngineFacade::slotMode(int slot) const noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return PlayMode::Free;
+    return graph_.slotPlayer().getMode(slot);
+}
+
 // ─── Séquenceur ───────────────────────────────────────────────────────────────
 
 void EngineFacade::setStep(int track, int step, bool active) noexcept
