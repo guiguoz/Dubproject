@@ -243,6 +243,21 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                             sc.roleManual[static_cast<std::size_t>(i)] =
                                 static_cast<bool>((*arr)[i]);
                 }
+
+                if (data.version >= 26)
+                {
+                    if (const auto* arr = entry["slotOwnership"].getArray())
+                        for (int i = 0; i < 9 && i < arr->size(); ++i)
+                            sc.slotOwnership[static_cast<std::size_t>(i)] =
+                                static_cast<bool>((*arr)[i]);
+                    sc.sceneOwned = getBool(entry, "sceneOwned", false);
+                }
+                else
+                {
+                    // Migration v<26 : les scènes chargées font autorité sur tous leurs slots.
+                    sc.slotOwnership.fill(true);
+                    sc.sceneOwned = true;
+                }
             }
         }
 
@@ -483,6 +498,14 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                     arr.add(sc.roleManual[static_cast<std::size_t>(i)]);
                 entry->setProperty("roleManual", arr);
             }
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(sc.slotOwnership[static_cast<std::size_t>(i)]);
+                entry->setProperty("slotOwnership", arr);
+            }
+            entry->setProperty("sceneOwned", sc.sceneOwned);
 
             scenesArr.add(juce::var(entry.get()));
         }

@@ -78,6 +78,8 @@ struct SceneSaveData
     std::array<int,   9>                  playModeOverrides { -1,-1,-1,-1,-1,-1,-1,-1,-1 }; // v23
     std::array<int,   9>                  slotRoles     { -1,-1,-1,-1,-1,-1,-1,-1,-1 };     // v24 — -1=Unknown (re-classifier)
     std::array<bool,  9>                  roleManual    {};                                  // v24
+    std::array<bool,  9>                  slotOwnership {};       // v26 — true=Own, false=Inherit
+    bool                                  sceneOwned    { false }; // v26 — true=scène propriétaire du dub delay
     bool                                  used          { false };
 };
 

@@ -109,6 +109,7 @@ add_executable(EngineTests
     engine/test_transition_status.cpp
     engine/test_waveform_cache.cpp
     engine/test_dub_policy.cpp
+    engine/test_scene_inheritance.cpp
     ../src/engine/SlotPlayer.cpp
     ../src/engine/StretchConform.cpp
     ../src/engine/Analysis/BpmDetector.cpp

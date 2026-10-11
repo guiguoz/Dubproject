@@ -58,6 +58,13 @@ struct SceneData {
     std::array<int, kMaxSlots> playModeOverrides = {-1,-1,-1,-1,-1,-1,-1,-1,-1}; // -1=auto, 0=OneShot, 1=Free, 2=LoopSync
     bool         used             = false;
 
+    // ── Héritage de scène (v26) ──────────────────────────────────────────────
+    // true = la scène fait autorité pour ce slot (Own) ; false = hérite de
+    // l'ancêtre Own le plus proche (Inherit, défaut pour les nouvelles scènes).
+    std::array<bool, kMaxSlots> slotOwnership = {};
+    // true = la scène fait autorité pour ses paramètres dub delay ; false = hérite.
+    bool         sceneOwned      = false;
+
     // Dérivé du contenu réel — source de vérité pour l'UI et le moteur.
     // Ne pas utiliser `used` (stored) pour des décisions runtime.
     bool isUsedDerived() const noexcept {
@@ -74,6 +81,21 @@ struct SceneData {
 // Forme du crossfade adaptatif.
 // ─────────────────────────────────────────────────────────────────────────────
 enum class CrossfadeCurve { Linear, EaseIn, EaseOut, Smoothstep };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DubLevel — paramètres dub delay résolus par héritage de scène.
+// ─────────────────────────────────────────────────────────────────────────────
+struct DubLevel {
+    float feedback = 0.40f;
+    float wet      = 0.28f;
+    float tone     = 0.50f;
+    float drive    = 0.15f;
+
+    bool operator==(const DubLevel& o) const noexcept {
+        return feedback == o.feedback && wet == o.wet
+            && tone == o.tone && drive == o.drive;
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SceneStore — stockage de 8 scènes + état transition (crossfade / morph).
@@ -102,6 +124,95 @@ public:
     }
 
     int numScenes() const noexcept { return kMaxScenes; }
+
+    // ── Héritage de scène (v26) ──────────────────────────────────────────────
+
+    // Retourne le contenu résolu de la scène idx.
+    // Pour chaque slot en Inherit, remonte vers l'ancêtre Own le plus proche
+    // (j < idx). Si aucun ancêtre ne possède le slot, retourne les défauts.
+    // active est RECALCULÉ (jamais copié). Pure : ne modifie pas le store.
+    SceneData resolveScene(int idx) const noexcept
+    {
+        if (idx < 0 || idx >= kMaxScenes) return {};
+        SceneData result = scenes_[static_cast<std::size_t>(idx)];
+
+        for (int s = 0; s < kMaxSlots; ++s)
+        {
+            const std::size_t su = static_cast<std::size_t>(s);
+            if (result.slotOwnership[su]) continue;  // Own : contenu conservé
+
+            // Chercher l'ancêtre Own le plus proche (j < idx)
+            bool found = false;
+            for (int j = idx - 1; j >= 0; --j)
+            {
+                if (scenes_[static_cast<std::size_t>(j)].slotOwnership[su])
+                {
+                    const auto& src = scenes_[static_cast<std::size_t>(j)];
+                    result.slots[su]              = src.slots[su];
+                    result.steps[su]              = src.steps[su];
+                    result.trackBarCounts[su]     = src.trackBarCounts[su];
+                    result.playModeOverrides[su]  = src.playModeOverrides[su];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                result.slots[su]              = SlotConfig{};
+                result.steps[su].fill(false);
+                result.trackBarCounts[su]     = 1;
+                result.playModeOverrides[su]  = -1;
+            }
+        }
+
+        // Phase 2 : recalcul de active pour tous les slots
+        for (int s = 0; s < kMaxSlots; ++s)
+        {
+            const std::size_t su = static_cast<std::size_t>(s);
+            auto& cfg = result.slots[su];
+            bool hasSteps = false;
+            const int numSteps = result.trackBarCounts[su] * 16;
+            for (int st = 0; st < numSteps && !hasSteps; ++st)
+                hasSteps = result.steps[su][static_cast<std::size_t>(st)];
+            cfg.active = !cfg.filePath.empty() && hasSteps;
+        }
+
+        result.used = result.isUsedDerived();
+        return result;
+    }
+
+    // Retourne les paramètres dub delay résolus pour la scène idx.
+    // Remonte vers l'ancêtre sceneOwned le plus proche. Pure.
+    DubLevel resolveSceneLevel(int idx) const noexcept
+    {
+        for (int j = idx; j >= 0; --j)
+        {
+            const auto& sc = scenes_[static_cast<std::size_t>(j)];
+            if (sc.sceneOwned)
+                return { sc.dubDelayFeedback, sc.dubDelayWet,
+                         sc.dubDelayTone,     sc.dubDelayDrive };
+        }
+        return DubLevel{};  // défauts
+    }
+
+    // Matérialise le slot `slot` de la scène `idx` : si Inherit, pose Own et
+    // copie le contenu résolu (conservatif). Idempotent si déjà Own.
+    // Pose used=true (§6.2). active est inclus dans le résolu (déjà recalculé).
+    void materializeSlot(int idx, int slot) noexcept
+    {
+        if (idx < 0 || idx >= kMaxScenes || slot < 0 || slot >= kMaxSlots) return;
+        const std::size_t iu = static_cast<std::size_t>(idx);
+        const std::size_t su = static_cast<std::size_t>(slot);
+        if (scenes_[iu].slotOwnership[su]) return;  // déjà Own
+
+        const SceneData resolved = resolveScene(idx);
+        scenes_[iu].slots[su]             = resolved.slots[su];
+        scenes_[iu].steps[su]             = resolved.steps[su];
+        scenes_[iu].trackBarCounts[su]    = resolved.trackBarCounts[su];
+        scenes_[iu].playModeOverrides[su] = resolved.playModeOverrides[su];
+        scenes_[iu].slotOwnership[su]     = true;
+        scenes_[iu].used                  = true;
+    }
 
     // ── Navigation quantisée ─────────────────────────────────────────────────
 
