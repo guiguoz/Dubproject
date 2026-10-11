@@ -64,8 +64,10 @@ void buildDirectPlan(const SceneData& from, const SceneData& to,
     // Durée GainRamp : 10 ms en samples, dérivée de sampleRate
     const int fadeSamples = std::max(1, static_cast<int>(std::round(sampleRate * 0.010)));
 
-    // Morph dub : capturer from/to (4 params) si tous deux utilisés
-    if (from.used && to.used) {
+    // Morph dub : toujours actif — les 4 params dub sont résolus par scène (Lot B),
+    // indépendamment du contenu des slots (PR2 §E). Un morph constant (source==cible)
+    // applique la valeur résolue sans mouvement audible.
+    {
         out.morphActive = true;
         out.morphFrom[0] = from.dubDelayFeedback; out.morphTo[0] = to.dubDelayFeedback;
         out.morphFrom[1] = from.dubDelayWet;      out.morphTo[1] = to.dubDelayWet;

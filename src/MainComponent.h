@@ -94,8 +94,10 @@ private:
     engine::SlotRole v2RoleForSlot(int slot) const noexcept;
     // Rôle effectif d'un slot : analysé V2 si fiable, sinon fallback par défaut.
     engine::SlotRole activeRoleForSlot(int slot) const noexcept;
-    void             syncV2Scene(int idx) noexcept;
+    void             syncV2Scene(int idx) noexcept;      // cible : active recalculé depuis le résolu
+    void             syncV2SceneLive(int idx) noexcept;  // courante : active conservé (état audio live)
     void             syncV2Scenes() noexcept;
+    void             syncV2SceneImpl(int idx, bool keepActive) noexcept; // implémentation commune
 
     //==========================================================================
     // DSP + MIDI

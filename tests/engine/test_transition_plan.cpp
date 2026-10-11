@@ -99,3 +99,39 @@ TEST_CASE("buildDirectPlan: same asset different slots -> Leave+Enter per slot, 
     REQUIRE(plan.slots[0].action == SlotPlanAction::Leave);
     REQUIRE(plan.slots[1].action == SlotPlanAction::Enter);
 }
+
+// ─── T-P1 : morph dub actif même si from.used == false (§E — garde supprimée) ──
+TEST_CASE("T-P1: morphActive even when from.used and to.used are false", "[plan][build]") {
+    SceneData from, to;
+    from.used = false;
+    to.used   = false;
+    from.dubDelayFeedback = 0.3f; from.dubDelayWet = 0.5f;
+    from.dubDelayTone     = 0.4f; from.dubDelayDrive = 0.1f;
+    to.dubDelayFeedback   = 0.6f; to.dubDelayWet   = 0.2f;
+    to.dubDelayTone       = 0.7f; to.dubDelayDrive  = 0.3f;
+
+    SceneTransitionPlan plan;
+    buildDirectPlan(from, to, 0, 1, 1000, 44100.0, plan);
+
+    REQUIRE(plan.valid);
+    REQUIRE(plan.morphActive == true);
+    REQUIRE(plan.morphFrom[0] == from.dubDelayFeedback);
+    REQUIRE(plan.morphTo[0]   == to.dubDelayFeedback);
+    REQUIRE(plan.morphFrom[1] == from.dubDelayWet);
+    REQUIRE(plan.morphTo[1]   == to.dubDelayWet);
+}
+
+// ─── T-P2 : même asset des deux côtés → Keep, aucun PcmFlip ─────────────────
+TEST_CASE("T-P2: same asset both sides active -> Keep, no PcmFlip", "[plan][build]") {
+    SceneData from, to;
+    from.used = to.used = true;
+    from.slots[0] = makeCfg("kick.wav", 0, 0, true, PlayMode::OneShot, 1.f, 0.f, false, SlotRole::Kick);
+    to.slots[0]   = from.slots[0];
+
+    SceneTransitionPlan plan;
+    buildDirectPlan(from, to, 0, 1, 1000, 44100.0, plan);
+
+    REQUIRE(plan.slots[0].action == SlotPlanAction::Keep);
+    for (int i = 0; i < plan.numEvents; ++i)
+        REQUIRE(plan.events[i].type != PlanEventType::PcmFlip);
+}

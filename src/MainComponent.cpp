@@ -253,6 +253,8 @@ MainComponent::MainComponent()
                 sc2.slots[static_cast<std::size_t>(s)].delaySend =
                     engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
                 sc2.used = true;
+                // PR2 §4.6 : push miroir (MagicMix lit cfg.active depuis le miroir)
+                syncV2Scene(sceneIdx);
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                 stepSeqPanel_->updateRoleStatus(s);
@@ -294,6 +296,9 @@ MainComponent::MainComponent()
     stepSeqPanel_->onPlayChanged = [this](bool playing)
     {
         if (playing) {
+            // PR2 : le miroir doit décrire ce qui est chargé — importSampleAsync n'écrit
+            // jamais le miroir, et activateSceneStopped le lit (clearSlot si filePath vide).
+            syncV2SceneLive(facade_.currentSceneIdx());
             facade_.activateSceneStopped(facade_.currentSceneIdx());
             facade_.play();
         } else {
@@ -752,8 +757,9 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
             MT::LOOP, MT::BASS, MT::KICK, MT::SNARE, MT::HIHAT,
             MT::PAD, MT::SYNTH, MT::PERC, MT::LOOP,
         };
-        const auto& scRef = sceneStore_.getScene(facade_.currentSceneIdx());
-        const auto& slRef = scRef.slots[static_cast<std::size_t>(slot)];
+        // PR2 §7.1 : résolu — un slot hérité a le rôle de l'ancêtre, pas {} brut
+        const auto scResolved = sceneStore_.resolveScene(facade_.currentSceneIdx());
+        const auto& slRef = scResolved.slots[static_cast<std::size_t>(slot)];
         const auto mt = (slRef.role != engine::SlotRole::Unknown
                          && slRef.role != engine::SlotRole::Fx)
             ? engine::roleToMixType(slRef.role) : kDefaultTypes[slot];
@@ -761,7 +767,8 @@ void MainComponent::loadSampleIntoSlot(int slot, const std::string& path)
     }
     stepSeqPanel_->setSlotWaveform(slot, {});   // placeholder immédiat
 
-    const auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+    // PR2 §7.1 : trims résolus — sinon AssetId = assetIdFor(path, 0, 0) ≠ celui de l'ancêtre
+    const auto sc = sceneStore_.resolveScene(facade_.currentSceneIdx());
     const int ts = sc.slots[static_cast<std::size_t>(slot)].trimStart;
     const int te = sc.slots[static_cast<std::size_t>(slot)].trimEnd;
     const engine::AssetId id = engine::assetIdFor(path, ts, te);
@@ -1321,12 +1328,8 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
         updateSceneLabel();
 
         // Seed toutes les scènes → EngineFacade SceneStore (pour transitions/scènes).
+        // L'énergie est calculée dans syncV2SceneImpl (source = miroir résolu).
         syncV2Scenes();
-
-        // Pré-calcul de l'énergie V2 pour toutes les scènes (après la seed du
-        // SceneStore moteur — sceneEnergy lit engine::SceneData).
-        for (int si = 0; si < kMaxScenes; ++si)
-            facade_.setSceneEnergy(si, engine::SceneEnergy::compute(facade_.scene(si)));
     }
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
@@ -2717,7 +2720,9 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
         sc.dubDelayDrive    = dd.getDrive();
     }
 
-    // Rafraîchir le score d'énergie V2 de la scène capturée.
+    // Énergie calculée dans syncV2SceneImpl — un appel explicite ici est redondant
+    // car captureCurrentScene() est toujours suivi d'un syncV2Scene(ci).
+    // Conserver pour les cas où la capture est appelée sans nav (save standalone).
     const int ci = facade_.currentSceneIdx();
     facade_.setSceneEnergy(ci, engine::SceneEnergy::compute(facade_.scene(ci)));
 
@@ -2772,47 +2777,78 @@ engine::SlotRole MainComponent::v2RoleForSlot(int slot) const noexcept
     }
 }
 
-void MainComponent::syncV2Scene(int idx) noexcept
+void MainComponent::syncV2SceneImpl(int idx, bool keepActive) noexcept
 {
     if (idx < 0 || idx >= kMaxScenes) return;
-    const auto& sc  = sceneStore_.getScene(idx);
+
+    const auto& raw = sceneStore_.getScene(idx);          // bpm, serum, ownership : par scène
+    const auto  res = sceneStore_.resolveScene(idx);      // contenu résolu : slots + steps + barCounts
+    const auto  lvl = sceneStore_.resolveSceneLevel(idx); // dub résolu (Lot B)
     auto&       es  = facade_.scene(idx);
 
-    es.bpm  = sc.bpm;
-    es.used = sc.isUsedDerived();
-    es.serumGain       = sc.serumGain;
-    es.serumState      = sc.serumState;
-    es.serumPresetName = sc.serumPresetName;
-    es.dubDelayFeedback = sc.dubDelayFeedback;
-    es.dubDelayWet      = sc.dubDelayWet;
-    es.dubDelayTone     = sc.dubDelayTone;
-    es.dubDelayDrive    = sc.dubDelayDrive;
+    es.bpm         = raw.bpm;
+    es.slotOwnership = raw.slotOwnership;   // appartient à la scène elle-même
+    es.sceneOwned  = raw.sceneOwned;
+
+    // used : aucun lecteur runtime après §E ; dérivé du résolu
+    es.used = res.isUsedDerived();
+
+    // Serum : jamais hérité — valeurs de la scène elle-même
+    es.serumGain       = raw.serumGain;
+    es.serumState      = raw.serumState;
+    es.serumPresetName = raw.serumPresetName;
+
+    // Dub : résolu (Lot B) — cible du morph moteur au commit
+    es.dubDelayFeedback = lvl.feedback;
+    es.dubDelayWet      = lvl.wet;
+    es.dubDelayTone     = lvl.tone;
+    es.dubDelayDrive    = lvl.drive;
 
     for (int i = 0; i < 9; ++i)
     {
-        const auto si = static_cast<std::size_t>(i);
-        auto& cfg = es.slots[i];
+        const auto  si  = static_cast<std::size_t>(i);
+        const auto& r   = res.slots[si];
+        auto&       cfg = es.slots[i];
 
-        cfg.filePath  = sc.slots[si].filePath;
-        cfg.gain      = sc.slots[si].gain;
-        cfg.userGain  = sc.slots[si].userGain;
-        cfg.semitones = sc.slots[si].semitones;
-        cfg.trimStart = sc.slots[si].trimStart;
-        cfg.trimEnd   = sc.slots[si].trimEnd;
-        cfg.delaySend = sc.slots[si].delaySend;
-        cfg.muted     = sc.slots[si].muted;
-        cfg.role      = activeRoleForSlot(i);
+        cfg.filePath     = r.filePath;
+        cfg.mode         = r.mode;
+        cfg.gain         = r.gain;
+        cfg.userGain     = r.userGain;
+        cfg.timeRatio    = r.timeRatio;
+        cfg.loopBeats    = r.loopBeats;
+        cfg.semitones    = r.semitones;
+        cfg.trimStart    = r.trimStart;
+        cfg.trimEnd      = r.trimEnd;
+        cfg.delaySend    = r.delaySend;
+        cfg.muted        = r.muted;
+        cfg.isRoleManual = r.isRoleManual;
+        // Rôle : cible = résolu (le rôle voyage avec le sample) ; fallback live si Unknown.
+        // Courante (keepActive) : live seulement (état audio en cours de lecture).
+        cfg.role = keepActive
+            ? activeRoleForSlot(i)
+            : (r.role != engine::SlotRole::Unknown ? r.role : activeRoleForSlot(i));
 
-        bool hasSteps = false;
-        const int nSteps = std::min(512, sc.trackBarCounts[si] * 16);
-        for (int s = 0; s < nSteps && !hasSteps; ++s)
-            hasSteps = sc.steps[si][static_cast<std::size_t>(s)];
-        cfg.active = !cfg.filePath.empty() && hasSteps;
+        if (!keepActive)
+        {
+            bool hasSteps = false;
+            const int nSteps = std::min(512, res.trackBarCounts[si] * 16);
+            for (int s = 0; s < nSteps && !hasSteps; ++s)
+                hasSteps = res.steps[si][static_cast<std::size_t>(s)];
+            cfg.active = !cfg.filePath.empty() && hasSteps;
+        }
+        // keepActive : cfg.active conservé (état audio live de la scène courante — §5)
     }
 
-    es.steps = sc.steps;
-    es.trackBarCounts = sc.trackBarCounts;
+    es.steps             = res.steps;
+    es.trackBarCounts    = res.trackBarCounts;
+    es.playModeOverrides = res.playModeOverrides;
+
+    // Énergie incluse ici (source = miroir qu'on vient d'écrire = résolu)
+    facade_.setSceneEnergy(idx, engine::SceneEnergy::compute(es));
 }
+
+void MainComponent::syncV2Scene(int idx)     noexcept { syncV2SceneImpl(idx, false); }
+void MainComponent::syncV2SceneLive(int idx) noexcept { syncV2SceneImpl(idx, true);  }
 
 void MainComponent::syncV2Scenes() noexcept
 {
@@ -2831,7 +2867,9 @@ void MainComponent::applyScene(int idx, int fromIdx)
         gainsBeforeScene[i] = facade_.getSlotGain(i);
     const float serumGainBefore = serumUserGain_.load(std::memory_order_relaxed);
 
-    const auto& sc = sceneStore_.getScene(idx);
+    // PR2 : sc = scène résolue — slots hérités prennent leur contenu de l'ancêtre Own.
+    // Serum/bpm restent ceux de la scène elle-même (resolveScene ne les hérite pas).
+    const auto sc = sceneStore_.resolveScene(idx);
 
     // ── Instrumentation CRC sources avant applyScene ─────────────────────────
     {
@@ -3133,8 +3171,18 @@ void MainComponent::applyScene(int idx, int fromIdx)
     {
         serumUserGain_.store(serumGainBefore, std::memory_order_relaxed);
         serumGainRamp_ = { true, serumGainBefore, serumGainTarget, 0, 250 };
+        // PR2 §6.2 : morph UI dub seulement si les niveaux résolus diffèrent.
+        // Si égaux : les valeurs sont déjà bonnes (ou le morph moteur les applique) —
+        // évite un morph fantôme de 4 s quand les scènes héritent le même dub.
         const int resolvedFrom = (fromIdx >= 0) ? fromIdx : idx;
-        facade_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
+        const auto lvlFrom = sceneStore_.resolveSceneLevel(resolvedFrom);
+        const auto lvlTo   = sceneStore_.resolveSceneLevel(idx);
+        const bool dubChanged = (lvlFrom.feedback != lvlTo.feedback)
+                             || (lvlFrom.wet      != lvlTo.wet)
+                             || (lvlFrom.tone     != lvlTo.tone)
+                             || (lvlFrom.drive    != lvlTo.drive);
+        if (dubChanged)
+            facade_.startDubDelayMorph(resolvedFrom, idx, 4000.f);
     }
     else
     {
@@ -3261,7 +3309,8 @@ void MainComponent::prefetchNeighborScenes(int sceneIdx) noexcept
     {
         const int ni = sceneIdx + delta;
         if (ni < 0 || ni >= kMaxScenes) continue;
-        const auto& sc = sceneStore_.getScene(ni);
+        // PR2 §7.2 : résolu — sinon on précharge les waveforms de rien (slots hérités bruts vides)
+        const auto sc = sceneStore_.resolveScene(ni);
         for (int i = 0; i < 9; ++i)
         {
             const auto& sl = sc.slots[static_cast<std::size_t>(i)];
@@ -3337,15 +3386,12 @@ void MainComponent::navigateScene(int delta)
     }
 
     // Séquenceur en lecture : PREPARE → COMMIT (DIRECT)
-    // Sync MC→engine steps+trackBarCounts pour les DEUX scènes avant prepareDirectPlan.
-    // On sync UNIQUEMENT steps+trackBarCounts — PAS cfg.active.
-    for (const int idx : { current, target })
-    {
-        const auto& scMC = sceneStore_.getScene(idx);
-        auto& esEng      = facade_.scene(idx);
-        esEng.steps          = scMC.steps;
-        esEng.trackBarCounts = scMC.trackBarCounts;
-    }
+    // PR2 : sync COMPLET résolu pour les deux scènes avant prepareDirectPlan.
+    // - Courante : syncV2SceneLive (active conservé — état audio live, règle existante)
+    // - Cible    : syncV2Scene (active recalculé depuis le résolu)
+    // active de la courante n'est JAMAIS recalculé ici — cf. §5 spec PR2.
+    syncV2SceneLive(current);
+    syncV2Scene(target);
 
     if (facade_.prepareDirectPlan(current, target)) {
         // Plan armé — le COMMIT audio fera tout au même sample T.
@@ -3406,7 +3452,8 @@ void MainComponent::copyCurrentSceneToNext()
     int itemId = 1;
     for (int i = 0; i < kMaxScenes; ++i)
     {
-        if (i == facade_.currentSceneIdx() || !sceneStore_.getScene(i).isUsedDerived())
+        // PR2 §7.3 : résolu — sinon une scène qui n'hérite que par résolution est absente du menu
+        if (i == facade_.currentSceneIdx() || !sceneStore_.resolveScene(i).isUsedDerived())
             { ++itemId; continue; }
         menu.addItem(itemId, "Scene " + juce::String(i + 1));
         ++itemId;
@@ -3434,14 +3481,16 @@ void MainComponent::copyCurrentSceneToNext()
 
 void MainComponent::applyDubDelayMorph(float t)
 {
-    const auto& from = sceneStore_.getScene(facade_.getMorphFromSceneIdx());
-    const auto& to   = sceneStore_.getScene(facade_.getMorphToSceneIdx());
+    // PR2 §6.3 : niveaux résolus — sinon une scène qui hérite interpole depuis
+    // les valeurs brutes de son store (vides → départ faux pendant 4 s).
+    const auto from = sceneStore_.resolveSceneLevel(facade_.getMorphFromSceneIdx());
+    const auto to   = sceneStore_.resolveSceneLevel(facade_.getMorphToSceneIdx());
     auto& delay = facade_.delay();
     const auto lerp  = [](float a, float b, float x) { return a + (b - a) * x; };
-    delay.setFeedback(lerp(from.dubDelayFeedback, to.dubDelayFeedback, t));
-    delay.setWet     (lerp(from.dubDelayWet,      to.dubDelayWet,      t));
-    delay.setTone    (lerp(from.dubDelayTone,     to.dubDelayTone,     t));
-    delay.setDrive   (lerp(from.dubDelayDrive,    to.dubDelayDrive,    t));
+    delay.setFeedback(lerp(from.feedback, to.feedback, t));
+    delay.setWet     (lerp(from.wet,      to.wet,      t));
+    delay.setTone    (lerp(from.tone,     to.tone,     t));
+    delay.setDrive   (lerp(from.drive,    to.drive,    t));
 }
 
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
