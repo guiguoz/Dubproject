@@ -127,6 +127,16 @@ public:
 
     // ── Héritage de scène (v26) ──────────────────────────────────────────────
 
+    // Règle canonique d'activation (partagée avec syncV2SceneImpl).
+    static bool computeSlotActive(const SceneData& sc, std::size_t si) noexcept
+    {
+        if (sc.slots[si].filePath.empty()) return false;
+        const int numSteps = std::min(512, sc.trackBarCounts[si] * 16);
+        for (int st = 0; st < numSteps; ++st)
+            if (sc.steps[si][static_cast<std::size_t>(st)]) return true;
+        return false;
+    }
+
     // Retourne le contenu résolu de la scène idx.
     // Pour chaque slot en Inherit, remonte vers l'ancêtre Own le plus proche
     // (j < idx). Si aucun ancêtre ne possède le slot, retourne les défauts.
@@ -169,12 +179,7 @@ public:
         for (int s = 0; s < kMaxSlots; ++s)
         {
             const std::size_t su = static_cast<std::size_t>(s);
-            auto& cfg = result.slots[su];
-            bool hasSteps = false;
-            const int numSteps = result.trackBarCounts[su] * 16;
-            for (int st = 0; st < numSteps && !hasSteps; ++st)
-                hasSteps = result.steps[su][static_cast<std::size_t>(st)];
-            cfg.active = !cfg.filePath.empty() && hasSteps;
+            result.slots[su].active = computeSlotActive(result, su);
         }
 
         result.used = result.isUsedDerived();

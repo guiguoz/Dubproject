@@ -314,3 +314,61 @@ TEST_CASE("T-INH13: resolveSceneLevel does not modify ownership", "[inherit]") {
     // Store ownership unchanged
     REQUIRE(store.getScene(2).sceneOwned == false);
 }
+
+// ─── T-W2 : matérialise + clear steps → active=false, propagation filePath ───
+TEST_CASE("T-W2: materializeSlot then clear steps -> active=false, downstream inherits filePath", "[inherit]") {
+    SceneStore store;
+    SceneData a;
+    a.slotOwnership[0] = true;
+    a.slots[0].filePath = "bass.wav";
+    a.slots[0].gain     = 1.0f;
+    a.steps[0][0] = a.steps[0][1] = true;
+    a.trackBarCounts[0] = 1;
+    a.used = true;
+    store.setScene(0, a);
+
+    // Matérialise slot 0 en scène 1 (Inherit → Own)
+    store.materializeSlot(1, 0);
+    REQUIRE(store.getScene(1).slotOwnership[0] == true);
+    REQUIRE(store.getScene(1).slots[0].filePath == "bass.wav");
+
+    // Vider les steps de la scène 1
+    store.getScene(1).steps[0].fill(false);
+    store.getScene(1).slots[0].active = SceneStore::computeSlotActive(store.getScene(1), 0);
+
+    REQUIRE(store.getScene(1).slots[0].active == false);           // steps vidés
+    REQUIRE(store.getScene(1).slots[0].filePath == "bass.wav");    // filePath conservé
+
+    // La scène 2 (Inherit) doit hériter de la scène 1 (Own vide)
+    const SceneData r2 = store.resolveScene(2);
+    REQUIRE(r2.slots[0].filePath == "bass.wav");   // filePath de l'ancêtre le plus proche (scène 1)
+    REQUIRE(r2.slots[0].active == false);           // steps vides → inactive
+}
+
+// ─── T-W3 : computeSlotActive == règle de resolveScene ──────────────────────
+TEST_CASE("T-W3: computeSlotActive is consistent with resolveScene phase-2", "[inherit]") {
+    SceneStore store;
+    SceneData a;
+    a.slotOwnership[0] = true;
+    a.slots[0].filePath = "kick.wav";
+    a.steps[0][0] = true;
+    a.trackBarCounts[0] = 1;
+    a.used = true;
+    store.setScene(0, a);
+
+    // resolveScene calcule active via computeSlotActive
+    const SceneData r0 = store.resolveScene(0);
+    const bool activeFromResolve = r0.slots[0].active;
+    const bool activeFromHelper  = SceneStore::computeSlotActive(r0, 0);
+    REQUIRE(activeFromResolve == activeFromHelper);
+    REQUIRE(activeFromResolve == true);  // filePath non vide + step actif
+
+    // Cas vide : filePath vide → false
+    SceneData empty;
+    empty.slotOwnership[0] = true;
+    empty.steps[0][0] = true;  // step actif mais filePath vide
+    store.setScene(1, empty);
+    const SceneData r1 = store.resolveScene(1);
+    REQUIRE(SceneStore::computeSlotActive(r1, 0) == false);
+    REQUIRE(r1.slots[0].active == false);
+}

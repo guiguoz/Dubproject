@@ -246,19 +246,26 @@ MainComponent::MainComponent()
         const int sceneIdx = facade_.currentSceneIdx();
         facade_.importSampleAsync(slot, path, [this, path, sceneIdx](int s, const engine::AnalysisResult&) {
             juce::MessageManager::callAsync([this, s, path, sceneIdx] {
-                // Persister le filePath dans sceneStore_ : applyScene peut ainsi restaurer
-                // le sample lors d'une navigation stopped sans passer par captureCurrentScene().
+                // PR3 : matérialise le slot (Inherit → Own avec contenu résolu) dans la bonne scène.
+                // sceneIdx peut != currentSceneIdx() si l'utilisateur a navigué pendant l'import.
+                sceneStore_.materializeSlot(sceneIdx, s);
                 auto& sc2 = sceneStore_.getScene(sceneIdx);
-                sc2.slots[static_cast<std::size_t>(s)].filePath = path;
-                sc2.slots[static_cast<std::size_t>(s)].delaySend =
-                    engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
-                // §4.7 : persister le mode retenu par le moteur (modeForResult dans EngineFacade).
-                // Guard obligatoire : isSlotLoaded == false → slotMode retourne Free (slot hors bornes).
+                const auto si = static_cast<std::size_t>(s);
+                sc2.slots[si].filePath  = path;
+                sc2.slots[si].trimStart = 0;   // trims de l'ancêtre ≠ nouveau fichier : réinitialiser
+                sc2.slots[si].trimEnd   = 0;
+                sc2.slots[si].delaySend = engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
                 if (facade_.isSlotLoaded(s))
-                    sc2.slots[static_cast<std::size_t>(s)].mode = facade_.slotMode(s);
+                    sc2.slots[si].mode = facade_.slotMode(s);
+                // Rôle : rafraîchir depuis le moteur si non-manuel (sinon rôle de l'ancêtre)
+                if (!sc2.slots[si].isRoleManual) {
+                    const auto info = facade_.getSlotRoleInfo(s);
+                    sc2.slots[si].role       = info.role;
+                    sc2.slots[si].isRoleManual = info.manual;
+                }
+                sc2.slots[si].active = engine::SceneStore::computeSlotActive(sc2, si);
                 sc2.used = true;
-                // PR2 §4.6 : push miroir (MagicMix lit cfg.active depuis le miroir)
-                syncV2Scene(sceneIdx);
+                syncMirrorFrom(sceneIdx);
                 stepSeqPanel_->setSlotLoaded(s, true);
                 stepSeqPanel_->setSlotWaveform(s, computeEnvelope(facade_.getSlotPcmSnapshot(s)));
                 stepSeqPanel_->updateRoleStatus(s);
@@ -274,9 +281,11 @@ MainComponent::MainComponent()
         facade_.flipPatternBuffer();
         // SceneDefinition est la source de vérité — mise à jour immédiate au clic.
         if (track >= 0 && track < engine::kMaxSlots && step >= 0 && step < engine::kMaxSteps) {
-            auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
-            sc.steps[static_cast<std::size_t>(track)][static_cast<std::size_t>(step)] = active;
-            if (active) sc.used = true;  // pour compatibilité sérialisation
+            auto& sc = editableSceneSlot(track);
+            const auto si = static_cast<std::size_t>(track);
+            sc.steps[si][static_cast<std::size_t>(step)] = active;
+            sc.slots[si].active = engine::SceneStore::computeSlotActive(sc, si);
+            syncMirrorFrom(facade_.currentSceneIdx());
         }
     };
 
@@ -286,6 +295,18 @@ MainComponent::MainComponent()
         facade_.clearSlot(slot);
         stepSeqPanel_->setSlotLoaded(slot, false);
         stepSeqPanel_->updateRoleStatus(slot);
+        // PR3 : vider le slot dans le store — geste de slot, matérialise et se propage.
+        {
+            const int cur = facade_.currentSceneIdx();
+            auto& sc = editableSceneSlot(slot);
+            const auto si = static_cast<std::size_t>(slot);
+            sc.slots[si].filePath.clear();
+            sc.slots[si].trimStart = 0;
+            sc.slots[si].trimEnd   = 0;
+            sc.steps[si].fill(false);
+            sc.slots[si].active = false;
+            syncMirrorFrom(cur);
+        }
     };
 
     // BPM changed: update sequencer + DSP + sidebar label
@@ -318,9 +339,10 @@ MainComponent::MainComponent()
     // Volume per slot — user fader, multiplied on top of AI normalization gain
     stepSeqPanel_->onVolumeChanged = [this](int slot, float userGain)
     {
-        auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+        auto& sc = editableSceneSlot(slot);
         sc.slots[static_cast<std::size_t>(slot)].userGain = userGain;
         facade_.setSlotGain(slot, userGain);
+        syncMirrorFrom(facade_.currentSceneIdx());
     };
 
     // Mute per slot — relancer le magic mix ici causait une perte de gain sur les autres
@@ -331,6 +353,12 @@ MainComponent::MainComponent()
     {
         const bool quantize = !muted && facade_.isPlaying();
         facade_.setSlotMuted(slot, muted, quantize);
+        // PR3 : persister le mute (sans écriture, un slot hérité rejouerait non-muté après nav).
+        {
+            auto& sc = editableSceneSlot(slot);
+            sc.slots[static_cast<std::size_t>(slot)].muted = muted;
+            syncMirrorFrom(facade_.currentSceneIdx());
+        }
     };
 
     // Magic Mix ⚡ — le callback du panel (backup, au cas où) n'est plus utilisé pour le toggle
@@ -410,16 +438,23 @@ MainComponent::MainComponent()
             // Appliquer les gains IA comme point de départ des faders + scènes
             // (persistance projet). L'application runtime a déjà été faite par le
             // worker (setSlotMixState → SlotPlayer).
-            auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
-            for (int i = 0; i < 9; ++i)
             {
-                const auto ms = facade_.getSlotMixState(i);
-                if (!ms.applied) continue;
-                if (ms.gain <= 0.f) continue;   // gain 0 → garder le gain existant
-                const std::size_t idx = static_cast<std::size_t>(i);
-                sc.slots[idx].gain     = ms.gain;    // référence/diagnostique uniquement
-                sc.slots[idx].userGain = ms.gain;    // le gain IA devient le point de départ du fader
-                stepSeqPanel_->setSlotVolume(i, ms.gain);   // le slider se cale sur la suggestion IA
+                const int curScene = facade_.currentSceneIdx();
+                const auto resolved = sceneStore_.resolveScene(curScene);
+                bool anyWritten = false;
+                for (int i = 0; i < 9; ++i)
+                {
+                    const auto ms = facade_.getSlotMixState(i);
+                    if (!ms.applied || ms.gain <= 0.f) continue;
+                    const auto si = static_cast<std::size_t>(i);
+                    if (resolved.slots[si].filePath.empty()) continue;  // §11-P2 : pas de barrière sur slot vide
+                    auto& sc = editableSceneSlot(i);
+                    sc.slots[si].gain     = ms.gain;
+                    sc.slots[si].userGain = ms.gain;
+                    stepSeqPanel_->setSlotVolume(i, ms.gain);
+                    anyWritten = true;
+                }
+                if (anyWritten) syncMirrorFrom(curScene);
             }
 
             // Normalise le gain Serum vers un niveau RMS cible (≈ −14 dBFS).
@@ -430,7 +465,7 @@ MainComponent::MainComponent()
                 const float normGain = juce::jlimit(0.2f, 3.0f,
                     kSerumTargetRms / (serumMixFeatures_.rms + 1e-6f));
                 serumUserGain_.store(normGain, std::memory_order_relaxed);
-                sc.serumGain = normGain;
+                sceneStore_.getScene(facade_.currentSceneIdx()).serumGain = normGain;
             }
         }
 
@@ -447,7 +482,7 @@ MainComponent::MainComponent()
         // Sync MC-side + mettre à jour le tag amber (orange si forcé, amber si auto).
         {
             const auto info = facade_.getSlotRoleInfo(slot);
-            auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+            auto& sc = editableSceneSlot(slot);
             sc.slots[static_cast<std::size_t>(slot)].role = info.role;
             sc.slots[static_cast<std::size_t>(slot)].isRoleManual = info.manual;
             if (info.role != engine::SlotRole::Unknown)
@@ -457,6 +492,7 @@ MainComponent::MainComponent()
                     stepSeqPanel_->setSlotContentType(slot,
                         engine::mix::contentTypeName(mt), info.manual);
             }
+            syncMirrorFrom(facade_.currentSceneIdx());
         }
         stepSeqPanel_->repaint();   // contour manuel peint en paintOverChildren : immédiat
         // Re-lancer l'IA avec le nouveau type
@@ -512,15 +548,21 @@ MainComponent::MainComponent()
         }
 
         // Mettre à jour la scène courante en mémoire
-        auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
-        for (int s = 0; s < numSteps; ++s)
-            sc.steps[static_cast<std::size_t>(slot)][static_cast<std::size_t>(s)] =
-                cb.steps[static_cast<std::size_t>(s)];
-        sc.slots[static_cast<std::size_t>(slot)].gain     = cb.gain;
-        sc.slots[static_cast<std::size_t>(slot)].muted    = cb.muted;
-        sc.trackBarCounts [static_cast<std::size_t>(slot)] = cb.barCount;
-        if (!cb.filePath.empty())
-            sc.slots[static_cast<std::size_t>(slot)].filePath = cb.filePath;
+        {
+            const int cur = facade_.currentSceneIdx();
+            auto& sc = editableSceneSlot(slot);
+            const auto si = static_cast<std::size_t>(slot);
+            for (int s2 = 0; s2 < numSteps; ++s2)
+                sc.steps[si][static_cast<std::size_t>(s2)] = cb.steps[static_cast<std::size_t>(s2)];
+            sc.slots[si].gain          = cb.gain;
+            sc.slots[si].userGain      = cb.gain;
+            sc.trackBarCounts[si]      = cb.barCount;
+            sc.slots[si].muted         = cb.muted;
+            if (!cb.filePath.empty())
+                sc.slots[si].filePath  = cb.filePath;
+            sc.slots[si].active = engine::SceneStore::computeSlotActive(sc, si);
+            syncMirrorFrom(cur);
+        }
     };
 
     stepSeqPanel_->onPitchOffsetChanged = [this](int slot, float semitones)
@@ -535,8 +577,13 @@ MainComponent::MainComponent()
         facade_.flipPatternBuffer();
         // SceneDefinition authoritative — mise à jour immédiate du barCount.
         if (track >= 0 && track < engine::kMaxSlots)
-            sceneStore_.getScene(facade_.currentSceneIdx())
-                .trackBarCounts[static_cast<std::size_t>(track)] = bars;
+        {
+            auto& sc = editableSceneSlot(track);
+            const auto si = static_cast<std::size_t>(track);
+            sc.trackBarCounts[si] = bars;
+            sc.slots[si].active   = engine::SceneStore::computeSlotActive(sc, si);
+            syncMirrorFrom(facade_.currentSceneIdx());
+        }
     };
 
     // Override manuel du mode de lecture (clic droit → "Mode de lecture...")
@@ -547,8 +594,11 @@ MainComponent::MainComponent()
                                   :               engine::PlayMode::OneShot;
         facade_.setSlotMode(slot, pm);
         // Persister l'override dans la scène courante pour la sauvegarde.
-        sceneStore_.getScene(facade_.currentSceneIdx())
-            .playModeOverrides[static_cast<std::size_t>(slot)] = mode;
+        {
+            auto& sc = editableSceneSlot(slot);
+            sc.playModeOverrides[static_cast<std::size_t>(slot)] = mode;
+            syncMirrorFrom(facade_.currentSceneIdx());
+        }
     };
 
     // Playhead ratio for waveform animation (approx — audio thread value, GUI read)
@@ -619,17 +669,33 @@ MainComponent::MainComponent()
     dubDelaySendSlider_    .onValueChange = [this] {
         facade_.delay().setSend(static_cast<float>(dubDelaySendSlider_.getValue()));
     };
-    dubDelayWetSlider_     .onValueChange = [this] {
-        facade_.delay().setWet(static_cast<float>(dubDelayWetSlider_.getValue()));
+    dubDelayWetSlider_.onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayWetSlider_.getValue());
+        auto& sc = editableSceneLevel();
+        sc.dubDelayWet = v;
+        facade_.delay().setWet(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
     };
     dubDelayFeedbackSlider_.onValueChange = [this] {
-        facade_.delay().setFeedback(static_cast<float>(dubDelayFeedbackSlider_.getValue()));
+        const float v = static_cast<float>(dubDelayFeedbackSlider_.getValue());
+        auto& sc = editableSceneLevel();
+        sc.dubDelayFeedback = v;
+        facade_.delay().setFeedback(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
     };
-    dubDelayToneSlider_    .onValueChange = [this] {
-        facade_.delay().setTone(static_cast<float>(dubDelayToneSlider_.getValue()));
+    dubDelayToneSlider_.onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayToneSlider_.getValue());
+        auto& sc = editableSceneLevel();
+        sc.dubDelayTone = v;
+        facade_.delay().setTone(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
     };
-    dubDelayDriveSlider_   .onValueChange = [this] {
-        facade_.delay().setDrive(static_cast<float>(dubDelayDriveSlider_.getValue()));
+    dubDelayDriveSlider_.onValueChange = [this] {
+        const float v = static_cast<float>(dubDelayDriveSlider_.getValue());
+        auto& sc = editableSceneLevel();
+        sc.dubDelayDrive = v;
+        facade_.delay().setDrive(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
     };
 
     addAndMakeVisible(dubDelaySendSlider_);
@@ -866,7 +932,7 @@ void MainComponent::openSampleEditor(int slot)
     // On additionne cet offset pour que trimStart/trimEnd restent toujours en
     // coordonnées fichier, quel que soit le nombre d'éditions successives.
     const int fileTrimOffset =
-        sceneStore_.getScene(facade_.currentSceneIdx())
+        sceneStore_.resolveScene(facade_.currentSceneIdx())
                      .slots[static_cast<std::size_t>(slot)].trimStart;
 
     auto* editor = new ui::SampleEditorComponent(std::move(pcm), sr);
@@ -890,23 +956,20 @@ void MainComponent::openSampleEditor(int slot)
         const int fileE = fileTrimOffset + e;
 
         const std::string filePath = stepSeqPanel_->getSlotFilePath(slot);
-        for (int si = 0; si < kMaxScenes; ++si)
+        // Matérialise le slot courant avant d'écrire les trims
+        editableSceneSlot(slot);
+        // Écrire les trims seulement dans les slots Own qui partagent ce fichier
+        for (int si2 = 0; si2 < kMaxScenes; ++si2)
             for (int t = 0; t < 9; ++t)
-                if (sceneStore_.getScene(si).slots[static_cast<std::size_t>(t)].filePath == filePath)
-                {
-                    sceneStore_.getScene(si).slots[t].trimStart = fileS;
-                    sceneStore_.getScene(si).slots[t].trimEnd   = fileE;
-                }
-
-        // Config V2 : re-sync la configuration scène (trim stocké dans SceneStore).
-        for (int si = 0; si < kMaxScenes; ++si)
-            for (int t = 0; t < 9; ++t)
-                if (sceneStore_.getScene(si).slots[static_cast<std::size_t>(t)].filePath == filePath)
-                {
-                    // Mettre à jour le SceneStore pour que les futures transitions
-                    // voient le bon trim (Replace) et le re-trigger cohérent.
-                    syncV2Scene(si);
-                }
+            {
+                auto& scT = sceneStore_.getScene(si2);
+                const auto su = static_cast<std::size_t>(t);
+                if (!scT.slotOwnership[su]) continue;   // Inherit suit l'ancêtre sans écriture
+                if (scT.slots[su].filePath != filePath) continue;
+                scT.slots[su].trimStart = fileS;
+                scT.slots[su].trimEnd   = fileE;
+            }
+        syncMirrorFrom(0);  // tous les miroirs (trim change l'AssetId global)
 
         // Appliquer aux autres slots actuellement chargés avec le même fichier
         for (int t = 0; t < 9; ++t)
@@ -2576,11 +2639,19 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
         break;
     case MT::DubDelayWet:
         dubDelayWetSlider_.setValue(v, juce::dontSendNotification);
+        if (std::abs(v - dubMidiLast_[0]) < 1e-4f) break;
+        dubMidiLast_[0] = v;
+        { auto& sc = editableSceneLevel(); sc.dubDelayWet = v; }
         facade_.delay().setWet(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
         break;
     case MT::DubDelayFeedback:
         dubDelayFeedbackSlider_.setValue(v * 0.95f, juce::dontSendNotification);
+        if (std::abs(v * 0.95f - dubMidiLast_[1]) < 1e-4f) break;
+        dubMidiLast_[1] = v * 0.95f;
+        { auto& sc = editableSceneLevel(); sc.dubDelayFeedback = v * 0.95f; }
         facade_.delay().setFeedback(v * 0.95f);
+        syncMirrorFrom(facade_.currentSceneIdx());
         break;
     case MT::SerumGain:
         serumUserGain_.store(v, std::memory_order_relaxed);
@@ -2594,11 +2665,19 @@ void MainComponent::applyMappingValue(midi::MappingTarget t, float rawValue)
     }
     case MT::DubDelayTone:
         dubDelayToneSlider_.setValue(v, juce::dontSendNotification);
+        if (std::abs(v - dubMidiLast_[2]) < 1e-4f) break;
+        dubMidiLast_[2] = v;
+        { auto& sc = editableSceneLevel(); sc.dubDelayTone = v; }
         facade_.delay().setTone(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
         break;
     case MT::DubDelayDrive:
         dubDelayDriveSlider_.setValue(v, juce::dontSendNotification);
+        if (std::abs(v - dubMidiLast_[3]) < 1e-4f) break;
+        dubMidiLast_[3] = v;
+        { auto& sc = editableSceneLevel(); sc.dubDelayDrive = v; }
         facade_.delay().setDrive(v);
+        syncMirrorFrom(facade_.currentSceneIdx());
         break;
     case MT::DubDelayDiv:
     {
@@ -2685,6 +2764,7 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
     for (int i = 0; i < 9; ++i)
     {
         const std::size_t idx  = static_cast<std::size_t>(i);
+        if (!sc.slotOwnership[idx]) continue;   // PR3 : Inherit → pas d'écrasement depuis l'UI
         sc.slots[idx].filePath  = stepSeqPanel_->getSlotFilePath(i);
         sc.slots[idx].muted  = facade_.isSlotMuted(i);
         {
@@ -2716,6 +2796,7 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
     }
     sc.serumPresetName = currentPresetName_.toStdString();
 
+    if (sc.sceneOwned)
     {
         auto& dd = facade_.delay();
         sc.dubDelayFeedback = dd.getFeedback();
@@ -2724,11 +2805,11 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
         sc.dubDelayDrive    = dd.getDrive();
     }
 
-    // Énergie calculée dans syncV2SceneImpl — un appel explicite ici est redondant
-    // car captureCurrentScene() est toujours suivi d'un syncV2Scene(ci).
-    // Conserver pour les cas où la capture est appelée sans nav (save standalone).
+    // Énergie calculée ici pour le save standalone — ni le paste (:489) ni le Save (:996)
+    // ne font suivre un syncV2Scene. PR3 §7 : syncV2Scene est appelé en fin de capture.
+    // PR3 §7 : la capture est un geste d'écriture — push complet.
     const int ci = facade_.currentSceneIdx();
-    facade_.setSceneEnergy(ci, engine::SceneEnergy::compute(facade_.scene(ci)));
+    syncV2Scene(ci);
 
     // ── Instrumentation CAPTURE CRC ──────────────────────────────────────────
     {
@@ -2833,13 +2914,7 @@ void MainComponent::syncV2SceneImpl(int idx, bool keepActive) noexcept
             : (r.role != engine::SlotRole::Unknown ? r.role : activeRoleForSlot(i));
 
         if (!keepActive)
-        {
-            bool hasSteps = false;
-            const int nSteps = std::min(512, res.trackBarCounts[si] * 16);
-            for (int s = 0; s < nSteps && !hasSteps; ++s)
-                hasSteps = res.steps[si][static_cast<std::size_t>(s)];
-            cfg.active = !cfg.filePath.empty() && hasSteps;
-        }
+            cfg.active = res.slots[si].active;  // calculé par SceneStore::computeSlotActive
         // keepActive : cfg.active conservé (état audio live de la scène courante — §5)
     }
 
@@ -2849,6 +2924,50 @@ void MainComponent::syncV2SceneImpl(int idx, bool keepActive) noexcept
 
     // Énergie incluse ici (source = miroir qu'on vient d'écrire = résolu)
     facade_.setSceneEnergy(idx, engine::SceneEnergy::compute(es));
+}
+
+engine::SceneData& MainComponent::editableSceneSlot(int slot) noexcept
+{
+    const int i = facade_.currentSceneIdx();
+    auto& sc = sceneStore_.getScene(i);
+    if (slot >= 0 && slot < engine::kMaxSlots)
+    {
+        const auto si = static_cast<std::size_t>(slot);
+        if (!sc.slotOwnership[si])
+        {
+            sceneStore_.materializeSlot(i, slot);
+            juce::Logger::writeToLog("[INHERIT] materialize scene=" + juce::String(i)
+                + " slot=" + juce::String(slot)
+                + (sc.slots[si].filePath.empty() ? " empty" : ""));
+        }
+    }
+    sc.used = true;  // used=true même si vide : la barrière doit être sérialisée
+    return sc;
+}
+
+engine::SceneData& MainComponent::editableSceneLevel() noexcept
+{
+    const int i = facade_.currentSceneIdx();
+    auto& sc = sceneStore_.getScene(i);
+    if (!sc.sceneOwned)
+    {
+        const auto lvl = sceneStore_.resolveSceneLevel(i);
+        sc.sceneOwned       = true;
+        sc.dubDelayFeedback = lvl.feedback;
+        sc.dubDelayWet      = lvl.wet;
+        sc.dubDelayTone     = lvl.tone;
+        sc.dubDelayDrive    = lvl.drive;
+    }
+    sc.used = true;
+    return sc;
+}
+
+void MainComponent::syncMirrorFrom(int fromScene) noexcept
+{
+    // COMPLET pour tous les sites d'écriture (§2 bis) : le geste a déjà mis à jour
+    // le store — syncV2Scene recalcule active depuis les steps, y compris scène courante.
+    for (int i = juce::jmax(0, fromScene); i < engine::kMaxScenes; ++i)
+        syncV2Scene(i);
 }
 
 void MainComponent::syncV2Scene(int idx)     noexcept { syncV2SceneImpl(idx, false); }
@@ -3412,9 +3531,13 @@ void MainComponent::navigateScene(int delta)
 
 void MainComponent::resetCurrentScene()
 {
-    // Clear step patterns only — keep samples loaded
+    const int cur = facade_.currentSceneIdx();
     for (int i = 0; i < 9; ++i)
     {
+        auto& sc = editableSceneSlot(i);
+        const auto si = static_cast<std::size_t>(i);
+        sc.steps[si].fill(false);
+        sc.slots[si].active = false;   // filePath conservé, steps vides → false
         const int numSteps = facade_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
         {
@@ -3423,30 +3546,34 @@ void MainComponent::resetCurrentScene()
         }
     }
     facade_.flipPatternBuffer();
-    sceneStore_.getScene(facade_.currentSceneIdx()).used = false;
+    syncMirrorFrom(cur);
+    // sc.used reste true : barrière sérialisée (§11-Q8)
 }
 
 void MainComponent::resetCurrentSceneFull()
 {
-    // Clear patterns (all steps)
+    const int cur = facade_.currentSceneIdx();
     for (int i = 0; i < 9; ++i)
     {
+        auto& sc = editableSceneSlot(i);
+        const auto si = static_cast<std::size_t>(i);
+        sc.steps[si].fill(false);
+        sc.slots[si].filePath.clear();
+        sc.slots[si].trimStart = 0;
+        sc.slots[si].trimEnd   = 0;
+        sc.slots[si].active    = false;
         const int numSteps = facade_.getTrackStepCount(i);
         for (int s = 0; s < numSteps; ++s)
         {
             stepSeqPanel_->setStepState(i, s, false);
             facade_.setStep(i, s, false);
         }
-    }
-    facade_.flipPatternBuffer();
-    // Unload all samples
-    for (int i = 0; i < 9; ++i)
-    {
         facade_.clearSlot(i);
         stepSeqPanel_->setSlotFilePath(i, "");
         stepSeqPanel_->setSlotLoaded(i, false);
     }
-    sceneStore_.getScene(facade_.currentSceneIdx()).used = false;
+    facade_.flipPatternBuffer();
+    syncMirrorFrom(cur);
 }
 
 void MainComponent::copyCurrentSceneToNext()
@@ -3473,13 +3600,32 @@ void MainComponent::copyCurrentSceneToNext()
         [this](int result)
         {
             if (result <= 0) return;
-            const int srcIdx = result - 1;  // itemId == sceneIndex + 1
-            sceneStore_.getScene(facade_.currentSceneIdx()) =
-                sceneStore_.getScene(srcIdx);
-            sceneStore_.getScene(facade_.currentSceneIdx()).used = true;
-        applyScene(facade_.currentSceneIdx());
+            const int srcIdx    = result - 1;  // itemId == sceneIndex + 1
+            const int dstIdx    = facade_.currentSceneIdx();
+            const auto resolved = sceneStore_.resolveScene(srcIdx);
+            const auto dubLvl   = sceneStore_.resolveSceneLevel(srcIdx);
+            auto& dst           = sceneStore_.getScene(dstIdx);
+            // Copier le contenu résolu (9 slots Own)
+            for (int i = 0; i < engine::kMaxSlots; ++i)
+            {
+                const auto si          = static_cast<std::size_t>(i);
+                dst.slots[si]          = resolved.slots[si];
+                dst.steps[si]          = resolved.steps[si];
+                dst.trackBarCounts[si] = resolved.trackBarCounts[si];
+                dst.playModeOverrides[si] = resolved.playModeOverrides[si];
+                dst.slotOwnership[si]  = true;
+            }
+            // Dub : résolu (évite « posséder les défauts » d'une scène qui héritait)
+            dst.dubDelayFeedback = dubLvl.feedback;
+            dst.dubDelayWet      = dubLvl.wet;
+            dst.dubDelayTone     = dubLvl.tone;
+            dst.dubDelayDrive    = dubLvl.drive;
+            dst.sceneOwned       = true;
+            dst.used             = true;
+            // Serum : par scène, la destination garde le sien
             juce::Logger::writeToLog("Scene " + juce::String(srcIdx + 1) +
-                                     " copied into scene " + juce::String(facade_.currentSceneIdx() + 1));
+                                     " copied into scene " + juce::String(dstIdx + 1));
+            applyScene(dstIdx);
         });
 }
 
@@ -3499,8 +3645,8 @@ void MainComponent::applyDubDelayMorph(float t)
 
 void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 {
-    // 1. Persist in current scene
-    auto& sc = sceneStore_.getScene(facade_.currentSceneIdx());
+    // 1. Persist in current scene (matérialise si Inherit)
+    auto& sc = editableSceneSlot(slot);
     sc.slots[static_cast<std::size_t>(slot)].semitones = semitones;
 
     // 2. Update panel checkmark
@@ -3508,6 +3654,7 @@ void MainComponent::onPitchOffsetChanged(int slot, float semitones)
 
     // 3. Instant repitch
     facade_.setSlotTransposeSemitones(slot, semitones);
+    syncMirrorFrom(facade_.currentSceneIdx());
 }
 
 engine::mix::MixContentType MainComponent::serumContentTypeForMix() const noexcept

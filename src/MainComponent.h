@@ -98,6 +98,9 @@ private:
     void             syncV2SceneLive(int idx) noexcept;  // courante : active conservé (état audio live)
     void             syncV2Scenes() noexcept;
     void             syncV2SceneImpl(int idx, bool keepActive) noexcept; // implémentation commune
+    engine::SceneData& editableSceneSlot(int slot) noexcept;
+    engine::SceneData& editableSceneLevel() noexcept;
+    void               syncMirrorFrom(int fromScene) noexcept;
 
     //==========================================================================
     // DSP + MIDI
@@ -270,6 +273,7 @@ private:
     int                                                 learningTarget_   { -1 };
     bool                                                midiLearnVisible_ { false };
     std::array<float, midi::kNumTargets>                targetSmoothed_   {};
+    std::array<float, 4> dubMidiLast_ { -1.f, -1.f, -1.f, -1.f };  // cache MIDI 30 Hz : wet/fbk/tone/drive
 
     // UI panel + controls
     juce::Component                                     midiLearnPanel_;
