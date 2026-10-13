@@ -101,6 +101,9 @@ private:
     engine::SceneData& editableSceneSlot(int slot) noexcept;
     engine::SceneData& editableSceneLevel() noexcept;
     void               syncMirrorFrom(int fromScene) noexcept;
+#if JUCE_DEBUG
+    bool               mirrorMatchesStore(int scene) const noexcept;
+#endif
 
     //==========================================================================
     // DSP + MIDI

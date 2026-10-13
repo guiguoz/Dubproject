@@ -2805,9 +2805,9 @@ void MainComponent::captureCurrentScene(CaptureReason reason)
         sc.dubDelayDrive    = dd.getDrive();
     }
 
-    // Énergie calculée ici pour le save standalone — ni le paste (:489) ni le Save (:996)
-    // ne font suivre un syncV2Scene. PR3 §7 : syncV2Scene est appelé en fin de capture.
     // PR3 §7 : la capture est un geste d'écriture — push complet.
+    // Ni le paste (:489) ni le Save (:996) ne font suivre un syncV2Scene ;
+    // c'est donc ici que l'énergie et le miroir sont maintenus à jour.
     const int ci = facade_.currentSceneIdx();
     syncV2Scene(ci);
 
@@ -2938,7 +2938,7 @@ engine::SceneData& MainComponent::editableSceneSlot(int slot) noexcept
             sceneStore_.materializeSlot(i, slot);
             juce::Logger::writeToLog("[INHERIT] materialize scene=" + juce::String(i)
                 + " slot=" + juce::String(slot)
-                + (sc.slots[si].filePath.empty() ? " empty" : ""));
+                + " empty=" + juce::String(sc.slots[si].filePath.empty() ? 1 : 0));
         }
     }
     sc.used = true;  // used=true même si vide : la barrière doit être sérialisée
@@ -2957,6 +2957,7 @@ engine::SceneData& MainComponent::editableSceneLevel() noexcept
         sc.dubDelayWet      = lvl.wet;
         sc.dubDelayTone     = lvl.tone;
         sc.dubDelayDrive    = lvl.drive;
+        juce::Logger::writeToLog("[INHERIT] own scene=" + juce::String(i) + " dub");
     }
     sc.used = true;
     return sc;
@@ -2966,9 +2967,45 @@ void MainComponent::syncMirrorFrom(int fromScene) noexcept
 {
     // COMPLET pour tous les sites d'écriture (§2 bis) : le geste a déjà mis à jour
     // le store — syncV2Scene recalcule active depuis les steps, y compris scène courante.
+    const int last = engine::kMaxScenes - 1;
+    juce::Logger::writeToLog("[INHERIT] push from=" + juce::String(juce::jmax(0, fromScene))
+        + " to=" + juce::String(last));
     for (int i = juce::jmax(0, fromScene); i < engine::kMaxScenes; ++i)
         syncV2Scene(i);
+#if JUCE_DEBUG
+    jassert(mirrorMatchesStore(facade_.currentSceneIdx()));
+#endif
 }
+
+#if JUCE_DEBUG
+bool MainComponent::mirrorMatchesStore(int scene) const noexcept
+{
+    if (scene < 0 || scene >= engine::kMaxScenes) return true;
+    const auto res = sceneStore_.resolveScene(scene);
+    const auto lvl = sceneStore_.resolveSceneLevel(scene);
+    const auto& es  = facade_.scene(scene);
+
+    for (int i = 0; i < engine::kMaxSlots; ++i)
+    {
+        const auto si = static_cast<std::size_t>(i);
+        const auto& r = res.slots[si];
+        const auto& c = es.slots[i];
+        if (c.filePath    != r.filePath)    return false;
+        if (c.gain        != r.gain)        return false;
+        if (c.userGain    != r.userGain)    return false;
+        if (c.trimStart   != r.trimStart)   return false;
+        if (c.trimEnd     != r.trimEnd)     return false;
+        if (c.delaySend   != r.delaySend)   return false;
+        if (c.muted       != r.muted)       return false;
+        if (c.semitones   != r.semitones)   return false;
+    }
+    if (es.dubDelayFeedback != lvl.feedback) return false;
+    if (es.dubDelayWet      != lvl.wet)      return false;
+    if (es.dubDelayTone     != lvl.tone)     return false;
+    if (es.dubDelayDrive    != lvl.drive)    return false;
+    return true;
+}
+#endif
 
 void MainComponent::syncV2Scene(int idx)     noexcept { syncV2SceneImpl(idx, false); }
 void MainComponent::syncV2SceneLive(int idx) noexcept { syncV2SceneImpl(idx, true);  }
