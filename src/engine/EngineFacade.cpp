@@ -1065,6 +1065,11 @@ int EngineFacade::getTrackStepCount(int track) const noexcept
     return writePatterns_[track].numSteps;
 }
 
+int EngineFacade::getPlayingStepCount(int track) const noexcept
+{
+    return static_cast<int>(graph_.sequencer().numStepsForSlot(track));
+}
+
 void EngineFacade::setTrackBarCount(int track, int bars) noexcept
 {
     if (track < 0 || track >= kMaxSlots) return;

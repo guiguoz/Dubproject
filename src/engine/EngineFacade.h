@@ -242,6 +242,7 @@ public:
     void setStep(int track, int step, bool active) noexcept;
     bool getStep(int track, int step) const noexcept;
     int  getTrackStepCount(int track) const noexcept;
+    int  getPlayingStepCount(int track) const noexcept; // diag : readBuffer (ce que l'audio joue)
     void setTrackBarCount(int track, int bars) noexcept;
     int  getTrackBarCount(int track) const noexcept;
     void flipPatternBuffer() noexcept; // flip atomique après modification
