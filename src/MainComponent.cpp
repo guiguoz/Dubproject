@@ -3350,7 +3350,7 @@ void MainComponent::applyScene(int idx, int fromIdx)
 void MainComponent::refreshSceneEditorFromDefinition(int sceneIndex) noexcept
 {
     if (sceneIndex < 0 || sceneIndex >= kMaxScenes) return;
-    const auto& sc = sceneStore_.getScene(sceneIndex);
+    const auto sc = sceneStore_.resolveScene(sceneIndex);
 
     stepSeqPanel_->resetViewToStart();
 
