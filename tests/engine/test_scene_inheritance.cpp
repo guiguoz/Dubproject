@@ -2,7 +2,7 @@
 #include <catch2/catch_approx.hpp>
 #include "engine/SceneStore.h"
 #include "engine/SceneEnergy.h"
-#include "project/ProjectData.h"
+#include "project/SceneConversions.h"
 
 using namespace engine;
 
@@ -374,79 +374,8 @@ TEST_CASE("T-W3: computeSlotActive is consistent with resolveScene phase-2", "[i
     REQUIRE(r1.slots[0].active == false);
 }
 
-// ─── Helpers save/load (mirrors MainComponent loops) ─────────────────────────
-// Keep these helpers in sync with saveProjectToFile and loadProjectFromFile.
-
-static project::SceneSaveData to_save_data(const engine::SceneData& src)
-{
-    project::SceneSaveData dst;
-    dst.used             = src.used;
-    dst.bpm              = static_cast<float>(src.bpm);
-    dst.trackBarCounts   = src.trackBarCounts;
-    dst.serumGain        = src.serumGain;
-    dst.serumState       = src.serumState;
-    dst.serumPresetName  = src.serumPresetName;
-    dst.dubDelayFeedback = src.dubDelayFeedback;
-    dst.dubDelayWet      = src.dubDelayWet;
-    dst.dubDelayTone     = src.dubDelayTone;
-    dst.dubDelayDrive    = src.dubDelayDrive;
-    for (int t = 0; t < 9; ++t)
-    {
-        const auto st = static_cast<std::size_t>(t);
-        dst.filePaths[st]         = src.slots[st].filePath;
-        dst.gains[st]             = src.slots[st].gain;
-        dst.userGains[st]         = src.slots[st].userGain;
-        dst.mutes[st]             = src.slots[st].muted;
-        dst.trimStart[st]         = src.slots[st].trimStart;
-        dst.trimEnd[st]           = src.slots[st].trimEnd;
-        dst.delaySends[st]        = src.slots[st].delaySend;
-        dst.pitchOffsets[st]      = src.slots[st].semitones;
-        dst.playModeOverrides[st] = src.playModeOverrides[st];
-        const int n = src.trackBarCounts[st] * 16;
-        for (int s = 0; s < n; ++s)
-            dst.steps[st][static_cast<std::size_t>(s)] = src.steps[st][static_cast<std::size_t>(s)];
-        dst.slotOwnership[st] = src.slotOwnership[st];
-    }
-    dst.sceneOwned = src.sceneOwned;
-    return dst;
-}
-
-static engine::SceneData from_save_data(const project::SceneSaveData& src)
-{
-    engine::SceneData dst;
-    dst.used             = src.used;
-    dst.bpm              = static_cast<int>(src.bpm);
-    dst.trackBarCounts   = src.trackBarCounts;
-    dst.serumGain        = src.serumGain;
-    dst.serumState       = src.serumState;
-    dst.serumPresetName  = src.serumPresetName;
-    dst.dubDelayFeedback = src.dubDelayFeedback;
-    dst.dubDelayWet      = src.dubDelayWet;
-    dst.dubDelayTone     = src.dubDelayTone;
-    dst.dubDelayDrive    = src.dubDelayDrive;
-    for (int t = 0; t < 9; ++t)
-    {
-        const auto st = static_cast<std::size_t>(t);
-        dst.slots[st].filePath  = src.filePaths[st];
-        dst.slots[st].gain      = src.gains[st];
-        dst.slots[st].userGain  = src.userGains[st];
-        dst.slots[st].muted     = src.mutes[st];
-        dst.slots[st].trimStart = src.trimStart[st];
-        dst.slots[st].trimEnd   = src.trimEnd[st];
-        dst.slots[st].delaySend = src.delaySends[st];
-        dst.slots[st].semitones = src.pitchOffsets[st];
-        dst.playModeOverrides[st] = src.playModeOverrides[st];
-        const int n = src.trackBarCounts[st] * 16;
-        for (int s = 0; s < n; ++s)
-            dst.steps[st][static_cast<std::size_t>(s)] = src.steps[st][static_cast<std::size_t>(s)];
-        dst.slotOwnership[st] = src.slotOwnership[st];
-    }
-    dst.sceneOwned = src.sceneOwned;
-    return dst;
-}
-
-// ─── T-SAV1 : to_save_data préserve slotOwnership + sceneOwned ──────────────
-TEST_CASE("T-SAV1: to_save_data preserves slotOwnership and sceneOwned", "[save][inherit]") {
+// ─── T-SAV1 : toSaveData préserve slotOwnership + sceneOwned ────────────────
+TEST_CASE("T-SAV1: toSaveData preserves slotOwnership and sceneOwned", "[save][inherit]") {
     engine::SceneData a;
     a.slotOwnership[1] = true;
     a.slots[1].filePath = "kick.wav";
@@ -456,7 +385,7 @@ TEST_CASE("T-SAV1: to_save_data preserves slotOwnership and sceneOwned", "[save]
     a.sceneOwned = true;
     a.dubDelayWet = 0.42f;
 
-    const project::SceneSaveData saved = to_save_data(a);
+    const project::SceneSaveData saved = project::toSaveData(a);
 
     REQUIRE(saved.slotOwnership[1] == true);
     REQUIRE(saved.sceneOwned == true);
@@ -481,10 +410,10 @@ TEST_CASE("T-SAV2: save/load roundtrip preserves slotOwnership and inheritance",
 
     REQUIRE(original.resolveScene(1).slots[1].filePath == "snare.wav");
 
-    // Aller-retour
+    // Aller-retour via les fonctions canoniques
     engine::SceneStore reloaded;
     for (int i = 0; i < engine::kMaxScenes; ++i)
-        reloaded.getScene(i) = from_save_data(to_save_data(original.getScene(i)));
+        reloaded.getScene(i) = project::fromSaveData(project::toSaveData(original.getScene(i)));
 
     REQUIRE(reloaded.getScene(0).slotOwnership[1] == true);
     REQUIRE(reloaded.getScene(0).sceneOwned == true);

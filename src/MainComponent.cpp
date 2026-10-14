@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "engine/SceneEnergy.h"
+#include "project/SceneConversions.h"
 
 #include <cmath>
 #include <memory>
@@ -1071,42 +1072,7 @@ void MainComponent::saveProjectToFile(const juce::File& f)
     captureCurrentScene(CaptureReason::Save);
     data.currentScene = facade_.currentSceneIdx();
     for (int si = 0; si < kMaxScenes; ++si)
-    {
-        const auto& src = sceneStore_.getScene(si);
-        auto& dst       = data.scenes[static_cast<std::size_t>(si)];
-        dst.used           = src.used;
-        dst.bpm            = src.bpm;
-        dst.trackBarCounts = src.trackBarCounts;
-        dst.serumGain        = src.serumGain;
-        dst.serumState       = src.serumState;
-        dst.serumPresetName  = src.serumPresetName;
-        dst.dubDelayFeedback = src.dubDelayFeedback;
-        dst.dubDelayWet      = src.dubDelayWet;
-        dst.dubDelayTone     = src.dubDelayTone;
-        dst.dubDelayDrive    = src.dubDelayDrive;
-        for (int t = 0; t < 9; ++t)
-        {
-            const auto st = static_cast<std::size_t>(t);
-            dst.filePaths[st]           = src.slots[st].filePath;
-            dst.gains[st]               = src.slots[st].gain;
-            dst.userGains[st]           = src.slots[st].userGain;
-            dst.mutes[st]               = src.slots[st].muted;
-            dst.trimStart[st]           = src.slots[st].trimStart;
-            dst.trimEnd[st]             = src.slots[st].trimEnd;
-            dst.delaySends[st]          = src.slots[st].delaySend;
-            dst.pitchOffsets[st]        = src.slots[st].semitones;
-            dst.playModeOverrides[st]   = src.playModeOverrides[st];
-            dst.slotRoles[st]           = (src.slots[st].role == engine::SlotRole::Unknown)
-                                          ? -1 : static_cast<int>(src.slots[st].role);
-            dst.roleManual[st]          = src.slots[st].isRoleManual;
-            dst.slotOwnership[st]       = src.slotOwnership[st];
-            const int numSteps = src.trackBarCounts[st] * 16;
-            for (int s = 0; s < numSteps; ++s)
-                dst.steps[st][static_cast<std::size_t>(s)] =
-                    src.steps[st][static_cast<std::size_t>(s)];
-        }
-        dst.sceneOwned = src.sceneOwned;
-    }
+        data.scenes[static_cast<std::size_t>(si)] = project::toSaveData(sceneStore_.getScene(si));
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
     data.dubDelayEnabled  = dubDelayEnableBtn_.getToggleState();
@@ -1362,50 +1328,7 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
     {
         facade_.setCurrentScene(std::clamp(data.currentScene, 0, kMaxScenes - 1));
         for (int si = 0; si < kMaxScenes; ++si)
-        {
-            const auto& src = data.scenes[static_cast<std::size_t>(si)];
-            auto& dst       = sceneStore_.getScene(si);
-            dst.used           = src.used;
-            dst.bpm            = src.bpm;
-            dst.trackBarCounts = src.trackBarCounts;
-            dst.serumGain        = src.serumGain;
-            dst.serumState       = src.serumState;
-            dst.serumPresetName  = src.serumPresetName;
-            dst.dubDelayFeedback = src.dubDelayFeedback;
-            dst.dubDelayWet      = src.dubDelayWet;
-            dst.dubDelayTone     = src.dubDelayTone;
-            dst.dubDelayDrive    = src.dubDelayDrive;
-            for (int t = 0; t < 9; ++t)
-            {
-                const auto st = static_cast<std::size_t>(t);
-                dst.slots[st].filePath   = src.filePaths[st];
-                dst.slots[st].gain       = src.gains[st];
-                dst.slots[st].userGain   = src.userGains[st];
-                dst.slots[st].muted      = src.mutes[st];
-                dst.slots[st].trimStart  = src.trimStart[st];
-                dst.slots[st].trimEnd    = src.trimEnd[st];
-                dst.slots[st].delaySend  = src.delaySends[st];
-                dst.slots[st].semitones  = src.pitchOffsets[st];
-                dst.playModeOverrides[st] = src.playModeOverrides[st];
-                // v24 — restaurer rôle + flag manuel (pas de re-classification au chargement projet)
-                if (data.version >= 24) {
-                    const int rawRole = src.slotRoles[st];
-                    dst.slots[st].role        = (rawRole < 0 || rawRole > 254)
-                                               ? engine::SlotRole::Unknown
-                                               : static_cast<engine::SlotRole>(rawRole);
-                    dst.slots[st].isRoleManual = src.roleManual[st];
-                } else {
-                    dst.slots[st].role        = engine::SlotRole::Unknown; // → re-classifier
-                    dst.slots[st].isRoleManual = false;
-                }
-                dst.slotOwnership[st] = src.slotOwnership[st];
-                const int numSteps = src.trackBarCounts[st] * 16;
-                for (int s = 0; s < numSteps; ++s)
-                    dst.steps[st][static_cast<std::size_t>(s)] =
-                        src.steps[st][static_cast<std::size_t>(s)];
-            }
-            dst.sceneOwned = src.sceneOwned;
-        }
+            sceneStore_.getScene(si) = project::fromSaveData(data.scenes[static_cast<std::size_t>(si)]);
         // Restore bar counts, step patterns and sample paths for the current scene
         applyScene(facade_.currentSceneIdx());
         updateSceneLabel();
