@@ -59,6 +59,8 @@ MainComponent::MainComponent()
     styleSideBtn(sceneDownBtn_,  juce::CharPointer_UTF8("\xe2\x96\xbc"));  // ▼
     styleSideBtn(sceneResetBtn_,      "RST SCN");
     styleSideBtn(sceneTrackResetBtn_, "RST TRK");
+    sceneResetBtn_     .setTooltip("Vide les patterns de cette scene - les scenes suivantes heritent du silence (samples conserves)");
+    sceneTrackResetBtn_.setTooltip("Vide patterns et samples - se propage aux scenes suivantes");
     styleSideBtn(sceneCopyBtn_,       "COPY");
 
     sceneUpBtn_  .onClick = [this] { navigateScene(-1); };
@@ -325,6 +327,16 @@ MainComponent::MainComponent()
             // jamais le miroir, et activateSceneStopped le lit (clearSlot si filePath vide).
             syncV2SceneLive(facade_.currentSceneIdx());
             facade_.activateSceneStopped(facade_.currentSceneIdx());
+            {
+                const int pi = facade_.currentSceneIdx();
+                const auto psc = sceneStore_.resolveScene(pi);
+                for (int t = 0; t < 9; ++t)
+                    juce::Logger::writeToLog("[LEN] PLAY scene=" + juce::String(pi) + " track=" + juce::String(t)
+                        + " store=" + juce::String(psc.trackBarCounts[static_cast<std::size_t>(t)])
+                        + " mirror=" + juce::String(facade_.scene(pi).trackBarCounts[static_cast<std::size_t>(t)])
+                        + " write=" + juce::String(facade_.getTrackStepCount(t) / 16)
+                        + " playing=" + juce::String(facade_.getPlayingStepCount(t) / 16));
+            }
             facade_.play();
         } else {
             facade_.stop();
@@ -1087,11 +1099,13 @@ void MainComponent::saveProjectToFile(const juce::File& f)
             dst.slotRoles[st]           = (src.slots[st].role == engine::SlotRole::Unknown)
                                           ? -1 : static_cast<int>(src.slots[st].role);
             dst.roleManual[st]          = src.slots[st].isRoleManual;
+            dst.slotOwnership[st]       = src.slotOwnership[st];
             const int numSteps = src.trackBarCounts[st] * 16;
             for (int s = 0; s < numSteps; ++s)
                 dst.steps[st][static_cast<std::size_t>(s)] =
                     src.steps[st][static_cast<std::size_t>(s)];
         }
+        dst.sceneOwned = src.sceneOwned;
     }
 
     // ── v11 — dub delay global bus ────────────────────────────────────────────
@@ -1384,11 +1398,13 @@ void MainComponent::applyProjectData(const project::ProjectData& data)
                     dst.slots[st].role        = engine::SlotRole::Unknown; // → re-classifier
                     dst.slots[st].isRoleManual = false;
                 }
+                dst.slotOwnership[st] = src.slotOwnership[st];
                 const int numSteps = src.trackBarCounts[st] * 16;
                 for (int s = 0; s < numSteps; ++s)
                     dst.steps[st][static_cast<std::size_t>(s)] =
                         src.steps[st][static_cast<std::size_t>(s)];
             }
+            dst.sceneOwned = src.sceneOwned;
         }
         // Restore bar counts, step patterns and sample paths for the current scene
         applyScene(facade_.currentSceneIdx());
@@ -3069,6 +3085,14 @@ void MainComponent::applyScene(int idx, int fromIdx)
             + " engineSceneCRC=0x" + juce::String::toHexString(engineSceneCRC)
             + " writePatternCRC=0x" + juce::String::toHexString(writePatternCRC));
     }
+    // ─────────────────────────────────────────────────────────────────────────
+    // ── Diag barCount par track ───────────────────────────────────────────────
+    for (int t = 0; t < 9; ++t)
+        juce::Logger::writeToLog("[LEN] scene=" + juce::String(idx) + " track=" + juce::String(t)
+            + " store=" + juce::String(sc.trackBarCounts[static_cast<std::size_t>(t)])
+            + " mirror=" + juce::String(facade_.scene(idx).trackBarCounts[static_cast<std::size_t>(t)])
+            + " write=" + juce::String(facade_.getTrackStepCount(t) / 16)
+            + " playing=" + juce::String(facade_.getPlayingStepCount(t) / 16));
     // ─────────────────────────────────────────────────────────────────────────
 
     // DIRECT : audio déjà commité à T via plan (gains/modes/PCM/pattern). Le timer

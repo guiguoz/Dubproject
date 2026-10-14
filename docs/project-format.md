@@ -4,7 +4,7 @@ Les projets sont des fichiers **JSON** UTF-8 avec l'extension `.saxfx`. La **sou
 
 ## Version actuelle (écriture)
 
-À l'enregistrement, le champ racine **`version`** est toujours **`25`** (nombre entier JSON).
+À l'enregistrement, le champ racine **`version`** est toujours **`26`** (nombre entier JSON).
 
 Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire par `ProjectLoader::load` ; à la prochaine sauvegarde ils passent en v16.
 
@@ -35,14 +35,15 @@ Les fichiers plus anciens (1 … 15) sont **chargés** et migrés en mémoire pa
 | 23 | `playModeOverrides[9]` par scène — override de PlayMode par slot (-1=auto, 0=OneShot, 1=Free, 2=LoopSync) |
 | 24 | `slotRoles[9]` + `roleManual[9]` par scène — rôles DSP persistés + flag manuel |
 | 25 | `dubMode` à la racine — mode DUB AUTO (0=Auto, 1=Force, 2=Disable) |
+| 26 | Héritage des slots par scène : `slotOwnership[9]` (bool, true=Own) + `sceneOwned` (bool) ; migration v<26 = tout Own |
 
-## Structure JSON v25 (vue d'ensemble)
+## Structure JSON v26 (vue d'ensemble)
 
 Racine :
 
 | Clé | Type | Description |
 |-----|------|-------------|
-| `version` | `number` | Toujours `25` à l'écriture |
+| `version` | `number` | Toujours `26` à l'écriture |
 | `projectName` | `string` | Nom du projet |
 | `bpm` | `number` | Tempo **maître** global (float) |
 | `masterKeyRoot` | `number` | 0=C … 11=B |
@@ -108,12 +109,14 @@ Chaque élément représente une scène ; seules les scènes marquées `used: tr
 | `playModeOverrides` | `array` de 9 `number` — override PlayMode par slot (-1=auto) | v23 |
 | `slotRoles` | `array` de 9 `number` — rôles DSP par slot (-1=Unknown) | v24 |
 | `roleManual` | `array` de 9 `bool` — true si rôle posé manuellement | v24 |
+| `slotOwnership` | `array` de 9 `bool` — true=Own (scène fait autorité), false=Inherit (hérite de l'ancêtre Own le plus proche) | v26 |
+| `sceneOwned` | `bool` — true=scène propriétaire des paramètres dub delay | v26 |
 
 ## Exemple minimal (illustratif)
 
 ```json
 {
-  "version": 25,
+  "version": 26,
   "projectName": "Exemple",
   "bpm": 120.0,
   "masterKeyRoot": 0,
