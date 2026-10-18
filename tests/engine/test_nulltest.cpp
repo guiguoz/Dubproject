@@ -229,10 +229,13 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // v25 : AutoMix règle 1 câblée — gain staging par rôle (mesure post-player,
     //       rampes 30 ms, hystérésis ±1 dB) + règle 6 effective (trim global
     //       limiteur). Slots affectés : tous les slots actifs non-KICK.
-    //   hashAudio = 0x3f9b193bbbb750ca
-    //   hashRms   = 0x784f4d94d5cf78d4
-    CHECK(hashAudio == 0x3f9b193bbbb750caull);
-    CHECK(hashRms   == 0x784f4d94d5cf78d4ull);
+    // v26 : LoopSync loop crossfade (kCrossfadeLen=256) — blend fin/début du cycle
+    //       au wrap de boucle dans renderLoopSync (bypass et stretch). Supprime
+    //       le crack audio à la fin de chaque cycle de scène (discontinuité phase→0).
+    //   hashAudio = 0xd4bdc9b3231dfe2f
+    //   hashRms   = 0xb6db4e976bb03b9a
+    CHECK(hashAudio == 0xd4bdc9b3231dfe2full);
+    CHECK(hashRms   == 0xb6db4e976bb03b9aull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

@@ -325,6 +325,22 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
                 right = pcm.data[idx + 1u];
             }
 
+            // Crossfade au wrap : mélange la fin du cycle précédent avec le début du nouveau
+            if (clampedPos < static_cast<int64_t>(kCrossfadeLen)
+                    && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
+                const float t = static_cast<float>(clampedPos) / static_cast<float>(kCrossfadeLen);
+                const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + clampedPos;
+                float lEnd, rEnd;
+                if (pcm.numChannels == 1) {
+                    lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
+                } else {
+                    lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
+                    rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
+                }
+                left  = left  * t + lEnd * (1.f - t);
+                right = right * t + rEnd * (1.f - t);
+            }
+
             const float sL = left  * gain;
             const float sR = right * gain;
             if (haasOnLeft) {
@@ -362,14 +378,30 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
             const int64_t sp = (srcPos0 + static_cast<int64_t>(f))
                                % static_cast<int64_t>(pcm.numFrames);
 
+            float sl, sr;
             if (pcm.numChannels == 1) {
-                const float s = pcm.data[static_cast<size_t>(sp)];
-                srcL_[static_cast<size_t>(f)] = s;
-                srcR_[static_cast<size_t>(f)] = s;
+                sl = sr = pcm.data[static_cast<size_t>(sp)];
             } else {
-                srcL_[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u];
-                srcR_[static_cast<size_t>(f)] = pcm.data[static_cast<size_t>(sp) * 2u + 1u];
+                sl = pcm.data[static_cast<size_t>(sp) * 2u];
+                sr = pcm.data[static_cast<size_t>(sp) * 2u + 1u];
             }
+            // Crossfade au wrap : mélange la fin du cycle précédent avec le début du nouveau
+            if (sp < static_cast<int64_t>(kCrossfadeLen)
+                    && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
+                const float t = static_cast<float>(sp) / static_cast<float>(kCrossfadeLen);
+                const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + sp;
+                float lEnd, rEnd;
+                if (pcm.numChannels == 1) {
+                    lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
+                } else {
+                    lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
+                    rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
+                }
+                sl = sl * t + lEnd * (1.f - t);
+                sr = sr * t + rEnd * (1.f - t);
+            }
+            srcL_[static_cast<size_t>(f)] = sl;
+            srcR_[static_cast<size_t>(f)] = sr;
         }
 
         float* inPtrs[2]  = { srcL_.data(), srcR_.data() };
