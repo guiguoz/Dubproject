@@ -267,6 +267,7 @@ public:
     bool hasPendingTransition() const noexcept;      // Transition quantisée en cours?
     void setPendingTransitionLen(int steps) noexcept; // Durée transition (steps)
     bool consumeSceneEnd() noexcept;                 // Consommer signal end-of-bar
+    void clearPendingTransition() noexcept;          // Annule A→B armé (play/stop/nav arrêtée)
     
     // Morphing du delay : transitions paramétriques (feedback/wet/tone/drive).
     void startDubDelayMorph(int from, int to, float durationMs = 4000.f) noexcept;

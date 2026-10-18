@@ -399,15 +399,20 @@ void EngineFacade::play() noexcept {
     juce::Logger::writeToLog("[DIAG] play() scene=" + juce::String(currentScene_.load())
         + " hasPend=" + juce::String((int)hasPendingTransition())
         + " teState=" + juce::String(transitionStateRaw()));
+    clearPendingTransition();
     diagStart();
-    graph_.sequencer().clearStaged();          // stage obsolète au redémarrage
+    graph_.sequencer().clearStaged();          // redondant (déjà dans helper) mais inoffensif
     graph_.sequencer().resetPatternPhase();    // transport repart de 0 → base à 0
     transport_.play();
 }
 
 void EngineFacade::stop() noexcept {
+    juce::Logger::writeToLog("[DIAG] stop() scene=" + juce::String(currentScene_.load())
+        + " hasPend=" + juce::String((int)hasPendingTransition())
+        + " teState=" + juce::String(transitionStateRaw()));
+    clearPendingTransition();
     transport_.stop();
-    graph_.sequencer().clearStaged();   // transport figé : la frontière ne viendra pas
+    graph_.sequencer().clearStaged();   // redondant (déjà dans helper) mais inoffensif
     constexpr uint16_t kAllSlots = (1u << kMaxSlots) - 1u;
     pendingStops_.fetch_or(kAllSlots, std::memory_order_release);
     delayResetPending_.store(true, std::memory_order_release);
@@ -1407,16 +1412,9 @@ void EngineFacade::activateSceneStopped(int sceneIdx) noexcept
     if (sceneIdx < 0 || sceneIdx >= kMaxScenes) return;
     if (transport_.snapshot().playing) return;  // ne rien faire si déjà en lecture
 
-    // 1. Annuler toute transition STOP pendante (BUILD/BREAKDOWN/DUB).
-    //    Le plan DIRECT (transitionPlanValid_) n'est pas touché ici.
-    transition_.reset();
-    graph_.sequencer().clearStaged();
+    // 1. Annuler toute transition pendante (DIRECT et STOP) + nettoyer staged.
+    clearPendingTransition();
     graph_.sequencer().resetPatternPhase();    // navigation arrêtée → base à 0
-    pendingScene_.store(-1, std::memory_order_relaxed);
-    pendingTransLen_.store(0, std::memory_order_relaxed);
-    // Annuler les PCM stagés pour les ENTER d'une éventuelle transition annulée.
-    for (int s = 0; s < kMaxSlots; ++s)
-        graph_.slotPlayer().clearStagedPcm(s);
 
     // 2. Syncer les patterns depuis la SceneDefinition (sans flip audio — transport arrêté).
     currentScene_.store(sceneIdx, std::memory_order_relaxed);
@@ -1562,6 +1560,23 @@ void EngineFacade::setPendingTransitionLen(int steps) noexcept
 bool EngineFacade::consumeSceneEnd() noexcept
 {
     return sceneEndFlag_.exchange(false, std::memory_order_acq_rel);
+}
+
+// Idempotent — message thread uniquement (play/stop/nav arrêtée).
+// Ordre : transition_.reset() en premier (barrière), puis atomiques visibles par timerCallback.
+void EngineFacade::clearPendingTransition() noexcept
+{
+    transition_.reset();
+    graph_.sequencer().clearStaged();
+    pendingScene_.store(-1, std::memory_order_relaxed);
+    pendingTransLen_.store(0, std::memory_order_relaxed);
+    sceneEndFlag_.store(false, std::memory_order_relaxed);
+    transitionPlanValid_.store(false, std::memory_order_release);
+    transitionPlan_.valid = false;
+    for (int s = 0; s < kMaxSlots; ++s) {
+        graph_.slotPlayer().clearStagedPcm(s);
+        graph_.sequencer().clearSlotActiveAt(s);
+    }
 }
 
 // ─── Morphing PingPongDelay (Tier 2 — Phase 4a) ───────────────────────────────

@@ -3458,13 +3458,12 @@ void MainComponent::navigateScene(int delta)
 
     if (!facade_.isPlaying())
     {
-        // Séquenceur arrêté : changement immédiat, sans risque de coupure
+        // Séquenceur arrêté : annuler A→B armé éventuel, puis changement immédiat.
+        facade_.clearPendingTransition();
         const int oldIdx = current;
         juce::Logger::writeToLog("[DIAG] nav stopped " + juce::String(oldIdx) + "->" + juce::String(target)
             + " hasPend=" + juce::String((int)facade_.hasPendingTransition())
             + " teState=" + juce::String(facade_.transitionStateRaw()));
-        // captureCurrentScene() retiré — steps/trackBarCounts déjà dans SceneDefinition (onStepChanged).
-        // Écrire filePaths/gains depuis le panel ici risque d'écraser MC_store avec des valeurs stales.
         facade_.setCurrentScene(target);
         applyScene(target, oldIdx);
         updateSceneLabel();
