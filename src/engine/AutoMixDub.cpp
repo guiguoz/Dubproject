@@ -120,7 +120,7 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             const float corrDb = std::clamp(error, -9.f, 9.f);
 
             // Hystérésis ±1 dB : ne changer que si l'écart dépasse 1 dB
-            if (std::abs(corrDb - lastDecisionDb_[s]) > 1.f) {
+            if (std::abs(corrDb - lastDecisionDb_[s]) > 3.f) {
                 targets_.gainDb[s]  = corrDb;
                 lastDecisionDb_[s]  = corrDb;
             }

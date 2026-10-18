@@ -232,10 +232,12 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     // v26 : LoopSync loop crossfade (kCrossfadeLen=256) — blend fin/début du cycle
     //       au wrap de boucle dans renderLoopSync (bypass et stretch). Supprime
     //       le crack audio à la fin de chaque cycle de scène (discontinuité phase→0).
-    //   hashAudio = 0xd4bdc9b3231dfe2f
-    //   hashRms   = 0xb6db4e976bb03b9a
-    CHECK(hashAudio == 0xd4bdc9b3231dfe2full);
-    CHECK(hashRms   == 0xb6db4e976bb03b9aull);
+    // v27 : AutoMix hystérésis 1 dB → 3 dB — moins de mises à jour gain inutiles,
+    //       supprime le crack résiduel 1 cycle/2 (oscillation gain au cycle boundary).
+    //   hashAudio = 0xffcf048205d14194
+    //   hashRms   = 0xcfa5797b78446107
+    CHECK(hashAudio == 0xffcf048205d14194ull);
+    CHECK(hashRms   == 0xcfa5797b78446107ull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {

@@ -225,8 +225,8 @@ TEST_CASE("T-MX7: silent mix produces zero correction (gain stays 1)", "[automix
         REQUIRE(mix.advanceGainRamp(s, kBlock) == Catch::Approx(1.f).margin(0.001f));
 }
 
-// ─── T-MX8 : hystérésis ±1 dB ─────────────────────────────────────────────────
-TEST_CASE("T-MX8: hysteresis +-1 dB suppresses small corrections", "[automix]") {
+// ─── T-MX8 : hystérésis ±3 dB ─────────────────────────────────────────────────
+TEST_CASE("T-MX8: hysteresis +-3 dB suppresses small corrections", "[automix]") {
     AutoMixDub mix;
     mix.prepare(kSR);
     SlotRole roles[kMaxSlots] = {};
@@ -248,13 +248,17 @@ TEST_CASE("T-MX8: hysteresis +-1 dB suppresses small corrections", "[automix]") 
     feed(0.5f, 0.05f);
     REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.05f));
 
-    // Niveau 2 : bass 0,149 → erreur ≈ +8,5 dB, écart vs +9 = 0,5 < 1 → inchangé
+    // Niveau 2 : bass 0,149 → erreur ≈ +8,5 dB, écart vs +9 = 0,5 < 3 → inchangé
     feed(0.5f, 0.149f);
     REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.05f));
 
-    // Niveau 3 : bass 0,168 → erreur ≈ +7,5 dB, écart vs +9 = 1,5 > 1 → mise à jour
+    // Niveau 3 : bass 0,168 → erreur ≈ +7,5 dB, écart vs +9 = 1,5 < 3 → inchangé
     feed(0.5f, 0.168f);
-    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(7.5f).margin(0.2f));
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(9.f).margin(0.05f));
+
+    // Niveau 4 : bass 0,22 → erreur ≈ +5,1 dB, écart vs +9 = 3,9 > 3 → mise à jour
+    feed(0.5f, 0.22f);
+    REQUIRE(mix.targets().gainDb[1] == Catch::Approx(5.1f).margin(0.4f));
 }
 
 // ─── Test de fumée PingPongDelay porté ───────────────────────────────────────
