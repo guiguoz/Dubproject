@@ -3444,8 +3444,10 @@ bool MainComponent::cancelPendingTransition()
 void MainComponent::navigateScene(int delta)
 {
     const int current = facade_.currentSceneIdx();
-    const int target  = juce::jlimit(0, kMaxScenes - 1, current + delta);
     const int pending = facade_.pendingSceneIdx();
+    const bool hasPend = facade_.hasPendingTransition();
+    const int base    = (pending >= 0 && hasPend) ? pending : current;
+    const int target  = juce::jlimit(0, kMaxScenes - 1, base + delta);
 
     // ── ANNULATION : re-clic sur la cible pendante, ou retour sur la scène courante ──
     if (pending >= 0 && facade_.isPlaying() && (target == current || target == pending))
