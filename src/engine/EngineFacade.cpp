@@ -357,7 +357,7 @@ EngineFacade::DiagCounters EngineFacade::diagReadAndClear() noexcept {
     d.pendingStopSnapshot = pendingStops_.load(std::memory_order_relaxed);
     for (int s = 0; s < kMaxSlots; ++s) {
         d.autoMixGain    [s] = graph_.autoMix().currentGainLinear(s);
-        d.autoMixTargetDb[s] = graph_.autoMix().targets().gainDb[s];
+        d.autoMixTargetDb[s] = graph_.autoMix().targetGainDb(s);
     }
 
     // Dump trace ring (D) — derniers kTraceRingCap events writers

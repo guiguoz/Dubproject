@@ -54,7 +54,7 @@ void AutoMixDub::prepare(float sampleRate) noexcept
         features_[s].rms.store(0.f, std::memory_order_relaxed);
         features_[s].peak.store(0.f, std::memory_order_relaxed);
         features_[s].energyLow = 0.f;
-        currentGainLin_[s]    = 1.f;
+        currentGainLin_[s].store(1.f, std::memory_order_relaxed);
         currentDelaySend_[s]  = 0.f;
         lastDecisionDb_[s]    = 0.f;
         rmsAccum_[s]          = 0.f;
@@ -183,9 +183,10 @@ float AutoMixDub::advanceGainRamp(int slot, int numFrames) noexcept
     }
     // Rampe exponentielle : coef^numFrames pour avancer d'un bloc
     const float alpha = std::pow(gainTauCoef_, static_cast<float>(numFrames));
-    currentGainLin_[slot] = alpha * currentGainLin_[slot]
-                          + (1.f - alpha) * targetLin;
-    return currentGainLin_[slot];
+    const float prev  = currentGainLin_[slot].load(std::memory_order_relaxed);
+    const float next  = alpha * prev + (1.f - alpha) * targetLin;
+    currentGainLin_[slot].store(next, std::memory_order_relaxed);
+    return next;
 }
 
 // ─── scheduleSendRamp ────────────────────────────────────────────────────────

@@ -394,7 +394,7 @@ public:
         float   pcmMaxAbs    [kMaxSlots] {};  // max|x| 64 premières frames
         uint16_t pendingStopSnapshot = 0;     // pendingStops_ au moment de readAndClear
         float   autoMixGain    [kMaxSlots] {};  // currentGainLinear() — règle 1 AutoMix
-        float   autoMixTargetDb[kMaxSlots] {};  // targets().gainDb[]  — cible en dB
+        float   autoMixTargetDb[kMaxSlots] {};  // targetGainDb()  — cible en dB
     };
     void diagStart() noexcept;
     bool diagIsReady() const noexcept;

@@ -85,8 +85,9 @@ public:
     }
     const MixTargets&   targets()          const noexcept { return targets_; }
 
-    float currentGainLinear(int slot)  const noexcept { return currentGainLin_[slot]; }
+    float currentGainLinear(int slot)  const noexcept { return currentGainLin_[slot].load(std::memory_order_relaxed); }
     float currentDelaySend(int slot)   const noexcept { return currentDelaySend_[slot]; }
+    float targetGainDb(int slot)       const noexcept { return targets_.gainDb[slot]; }
 
     // Règles statiques par rôle (pures).
     static float roleTargetDb(SlotRole role) noexcept;
@@ -98,7 +99,7 @@ private:
     SlotFeatures features_[kMaxSlots];
     MixTargets   targets_;
 
-    float currentGainLin_  [kMaxSlots] = {};
+    std::atomic<float> currentGainLin_[kMaxSlots] {};
     float currentDelaySend_[kMaxSlots] = {};
 
     struct SendRampOverride {
