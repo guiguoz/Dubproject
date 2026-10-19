@@ -483,6 +483,7 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             --voice.fadeLeft;
         }
 
+        const int64_t curReadPos = voice.readPos;
         float left, right;
 
         if (needsSR) {
@@ -528,6 +529,22 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 right = pcm.data[idx + 1u];
             }
             ++voice.readPos;
+        }
+
+        // Loop crossfade au wrap : même logique que renderLoopSync bypass
+        if (loop && curReadPos < static_cast<int64_t>(kCrossfadeLen)
+                 && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
+            const float t = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
+            const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + curReadPos;
+            float lEnd, rEnd;
+            if (pcm.numChannels == 1) {
+                lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
+            } else {
+                lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
+                rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
+            }
+            left  = left  * t + lEnd * (1.f - t);
+            right = right * t + rEnd * (1.f - t);
         }
 
         const float g  = vGain * gain;
