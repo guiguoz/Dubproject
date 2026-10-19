@@ -325,20 +325,16 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
                 right = pcm.data[idx + 1u];
             }
 
-            // Crossfade au wrap : mélange la fin du cycle précédent avec le début du nouveau
-            if (clampedPos < static_cast<int64_t>(kCrossfadeLen)
-                    && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
-                const float t = static_cast<float>(clampedPos) / static_cast<float>(kCrossfadeLen);
-                const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + clampedPos;
-                float lEnd, rEnd;
-                if (pcm.numChannels == 1) {
-                    lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
-                } else {
-                    lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
-                    rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
-                }
-                left  = left  * t + lEnd * (1.f - t);
-                right = right * t + rEnd * (1.f - t);
+            // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début) → amplitude 0 au point de boucle
+            if (static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+                float xfGain = 1.f;
+                if (clampedPos < static_cast<int64_t>(kCrossfadeLen))
+                    xfGain = static_cast<float>(clampedPos) / static_cast<float>(kCrossfadeLen);
+                else if (clampedPos >= static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen)
+                    xfGain = static_cast<float>(static_cast<int64_t>(pcm.numFrames) - clampedPos)
+                           / static_cast<float>(kCrossfadeLen);
+                left  *= xfGain;
+                right *= xfGain;
             }
 
             const float sL = left  * gain;
@@ -385,20 +381,16 @@ void SlotPlayer::renderLoopSync(int slot, float* out, int numFrames,
                 sl = pcm.data[static_cast<size_t>(sp) * 2u];
                 sr = pcm.data[static_cast<size_t>(sp) * 2u + 1u];
             }
-            // Crossfade au wrap : mélange la fin du cycle précédent avec le début du nouveau
-            if (sp < static_cast<int64_t>(kCrossfadeLen)
-                    && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
-                const float t = static_cast<float>(sp) / static_cast<float>(kCrossfadeLen);
-                const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + sp;
-                float lEnd, rEnd;
-                if (pcm.numChannels == 1) {
-                    lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
-                } else {
-                    lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
-                    rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
-                }
-                sl = sl * t + lEnd * (1.f - t);
-                sr = sr * t + rEnd * (1.f - t);
+            // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début) → amplitude 0 au point de boucle
+            if (static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+                float xfGain = 1.f;
+                if (sp < static_cast<int64_t>(kCrossfadeLen))
+                    xfGain = static_cast<float>(sp) / static_cast<float>(kCrossfadeLen);
+                else if (sp >= static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen)
+                    xfGain = static_cast<float>(static_cast<int64_t>(pcm.numFrames) - sp)
+                           / static_cast<float>(kCrossfadeLen);
+                sl *= xfGain;
+                sr *= xfGain;
             }
             srcL_[static_cast<size_t>(f)] = sl;
             srcR_[static_cast<size_t>(f)] = sr;
@@ -531,20 +523,16 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             ++voice.readPos;
         }
 
-        // Loop crossfade au wrap : même logique que renderLoopSync bypass
-        if (loop && curReadPos < static_cast<int64_t>(kCrossfadeLen)
-                 && static_cast<int64_t>(pcm.numFrames) > kCrossfadeLen) {
-            const float t = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
-            const int64_t ep = static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen + curReadPos;
-            float lEnd, rEnd;
-            if (pcm.numChannels == 1) {
-                lEnd = rEnd = pcm.data[static_cast<size_t>(ep)];
-            } else {
-                lEnd = pcm.data[static_cast<size_t>(ep) * 2u];
-                rEnd = pcm.data[static_cast<size_t>(ep) * 2u + 1u];
-            }
-            left  = left  * t + lEnd * (1.f - t);
-            right = right * t + rEnd * (1.f - t);
+        // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début) → amplitude 0 au point de boucle
+        if (loop && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+            float xfGain = 1.f;
+            if (curReadPos < static_cast<int64_t>(kCrossfadeLen))
+                xfGain = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
+            else if (curReadPos >= static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen)
+                xfGain = static_cast<float>(static_cast<int64_t>(pcm.numFrames) - curReadPos)
+                       / static_cast<float>(kCrossfadeLen);
+            left  *= xfGain;
+            right *= xfGain;
         }
 
         const float g  = vGain * gain;

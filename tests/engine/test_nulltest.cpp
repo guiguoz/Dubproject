@@ -234,10 +234,13 @@ TEST_CASE("NULL1: offline render bit-exact vs reference (§11.2)", "[nulltest]")
     //       le crack audio à la fin de chaque cycle de scène (discontinuité phase→0).
     // v27 : AutoMix hystérésis 1 dB → 3 dB — moins de mises à jour gain inutiles,
     //       supprime le crack résiduel 1 cycle/2 (oscillation gain au cycle boundary).
-    //   hashAudio = 0xffcf048205d14194
-    //   hashRms   = 0xcfa5797b78446107
-    CHECK(hashAudio == 0xffcf048205d14194ull);
-    CHECK(hashRms   == 0xcfa5797b78446107ull);
+    // v28 : Fade-V au wrap — remplace blend crossfade (incorrect) par fade-V dans les
+    //       3 sites : renderLoopSync bypass, renderLoopSync stretch, renderVoice Free.
+    //       Amplitude = 0 au point de wrap, élimine les discontinuités de phase.
+    //   hashAudio = 0x82ba9e3a076ccc76
+    //   hashRms   = 0xc6888b384cec1ff
+    CHECK(hashAudio == 0x82ba9e3a076ccc76ull);
+    CHECK(hashRms   == 0x0c6888b384cec1ffull);
 }
 
 TEST_CASE("NULL2: offline render deterministic across runs", "[nulltest]") {
