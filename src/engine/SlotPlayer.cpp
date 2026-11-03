@@ -207,6 +207,16 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
+    // Guard Free : si la boucle tourne déjà, ignorer le trigger du séquenceur.
+    // Sans ce guard, steps[0] hard-resets la voix à chaque cycle → click.
+    if (mode == PlayMode::Free) {
+        for (int v = 0; v < 2; ++v) {
+            if (voices_[slot][v].active.load(std::memory_order_relaxed)
+                    && !voices_[slot][v].fadingOut)
+                return;
+        }
+    }
+
     // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic (≈1.5 ms).
     //    LoopSync exclu : position dérivée du transport, pas de double-voix possible.
     int lastActiveVoice = -1;
