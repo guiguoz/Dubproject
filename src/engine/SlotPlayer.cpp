@@ -207,30 +207,14 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
-    // Guard Free : bloquer le retrigger si la voix est en pleine amplitude.
-    // Dans les zones fade-V [0, kCrLen) et [numFrames-kCrLen, numFrames), l'amplitude
-    // est déjà ≈0 — un restart est propre. Hors de ces zones, le retrigger crée un
-    // conflit de phase entre l'ancienne et la nouvelle voix → click.
-    if (mode == PlayMode::Free) {
-        const SlotPcm& pcmG = activePcm(slot);
-        if (static_cast<int64_t>(pcmG.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
-            for (int v = 0; v < 2; ++v) {
-                const Voice& vc = voices_[slot][v];
-                if (!vc.active.load(std::memory_order_relaxed) || vc.fadingOut) continue;
-                const int64_t pos = vc.readPos;
-                const bool inFadeV =
-                    (pos < static_cast<int64_t>(kCrossfadeLen)) ||
-                    (pos >= static_cast<int64_t>(pcmG.numFrames) - kCrossfadeLen);
-                if (!inFadeV)
-                    return;
-            }
-        }
-    }
-
-    // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic (≈1.5 ms).
+    // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic.
+    //    Free : kCrossfadeLen samples (5.8 ms) → crossfade lin/lin avec le fade-in
+    //    xfGain de la nouvelle voix (aussi 256 samples) → zéro conflit de phase.
+    //    OneShot : kRetrigFadeLen (64 samples) pour préserver l'attaque percussive.
     //    LoopSync exclu : position dérivée du transport, pas de double-voix possible.
     int lastActiveVoice = -1;
     if (mode != PlayMode::LoopSync) {
+        const int fadeOutLen = (mode == PlayMode::Free) ? kCrossfadeLen : kRetrigFadeLen;
         for (int v = 0; v < 2; ++v) {
             Voice& vc = voices_[slot][v];
             if (vc.active.load(std::memory_order_relaxed)) {
@@ -238,7 +222,7 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
                 if (!vc.fadingOut) {
                     vc.fadingOut = true;
                     vc.fadeGain  = 1.0f;
-                    vc.fadeLeft  = kRetrigFadeLen;
+                    vc.fadeLeft  = fadeOutLen;
                 }
             }
         }
