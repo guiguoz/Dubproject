@@ -207,13 +207,23 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
-    // Guard Free : si la boucle tourne déjà, ignorer le trigger du séquenceur.
-    // Sans ce guard, steps[0] hard-resets la voix à chaque cycle → click.
+    // Guard Free : bloquer le retrigger si la voix est en pleine amplitude.
+    // Dans les zones fade-V [0, kCrLen) et [numFrames-kCrLen, numFrames), l'amplitude
+    // est déjà ≈0 — un restart est propre. Hors de ces zones, le retrigger crée un
+    // conflit de phase entre l'ancienne et la nouvelle voix → click.
     if (mode == PlayMode::Free) {
-        for (int v = 0; v < 2; ++v) {
-            if (voices_[slot][v].active.load(std::memory_order_relaxed)
-                    && !voices_[slot][v].fadingOut)
-                return;
+        const SlotPcm& pcmG = activePcm(slot);
+        if (static_cast<int64_t>(pcmG.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+            for (int v = 0; v < 2; ++v) {
+                const Voice& vc = voices_[slot][v];
+                if (!vc.active.load(std::memory_order_relaxed) || vc.fadingOut) continue;
+                const int64_t pos = vc.readPos;
+                const bool inFadeV =
+                    (pos < static_cast<int64_t>(kCrossfadeLen)) ||
+                    (pos >= static_cast<int64_t>(pcmG.numFrames) - kCrossfadeLen);
+                if (!inFadeV)
+                    return;
+            }
         }
     }
 
