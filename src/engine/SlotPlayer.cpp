@@ -231,7 +231,7 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
                               / static_cast<float>(kCrossfadeLen);
                     }
                     vc.fadingOut = true;
-                    vc.fadeGain  = (mode == PlayMode::Free) ? g : 1.0f;
+                    vc.fadeGain  = 1.0f;
                     vc.fadeLeft  = fadeOutLen;
                     gOld = g;
                 }
@@ -464,8 +464,8 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
 
     for (int f = 0; f < numFrames; ++f) {
         if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
-            if (loop) { voice.readPos = 0; voice.readFrac = 0.f; voice.xfGainStart = 0.f; }
-            else       { deactivateVoice(slot, v); return; }
+            if (loop && !voice.fadingOut) { voice.readPos = 0; voice.readFrac = 0.f; voice.xfGainStart = 0.f; }
+            else                          { deactivateVoice(slot, v); return; }
         }
 
         // Fade-out (stop transport) ou fade-in (attaque initiale)
@@ -519,8 +519,8 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
                 voice.readFrac -= 1.f;
                 ++voice.readPos;
                 if (voice.readPos >= static_cast<int64_t>(pcm.numFrames)) {
-                    if (loop) { voice.readPos = 0; voice.readFrac = 0.f; voice.xfGainStart = 0.f; }
-                    else       { deactivateVoice(slot, v); return; }
+                    if (loop && !voice.fadingOut) { voice.readPos = 0; voice.readFrac = 0.f; voice.xfGainStart = 0.f; }
+                    else                          { deactivateVoice(slot, v); return; }
                     break;
                 }
             }
@@ -538,10 +538,10 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
         }
 
         // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début).
-        // Sauté pour fadingOut : fadeGain (bakée au trigger) gère l'extinction sans saut au wrap.
+        // Appliqué à TOUTES les voix (y compris fadingOut) : ramène l'amplitude à 0 avant le wrap
+        // → déactivation propre en fin de sample sans discontinuité de contenu.
         // Fade-in : xfGain = xfGainStart + (1-xfGainStart)*t → V_old+V_new = 1.0 au trigger.
-        if (loop && !voice.fadingOut
-                && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+        if (loop && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
             float xfGain = 1.f;
             if (curReadPos < static_cast<int64_t>(kCrossfadeLen)) {
                 const float t = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
