@@ -92,7 +92,12 @@ void AutoMixDub::updateFeatures(int slot,
         rmsAccum_[slot]   = 0.f;
         rmsSamples_[slot] = 0;
     }
-    features_[slot].peak.store(peak, std::memory_order_relaxed);
+    // Peak-hold avec release exponentiel ~400 ms.
+    const float decay = (numFrames > 0 && sampleRate_ > 0.f)
+        ? std::exp(-static_cast<float>(numFrames) / (0.4f * sampleRate_))
+        : 0.99f;
+    peakHold_[slot] = (peak > peakHold_[slot]) ? peak : peakHold_[slot] * decay;
+    features_[slot].peak.store(peakHold_[slot], std::memory_order_relaxed);
 }
 
 // ─── computeTargets (thread de mix, 50 ms) ────────────────────────────────
@@ -116,10 +121,18 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             // Correction pour atteindre la cible relative
             const float currentRelDb = 20.f * std::log10(sRms / kickRms);
             const float error        = targetDb - currentRelDb;
-            // Borner ±9 dB
-            const float corrDb = std::clamp(error, -9.f, 9.f);
+            // Borner : coupe jusqu'à −9 dB, boost max +6 dB
+            float corrDb = std::clamp(error, -9.f, 6.f);
 
-            // Hystérésis ±1 dB : ne changer que si l'écart dépasse 1 dB
+            // Plafond absolu : peak × gain_cible ≤ −6 dBFS (0.5f).
+            // Évite qu'un boost AutoMix sature un sample déjà loud.
+            const float peakVal = features_[s].peak.load(std::memory_order_relaxed);
+            if (peakVal > 0.f) {
+                const float ceilDb = 20.f * std::log10(0.5f / peakVal);
+                corrDb = std::min(corrDb, ceilDb);
+            }
+
+            // Hystérésis 3 dB : ne changer que si l'écart dépasse 3 dB
             if (std::abs(corrDb - lastDecisionDb_[s]) > 3.f) {
                 targets_.gainDb[s]  = corrDb;
                 lastDecisionDb_[s]  = corrDb;

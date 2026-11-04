@@ -130,6 +130,10 @@ private:
     float rmsAccum_ [kMaxSlots] = {};
     int   rmsSamples_[kMaxSlots] = {};
 
+    // Peak-hold avec release lent (~400 ms) — plus stable que le peak instantané.
+    float peakHold_     [kMaxSlots] = {};
+    float peakDecayCoef_ = 0.f;   // exp(-blockSize / (0.4 * sr)) — calculé dans updateFeatures
+
     // Spinlock protégeant targets_ ( écrit par mix thread, lu par audio thread )
     mutable SpinLock targetsLock_;
 
