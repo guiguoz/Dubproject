@@ -336,6 +336,10 @@ public:
     // ── AutoMix ────────────────────────────────────────────────────────────────
     float getMasterRms() const noexcept { return masterRms_.load(); }
 
+    // Dose l'amplitude de correction AutoMix [0,1]. 1=±6 dB (défaut), 0=neutre.
+    void  setAutoMixAuthority(float a) noexcept { graph_.autoMix().setAuthority(a); }
+    float getAutoMixAuthority() const noexcept  { return graph_.autoMix().getAuthority(); }
+
     // Lance le thread de mix temps réel : recomputeTargets() toutes les 50 ms
     // depuis les rôles courants. Appelé depuis prepareToPlay // à arrêter dans releaseResources.
     void startMixThread() noexcept;

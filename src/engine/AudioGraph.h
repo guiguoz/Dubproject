@@ -105,6 +105,7 @@ public:
     SlotPlayer&             slotPlayer()       noexcept { return slotPlayer_; }
     const SlotPlayer&       slotPlayer() const noexcept { return slotPlayer_; }
     AutoMixDub&             autoMix()          noexcept { return autoMix_; }
+    const AutoMixDub&       autoMix()    const noexcept { return autoMix_; }
     Sequencer&              sequencer()        noexcept { return sequencer_; }
     const Sequencer&        sequencer()  const noexcept { return sequencer_; }
     TransitionEngine&       transitionEngine() noexcept { return transition_; }

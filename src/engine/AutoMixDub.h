@@ -1,9 +1,10 @@
 #pragma once
 #include <cmath>
 #include <atomic>
-#include "engine/SlotPlayer.h"   // SlotRole
-#include "engine/Sequencer.h"   // kMaxSlots
-#include "engine/Transport.h"   // SpinLock
+#include "engine/SlotPlayer.h"       // SlotRole
+#include "engine/Sequencer.h"        // kMaxSlots
+#include "engine/Transport.h"        // SpinLock
+#include "engine/mix/MixAlgorithms.h" // BiquadCoeffs, makeHighShelf, makeHP
 
 namespace engine {
 
@@ -46,6 +47,15 @@ public:
 
     // Thread de mix : recalcule les cibles de gain et de send.
     void computeTargets(const SlotRole roles[kMaxSlots]) noexcept;
+
+    // Thread message : dose l'amplitude de correction AutoMix [0,1].
+    // 1.0 = ±6 dB max (défaut), 0.5 = ±3 dB (subtil), 0.0 = neutre.
+    void  setAuthority(float a) noexcept { authority_.store(std::clamp(a, 0.f, 1.f), std::memory_order_relaxed); }
+    float getAuthority() const noexcept  { return authority_.load(std::memory_order_relaxed); }
+
+    // Thread message : pré-sème le gain d'un slot entrant (scène B) avant transition.
+    // Élimine le trou de ~400 ms de mesure au démarrage de la scène entrante.
+    void preArmEntering(int slot, SlotRole role) noexcept;
 
     // Thread audio : applique le sidechain kick→BASS/PAD par échantillon.
     // kickSlot : index du slot kick (si −1, aucun sidechain).
@@ -96,6 +106,11 @@ public:
 private:
     float sampleRate_ = 44100.f;
 
+    // ── K-weighting BS.1770 (2 biquads en série sur (L+R)/2 avant RMS) ──────────
+    struct BiquadState { float x1 = 0.f, x2 = 0.f, y1 = 0.f, y2 = 0.f; };
+    mix::BiquadCoeffs kCoeff_[2]            {};  // calculés dans prepare()
+    BiquadState       kState_[kMaxSlots][2] {};  // resetés dans prepare()
+
     SlotFeatures features_[kMaxSlots];
     MixTargets   targets_;
 
@@ -122,6 +137,9 @@ private:
     // Hystérésis ±1 dB (règle 1)
     float lastDecisionDb_[kMaxSlots] = {};
 
+    // ── Autorité [0,1] — dose l'amplitude de correction ──────────────────────────
+    std::atomic<float> authority_ {1.0f};
+
     // Règle 6 : protection limiteur
     std::atomic<float> limiterAccumSec_  {0.f};  // secondes d'accumulation > 3 dB GR
     std::atomic<float> globalTrimDb_     {0.f};
@@ -133,6 +151,10 @@ private:
     // Peak-hold avec release lent (~400 ms) — plus stable que le peak instantané.
     float peakHold_     [kMaxSlots] = {};
     float peakDecayCoef_ = 0.f;   // exp(-blockSize / (0.4 * sr)) — calculé dans updateFeatures
+
+    // ── Pré-amorçage scène B (élimine trou 400 ms au démarrage) ─────────────────
+    std::atomic<float> preArmedDb_    [kMaxSlots] {};
+    std::atomic<bool>  preArmedActive_[kMaxSlots] {};
 
     // Spinlock protégeant targets_ ( écrit par mix thread, lu par audio thread )
     mutable SpinLock targetsLock_;

@@ -50,6 +50,10 @@ void AutoMixDub::prepare(float sampleRate) noexcept
     globalTrimDb_.store(0.f, std::memory_order_relaxed);
     limiterAccumSec_.store(0.f, std::memory_order_relaxed);
 
+    // K-weighting BS.1770 : high-shelf +4 dB @ 1500 Hz + high-pass 100 Hz
+    kCoeff_[0] = mix::makeHighShelf(1500.f, 4.f, sampleRate);
+    kCoeff_[1] = mix::makeHP(100.f, sampleRate);
+
     for (int s = 0; s < kMaxSlots; ++s) {
         features_[s].rms.store(0.f, std::memory_order_relaxed);
         features_[s].peak.store(0.f, std::memory_order_relaxed);
@@ -59,8 +63,13 @@ void AutoMixDub::prepare(float sampleRate) noexcept
         lastDecisionDb_[s]    = 0.f;
         rmsAccum_[s]          = 0.f;
         rmsSamples_[s]        = 0;
+        peakHold_[s]          = 0.f;
         dubSendOverride_[s]   = {};
         dubSendActive_[s]     = false;
+        kState_[s][0]         = {};
+        kState_[s][1]         = {};
+        preArmedDb_    [s].store(0.f,   std::memory_order_relaxed);
+        preArmedActive_[s].store(false, std::memory_order_relaxed);
     }
     targets_ = {};
     for (int s = 0; s < kMaxSlots; ++s)
@@ -76,10 +85,21 @@ void AutoMixDub::updateFeatures(int slot,
 
     float sumSq = 0.f, peak = 0.f;
     for (int i = 0; i < numFrames; ++i) {
-        const float s = (outL[i] + outR[i]) * 0.5f;
-        sumSq += s * s;
-        const float abs = s < 0.f ? -s : s;
-        if (abs > peak) peak = abs;
+        const float raw = (outL[i] + outR[i]) * 0.5f;
+
+        // Peak sur signal brut (non filtré)
+        const float absRaw = raw < 0.f ? -raw : raw;
+        if (absRaw > peak) peak = absRaw;
+
+        // K-weighting BS.1770 (DF2T) : 2 biquads en série
+        float km = raw;
+        { auto& st = kState_[slot][0]; const auto& c = kCoeff_[0];
+          const float y = c.b0*km + c.b1*st.x1 + c.b2*st.x2 - c.a1*st.y1 - c.a2*st.y2;
+          st.x2=st.x1; st.x1=km; st.y2=st.y1; st.y1=y; km=y; }
+        { auto& st = kState_[slot][1]; const auto& c = kCoeff_[1];
+          const float y = c.b0*km + c.b1*st.x1 + c.b2*st.x2 - c.a1*st.y1 - c.a2*st.y2;
+          st.x2=st.x1; st.x1=km; st.y2=st.y1; st.y1=y; km=y; }
+        sumSq += km * km;
     }
 
     // Accumulation rolling RMS sur ~400 ms
@@ -123,6 +143,7 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             const float error        = targetDb - currentRelDb;
             // Borner : coupe jusqu'à −9 dB, boost max +6 dB
             float corrDb = std::clamp(error, -9.f, 6.f);
+            corrDb *= authority_.load(std::memory_order_relaxed);
 
             // Plafond absolu : peak × gain_cible ≤ −6 dBFS (0.5f).
             // Évite qu'un boost AutoMix sature un sample déjà loud.
@@ -139,9 +160,16 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             }
             // sinon on garde la décision précédente (hystérésis)
         } else {
-            // Silence : retour neutre (0 dB correction)
-            targets_.gainDb[s]  = 0.f;
-            lastDecisionDb_[s]  = 0.f;
+            // Silence : si pré-amorcé (slot entrant), utiliser la cible role-based
+            if (preArmedActive_[s].load(std::memory_order_acquire)) {
+                const float db = preArmedDb_[s].load(std::memory_order_relaxed);
+                targets_.gainDb[s]  = db;
+                lastDecisionDb_[s]  = db;
+                preArmedActive_[s].store(false, std::memory_order_release);
+            } else {
+                targets_.gainDb[s]  = 0.f;
+                lastDecisionDb_[s]  = 0.f;
+            }
         }
 
         // ─ Règle 4 simplifiée : sends statiques
@@ -150,6 +178,16 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             ? 20.f * std::log10(sendLinear)
             : -120.f;
     }
+}
+
+// ─── preArmEntering ──────────────────────────────────────────────────────────
+void AutoMixDub::preArmEntering(int slot, SlotRole role) noexcept
+{
+    if (slot < 0 || slot >= kMaxSlots) return;
+    const float db = roleTargetDb(role);
+    currentGainLin_[slot].store(std::pow(10.f, db / 20.f), std::memory_order_relaxed);
+    preArmedDb_    [slot].store(db,   std::memory_order_relaxed);
+    preArmedActive_[slot].store(true, std::memory_order_release);
 }
 
 // ─── advanceKickEnv ──────────────────────────────────────────────────────────

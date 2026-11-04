@@ -1344,6 +1344,13 @@ bool EngineFacade::prepareDirectPlan(int fromIdx, int toIdx) noexcept
     }
     transitionTrace_.push({TraceEntry::Type::Ready, boundary, fromIdx, toIdx, 255, 0.f, 0.f});
 
+    // Pré-amorcer AutoMix pour les slots entrants — AVANT armWithPlan pour que
+    // le 1er bloc audio voit déjà le gain seedé (élimine le trou 400 ms mesure).
+    for (int s = 0; s < kMaxSlots; ++s) {
+        if (plan.slots[s].action == SlotPlanAction::Enter)
+            graph_.autoMix().preArmEntering(s, to.slots[s].role);
+    }
+
     // Stocker le plan et armer la transition
     transitionPlan_ = plan;
     transitionPlanValid_.store(true, std::memory_order_release);
