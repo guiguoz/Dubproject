@@ -207,19 +207,9 @@ float SlotPlayer::applyHaasDelay(int slot, float sample) noexcept {
 void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
-    // Guard Free : si une voix tourne déjà (non en fade-out), ignorer le trigger.
-    // La boucle naturelle via renderVoice (fade-V au wrap) assure le loop sans clic.
-    // Sans ce guard, chaque step[0] du pattern coupe le sample en cours → creux audible.
-    if (mode == PlayMode::Free) {
-        for (int v = 0; v < 2; ++v) {
-            if (voices_[slot][v].active.load(std::memory_order_relaxed)
-                    && !voices_[slot][v].fadingOut)
-                return;
-        }
-    }
-
-    // 1. Pour OneShot : mettre l'ancienne voix en fade-out anti-clic (kRetrigFadeLen).
-    //    LoopSync exclu : position dérivée du transport, pas de double-voix possible.
+    // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic.
+    //    Free : kCrossfadeLen (256 samples) → crossfade lin/lin avec le fade-in xfGain
+    //    de la nouvelle voix. LoopSync exclu : position dérivée du transport.
     int lastActiveVoice = -1;
     if (mode != PlayMode::LoopSync) {
         const int fadeOutLen = (mode == PlayMode::Free) ? kCrossfadeLen : kRetrigFadeLen;
