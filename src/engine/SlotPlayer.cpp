@@ -208,9 +208,12 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
     const PlayMode mode = params_[slot].mode.load(std::memory_order_relaxed);
 
     // 1. Pour OneShot/Free : mettre l'ancienne voix en fade-out anti-clic.
-    //    Free : kCrossfadeLen (256 samples) → crossfade complément (V_old+V_new = 1.0).
+    //    Free : on "bake" le xfGain courant de V_old dans fadeGain (au lieu de 1.0),
+    //    puis fade-V est sauté pour les voix fadingOut → pas de chute à 0 au wrap.
     //    LoopSync exclu : position dérivée du transport.
+    const SlotPcm& pcm = activePcm(slot);
     int lastActiveVoice = -1;
+    float gOld = 1.f;  // xfGain de V_old au trigger (1.0 = mid-sample ou pas de V_old)
     if (mode != PlayMode::LoopSync) {
         const int fadeOutLen = (mode == PlayMode::Free) ? kCrossfadeLen : kRetrigFadeLen;
         for (int v = 0; v < 2; ++v) {
@@ -218,9 +221,19 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
             if (vc.active.load(std::memory_order_relaxed)) {
                 lastActiveVoice = v;
                 if (!vc.fadingOut) {
+                    // Pour Free : bake le xfGain courant dans fadeGain pour continuité.
+                    float g = 1.f;
+                    if (mode == PlayMode::Free && pcm.numFrames > kCrossfadeLen * 2) {
+                        if (vc.readPos < static_cast<int64_t>(kCrossfadeLen))
+                            g = static_cast<float>(vc.readPos) / static_cast<float>(kCrossfadeLen);
+                        else if (vc.readPos >= static_cast<int64_t>(pcm.numFrames - kCrossfadeLen))
+                            g = static_cast<float>(pcm.numFrames - vc.readPos)
+                              / static_cast<float>(kCrossfadeLen);
+                    }
                     vc.fadingOut = true;
-                    vc.fadeGain  = 1.0f;
+                    vc.fadeGain  = (mode == PlayMode::Free) ? g : 1.0f;
                     vc.fadeLeft  = fadeOutLen;
+                    gOld = g;
                 }
             }
         }
@@ -249,19 +262,7 @@ void SlotPlayer::handleTrigger(int slot, int64_t transportAnchor) noexcept {
         stretchers_[slot].reset();
     }
 
-    const SlotPcm& pcm = activePcm(slot);
-
-    // xfGainStart = 1 - xfGain_old au trigger → V_old + V_new = 1.0 dans tous les cas.
-    // gOld = 1.0 par défaut (pas de V_old, mid-sample, ou sample trop court) → fade-V standard.
-    float gOld = 1.f;
-    if (mode == PlayMode::Free && lastActiveVoice >= 0
-            && pcm.numFrames > kCrossfadeLen * 2) {
-        const int64_t rp = voices_[slot][lastActiveVoice].readPos;
-        if      (rp < static_cast<int64_t>(kCrossfadeLen))
-            gOld = static_cast<float>(rp) / static_cast<float>(kCrossfadeLen);
-        else if (rp >= static_cast<int64_t>(pcm.numFrames - kCrossfadeLen))
-            gOld = static_cast<float>(pcm.numFrames - rp) / static_cast<float>(kCrossfadeLen);
-    }
+    // xfGainStart = 1 - gOld → V_old(t=0) + V_new(t=0) = 1.0 au frame du trigger.
     voice.xfGainStart = (mode == PlayMode::Free) ? 1.f - gOld : 0.f;
 
     if (pcm.numFrames > 0 && !pcm.data.empty()
@@ -537,9 +538,10 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
         }
 
         // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début).
-        // Fade-in : xfGain = xfGainStart + (1-xfGainStart)*t → garantit V_old+V_new = 1.0
-        // au retrigger quel que soit readPos de V_old. xfGainStart = 0 après wrap naturel.
-        if (loop && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
+        // Sauté pour fadingOut : fadeGain (bakée au trigger) gère l'extinction sans saut au wrap.
+        // Fade-in : xfGain = xfGainStart + (1-xfGainStart)*t → V_old+V_new = 1.0 au trigger.
+        if (loop && !voice.fadingOut
+                && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
             float xfGain = 1.f;
             if (curReadPos < static_cast<int64_t>(kCrossfadeLen)) {
                 const float t = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
