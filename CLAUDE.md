@@ -160,7 +160,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 | Item | Statut | Piste |
 |------|--------|-------|
 | Nom preset Serum | Résolu — auto-détection via parsing XML/JSON de l'état VST3 (v18) + fallback click-to-edit Manuel | — |
-| **Crack audio Free mode** | En cours — source = `handleTrigger` retrigger mid-loop (conflit de phase). Fixes en place : fade-V aux 3 sites wrap (bypass/stretch/renderVoice), crossfade retrigger 64→256 samples (Free uniquement). Crack résiduel non résolu — à investiguer demain. | Pistes : (1) source ailleurs que renderVoice ? (2) LoopSync wrap ? (3) DSP pipeline ? Audit à reprendre. |
+| **Crack audio Free mode** | Résolu (v29) — double fix : (1) guard dans `handleTrigger` : Free mode ignore les triggers séquenceur si une voix tourne déjà (non-fading) ; (2) fade-V zone fade-in exemptée pour voix `fadingOut=true` (évite double-dip xfGain_old×xfGain_new≈0 quand V_old vient de wrapper). | — |
 | ONNX slot 8 | Heuristique uniquement (`ContentType::LOOP` en dur, gain 0.55, EQ neutre) | Retrain sur 9 slots — tensor `[1,48]→[1,54]`, dataset + Python env requis |
 | MIDI CC DubDelay Tone/Drive/Div/Freeze | Non implémenté — 13 targets actuels couvrent Send/Wet/Feedback | Ajouter 4 entrées enum `MappingTarget` + 4 cas `applyMappingValue()` — ~2 h, aucune dépendance |
 | Pitch tracking F0 (YIN) | **Non implémenté** — `FeatureExtractor` fait uniquement centroïde/bandes/crest, pas de détection F0 | Nouveau `PitchDetector.h/.cpp` (algo YIN) + retrain ONNX (7 features/slot) — dépend dataset |

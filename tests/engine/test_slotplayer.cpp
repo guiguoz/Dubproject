@@ -211,17 +211,18 @@ TEST_CASE("T-SP1h: multi-retrigger — après fade-out, une seule voix à plein 
 
     const auto ts = makeTS();
 
-    // kRetrigFadeLen=64 frames de bref overlap à chaque retrigger (≈1.5 ms).
-    // Après 64 frames : seule voix active → sortie exactement C.
-    constexpr int kFade  = 64;    // kRetrigFadeLen
-    constexpr int kBlock = 300;   // > kFade : fade terminé avant la fin du bloc
+    // Guard Free mode : seul le premier trigger démarre la voix.
+    // Les triggers suivants sont ignorés (voix déjà active non-fading).
+    // Après kCrossfadeLen=256 frames de fade-in (fade-V) : sortie exactement C.
+    constexpr int kFade  = 256;   // kCrossfadeLen — durée du fade-V au démarrage
+    constexpr int kBlock = 300;   // > kFade : fade-in terminé avant la fin du bloc
 
     for (int trig = 0; trig < 5; ++trig) {
         const EngineEvent ev = makeTrigger(0);
         std::vector<float> out(static_cast<size_t>(kBlock) * 2u, 0.f);
         sp.processBlock(ts, out.data(), kBlock, &wrap(ev), 1);
 
-        // Après le fade-out : exactement C (une seule voix)
+        // Après le fade-in (trig=0) ou sans fade (trig>0, guard bloque) : sortie = C
         for (int f = kFade; f < kBlock; ++f)
             REQUIRE(out[static_cast<size_t>(f) * 2u] == Catch::Approx(C).margin(1e-6f));
     }
