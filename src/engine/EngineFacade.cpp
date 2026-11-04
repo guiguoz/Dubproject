@@ -1408,6 +1408,13 @@ void EngineFacade::applySceneInternal(int idx) noexcept
     const SceneData& sc = sceneStore_.getScene(idx);
     for (int s = 0; s < kMaxSlots; ++s) {
         const SlotConfig& cfg = sc.slots[s];
+
+        if (!cfg.active) {
+            // Pas de steps dans cette scène → stopper toute voix en cours.
+            clearSlot(s);
+            continue;
+        }
+
         graph_.slotPlayer().setGain(s, cfg.gain);
         graph_.slotPlayer().setMode(s, cfg.mode);
         graph_.slotPlayer().setSemitones(s, cfg.semitones);
