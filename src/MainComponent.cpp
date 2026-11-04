@@ -247,8 +247,10 @@ MainComponent::MainComponent()
         // sceneIdx capturé maintenant pour écrire dans la bonne scène même si l'utilisateur
         // navigue pendant l'import async.
         const int sceneIdx = facade_.currentSceneIdx();
-        facade_.importSampleAsync(slot, path, [this, path, sceneIdx](int s, const engine::AnalysisResult&) {
-            juce::MessageManager::callAsync([this, s, path, sceneIdx] {
+        facade_.importSampleAsync(slot, path, [this, path, sceneIdx](int s, const engine::AnalysisResult& res) {
+            const int loopBts = res.loopBeats;
+            const float tRatio = res.timeRatio;
+            juce::MessageManager::callAsync([this, s, path, sceneIdx, loopBts, tRatio] {
                 // PR3 : matérialise le slot (Inherit → Own avec contenu résolu) dans la bonne scène.
                 // sceneIdx peut != currentSceneIdx() si l'utilisateur a navigué pendant l'import.
                 sceneStore_.materializeSlot(sceneIdx, s);
@@ -260,6 +262,9 @@ MainComponent::MainComponent()
                 sc2.slots[si].delaySend = engine::AutoMixDub::roleStaticDelaySend(activeRoleForSlot(s));
                 if (facade_.isSlotLoaded(s))
                     sc2.slots[si].mode = facade_.slotMode(s);
+                // Persister loopBeats/timeRatio pour la sauvegarde et la navigation de scène.
+                sc2.slots[si].loopBeats = loopBts;
+                sc2.slots[si].timeRatio = tRatio;
                 // Rôle : rafraîchir depuis le moteur si non-manuel (sinon rôle de l'ancêtre)
                 if (!sc2.slots[si].isRoleManual) {
                     const auto info = facade_.getSlotRoleInfo(s);

@@ -625,6 +625,16 @@ void EngineFacade::importSampleAsync(int slot, const std::string& filePath,
             // Chargement dans le SlotPlayer (worker thread — pas audio)
             const PlayMode mode = modeForResult(result, slot, restoredRole);
             selfLocked->graph_.slotPlayer().loadSlot(slot, std::move(pcm), mode);
+
+            // LoopSync : configurer loopBeats + timeRatio dès le chargement.
+            // Sans armLoopSync, params_[slot].loopBeats resterait à 0
+            // et renderLoopSync() retournerait immédiatement → silence.
+            if (mode == PlayMode::LoopSync && result.loopBeats > 0) {
+                const float sem = selfLocked->graph_.slotPlayer().getSemitones(slot);
+                selfLocked->graph_.slotPlayer().armLoopSync(
+                    slot, result.loopBeats, result.timeRatio, sem, 0);
+            }
+
             selfLocked->slotLoaded_[slot].store(true, std::memory_order_release);
             const int   loadedFrames = selfLocked->graph_.slotPlayer().getPcmFrames(slot);
             const AssetId loadedAsset = assetIdFor(selfLocked->slotPath_[slot],
@@ -1402,6 +1412,11 @@ void EngineFacade::applySceneInternal(int idx) noexcept
         graph_.slotPlayer().setMode(s, cfg.mode);
         graph_.slotPlayer().setSemitones(s, cfg.semitones);
         graph_.setSlotRole(s, cfg.role);
+        // LoopSync : resynchroniser loopBeats/timeRatio depuis la SceneDefinition.
+        // Nécessaire lors des transitions de scène pour que renderLoopSync() ait
+        // des params cohérents (loopBeats=0 → silence).
+        if (cfg.mode == PlayMode::LoopSync && cfg.loopBeats > 0)
+            graph_.slotPlayer().armLoopSync(s, cfg.loopBeats, cfg.timeRatio, cfg.semitones, 0);
     }
 }
 
@@ -1516,6 +1531,10 @@ void EngineFacade::loadSlotFromFileSync(int slot, const SlotConfig& cfg) noexcep
     graph_.slotPlayer().setGain(slot, cfg.gain);
     graph_.slotPlayer().setSemitones(slot, cfg.semitones);
     graph_.setSlotRole(slot, cfg.role);
+
+    // LoopSync : restaurer loopBeats + timeRatio depuis SlotConfig (persistés).
+    if (cfg.mode == PlayMode::LoopSync && cfg.loopBeats > 0)
+        graph_.slotPlayer().armLoopSync(slot, cfg.loopBeats, cfg.timeRatio, cfg.semitones, 0);
 
     const AssetId loadedAsset = assetIdForSlot(cfg);
     pushTrace(TraceEvt::Op::LoadSlot, slot, trimFrames,

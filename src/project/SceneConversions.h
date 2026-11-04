@@ -36,6 +36,8 @@ inline SceneSaveData toSaveData(const engine::SceneData& src)
                                     ? -1 : static_cast<int>(src.slots[st].role);
         dst.roleManual[st]        = src.slots[st].isRoleManual;
         dst.slotOwnership[st]     = src.slotOwnership[st];
+        dst.loopBeats[st]         = src.slots[st].loopBeats;
+        dst.timeRatios[st]        = src.slots[st].timeRatio;
         const int n = src.trackBarCounts[st] * 16;
         for (int s = 0; s < n; ++s)
             dst.steps[st][static_cast<std::size_t>(s)] = src.steps[st][static_cast<std::size_t>(s)];
@@ -78,6 +80,8 @@ inline engine::SceneData fromSaveData(const SceneSaveData& src)
                                     : static_cast<engine::SlotRole>(rawRole);
         dst.slots[st].isRoleManual = src.roleManual[st];
         dst.slotOwnership[st]     = src.slotOwnership[st];
+        dst.slots[st].loopBeats   = src.loopBeats[st];
+        dst.slots[st].timeRatio   = src.timeRatios[st];
         const int n = src.trackBarCounts[st] * 16;
         for (int s = 0; s < n; ++s)
             dst.steps[st][static_cast<std::size_t>(s)] = src.steps[st][static_cast<std::size_t>(s)];

@@ -80,6 +80,8 @@ struct SceneSaveData
     std::array<bool,  9>                  roleManual    {};                                  // v24
     std::array<bool,  9>                  slotOwnership {};       // v26 — true=Own, false=Inherit
     bool                                  sceneOwned    { false }; // v26 — true=scène propriétaire du dub delay
+    std::array<int,   9>                  loopBeats     {};        // LoopSync : durée en beats (0=pas de LoopSync) — défauts corrects pour v≤26
+    std::array<float, 9>                  timeRatios    { 1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f,1.f }; // bpmSample/bpmProjet
     bool                                  used          { false };
 };
 

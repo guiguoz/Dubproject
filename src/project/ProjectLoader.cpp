@@ -36,6 +36,12 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
     ProjectData data;
     data.projectName = getString(root, "projectName", "Untitled");
     data.version     = static_cast<int>(root.getProperty("version", 1));
+
+    if (data.version > kFormatVersion) {
+        // Fichier écrit par une version plus récente — refus silencieux pour éviter corruption
+        return std::nullopt;
+    }
+
     data.bpm         = getFloat(root, "bpm", 120.f);
 
     // Silent defaults for dub delay bus when missing from older projects
@@ -43,7 +49,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         data.dubDelayEnabled  = false;
         data.dubDelaySend     = 0.20f;
         data.dubDelayWet      = 0.28f;
-        data.dubDelayFeedback = 0.48f;
+        data.dubDelayFeedback = 0.40f;
         data.dubDelayTone     = 0.55f;
         data.dubDelayDrive    = 0.15f;
         data.dubDelayDiv      = 1;
@@ -258,6 +264,18 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
                     sc.slotOwnership.fill(true);
                     sc.sceneOwned = true;
                 }
+
+                // loopBeats / timeRatios — absent dans les anciens projets → 0 / 1.0 (recalculé à l'import).
+                if (const auto* arr = entry["loopBeats"].getArray())
+                    for (int i = 0; i < 9 && i < arr->size(); ++i)
+                        sc.loopBeats[static_cast<std::size_t>(i)] =
+                            juce::jlimit(0, 512, static_cast<int>((*arr)[i]));
+
+                if (const auto* arr = entry["timeRatios"].getArray())
+                    for (int i = 0; i < 9 && i < arr->size(); ++i)
+                        sc.timeRatios[static_cast<std::size_t>(i)] =
+                            juce::jlimit(0.5f, 2.0f,
+                                static_cast<float>(static_cast<double>((*arr)[i])));
             }
         }
 
@@ -281,7 +299,7 @@ std::optional<ProjectData> ProjectLoader::load(const std::string& filePath)
         data.dubDelayEnabled  = getBool (root, "dubDelayEnabled",  false);
         data.dubDelaySend     = getFloat(root, "dubDelaySend",     0.20f);
         data.dubDelayWet      = getFloat(root, "dubDelayWet",      0.28f);
-        data.dubDelayFeedback = getFloat(root, "dubDelayFeedback", 0.48f);
+        data.dubDelayFeedback = getFloat(root, "dubDelayFeedback", 0.40f);
         data.dubDelayTone     = getFloat(root, "dubDelayTone",     0.55f);
         data.dubDelayDrive    = getFloat(root, "dubDelayDrive",    0.15f);
         data.dubDelayDiv      = static_cast<int>(root.getProperty("dubDelayDiv", 1));
@@ -506,6 +524,20 @@ bool ProjectLoader::save(const ProjectData& data, const std::string& filePath)
                 entry->setProperty("slotOwnership", arr);
             }
             entry->setProperty("sceneOwned", sc.sceneOwned);
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(sc.loopBeats[static_cast<std::size_t>(i)]);
+                entry->setProperty("loopBeats", arr);
+            }
+
+            {
+                juce::Array<juce::var> arr;
+                for (int i = 0; i < 9; ++i)
+                    arr.add(static_cast<double>(sc.timeRatios[static_cast<std::size_t>(i)]));
+                entry->setProperty("timeRatios", arr);
+            }
 
             scenesArr.add(juce::var(entry.get()));
         }
