@@ -45,8 +45,9 @@ struct Voice {
     bool    fadingOut = false;  // true = fade-out 1→0 (stop), false = fade-in 0→1 (attaque)
     int64_t readPos   = 0;      // en frames (pas en samples entrelacés)
     float   readFrac  = 0.f;    // partie fractionnaire pour correction SR
-    float   fadeGain  = 1.0f;   // gain courant du fade (in ou out)
-    int     fadeLeft  = 0;      // samples restants dans le fade
+    float   fadeGain     = 1.0f;  // gain courant du fade (in ou out)
+    int     fadeLeft     = 0;     // samples restants dans le fade
+    float   xfGainStart  = 0.f;   // complément de xfGain_old au trigger → V_old+V_new = 1.0
 };
 
 // ─── SlotPlayer ──────────────────────────────────────────────────────────────
