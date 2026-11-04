@@ -525,19 +525,14 @@ void SlotPlayer::renderVoice(int slot, int v, float* out, int numFrames,
             ++voice.readPos;
         }
 
-        // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début) → amplitude 0 au point de boucle.
-        // La zone fade-in n'est PAS appliquée aux voix déjà en fade-out (fadingOut=true) :
-        // si V_old vient de wrapper (readPos < 256) et qu'un retrigger arrive, appliquer
-        // xfGain_old ≈ 0 ET xfGain_new ≈ 0 crée un creux d'amplitude audible (~−∞ dB, 256 frames).
+        // Fade-V au wrap : fondu sortant (fin) + fondu entrant (début) → amplitude 0 au point de boucle
         if (loop && static_cast<int64_t>(pcm.numFrames) > static_cast<int64_t>(kCrossfadeLen) * 2) {
             float xfGain = 1.f;
-            if (curReadPos < static_cast<int64_t>(kCrossfadeLen)) {
-                if (!voice.fadingOut)
-                    xfGain = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
-            } else if (curReadPos >= static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen) {
+            if (curReadPos < static_cast<int64_t>(kCrossfadeLen))
+                xfGain = static_cast<float>(curReadPos) / static_cast<float>(kCrossfadeLen);
+            else if (curReadPos >= static_cast<int64_t>(pcm.numFrames) - kCrossfadeLen)
                 xfGain = static_cast<float>(static_cast<int64_t>(pcm.numFrames) - curReadPos)
                        / static_cast<float>(kCrossfadeLen);
-            }
             left  *= xfGain;
             right *= xfGain;
         }
