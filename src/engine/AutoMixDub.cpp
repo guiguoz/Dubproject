@@ -38,8 +38,8 @@ void AutoMixDub::prepare(float sampleRate) noexcept
 {
     sampleRate_  = sampleRate;
 
-    // Constante de temps : 30 ms gains, 120 ms sends
-    gainTauCoef_  = tauToCoef(30.f,  sampleRate);
+    // Constante de temps : 300 ms gains (slow ride), 120 ms sends
+    gainTauCoef_  = tauToCoef(300.f, sampleRate);
     delayTauCoef_ = tauToCoef(120.f, sampleRate);
 
     // Sidechain : attack 5 ms, release 120 ms
@@ -102,8 +102,8 @@ void AutoMixDub::updateFeatures(int slot,
         sumSq += km * km;
     }
 
-    // Accumulation rolling RMS sur ~400 ms
-    const int kWindow = static_cast<int>(sampleRate_ * 0.4f);
+    // Accumulation rolling RMS sur ~800 ms (plus stable sur contenu dynamique)
+    const int kWindow = static_cast<int>(sampleRate_ * 0.8f);
     rmsAccum_[slot]   += sumSq;
     rmsSamples_[slot] += numFrames;
     if (rmsSamples_[slot] >= kWindow) {
@@ -154,7 +154,7 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             }
 
             // Hystérésis 3 dB : ne changer que si l'écart dépasse 3 dB
-            if (std::abs(corrDb - lastDecisionDb_[s]) > 3.f) {
+            if (std::abs(corrDb - lastDecisionDb_[s]) > 5.f) {
                 targets_.gainDb[s]  = corrDb;
                 lastDecisionDb_[s]  = corrDb;
             }
