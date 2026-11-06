@@ -4,7 +4,19 @@
       "Bash(grep -E \"\\\\.\\(h|cpp\\)$\")",
       "Bash(ctest -C Debug --output-on-failure)",
       "Bash(cmake --build build --config Debug --target SaxFXTests --parallel)",
-      "Bash(cmake --build build --target SaxFXLive -- -j4)"
+      "Bash(cmake --build build --target SaxFXLive -- -j4)",
+      "Bash(./bin/SaxFXTests.exe --reporter compact)",
+      "Bash(./bin/EngineTests.exe --reporter compact)",
+      "Bash(./bin/EngineTests.exe)",
+      "Bash(./bin/EngineTests.exe \"[nulltest][.hidden]\")",
+      "Bash(./bin/EngineTests.exe \"[nulltest]\")",
+      "Bash(git show *)",
+      "Bash(./bin/EngineTests.exe \"[ui][scene]\")",
+      "Bash(./bin/EngineTests.exe \"[policy][build][ownership]\")",
+      "Bash(\"./bin/EngineTests.exe\" \"[policy][build][ownership]\" --reporter compact)",
+      "Bash(\"./bin/EngineTests.exe\" \"[nulltest]\" --reporter compact)",
+      "Bash(\"bin/SaxFXTests.exe\" \"[pattern]\" --reporter compact)",
+      "Bash(\"bin/SaxFXTests.exe\" \"PATTERN\" --reporter compact)"
     ]
   }
 }

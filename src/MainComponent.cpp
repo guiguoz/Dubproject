@@ -824,6 +824,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    doAutosave();
     // Restore default look and feel and release SAX-OS look
     setLookAndFeel(nullptr);
     saxOsLookAndFeel_.reset();
@@ -2347,8 +2348,8 @@ void MainComponent::timerCallback()
         }
     }
 
-    // Autosave toutes les 5 min (30 fps × 300 s = 9000 ticks)
-    if (++autosaveTick_ >= 9000)
+    // Autosave toutes les 60 s (30 fps × 60 s = 1800 ticks)
+    if (++autosaveTick_ >= 1800)
     {
         autosaveTick_ = 0;
         doAutosave();
