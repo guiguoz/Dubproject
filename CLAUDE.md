@@ -152,6 +152,7 @@ API : `Sampler::setSidechainPair(source, target)` / `clearSidechain()` — GUI t
 - **clearSlot** : `loaded=false` + stop immédiat des 2 voix ; les steps restent en mémoire.
 - **Downmix PCM** : tous les sites de chargement (MainComponent + SmartSamplerEngine) utilisent le pattern `numCh > 1 ? (L+R)*0.5 : copy`. Ne jamais passer `buf(1, n)` / `read(..., false)` directement — les fichiers stéréo seraient tronqués au canal gauche.
 - **`SmartSamplerEngine::processSlotData` — 3 passes** : Pass 1 = BPM stretch via `WsolaShifter::resampleHermite()` (Catmull-Rom, qualité > interpolation linéaire) ; Pass 2 = correction pitch WSOLA ; Pass 3 = crop barre. L'ancienne `resample()` linéaire est conservée en legacy non-appelée.
+- **Autosave** : toutes les 60 s (1800 ticks × 33 ms), rotation 3 slots (`autosave.0/1/2.saxfx` dans `%APPDATA%/DubEngine/`). `doAutosave()` aussi appelé dans `~MainComponent()` → sauvegarde à la fermeture propre. Indicateur "AUTOSAVED" fade 4 s via `autosaveFadeTimer_`.
 
 ---
 
