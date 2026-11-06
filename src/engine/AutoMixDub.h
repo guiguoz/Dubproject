@@ -144,9 +144,12 @@ private:
     std::atomic<float> limiterAccumSec_  {0.f};  // secondes d'accumulation > 3 dB GR
     std::atomic<float> globalTrimDb_     {0.f};
 
-    // Accumulateur RMS (rolling)
-    float rmsAccum_ [kMaxSlots] = {};
-    int   rmsSamples_[kMaxSlots] = {};
+    // EMA énergétique (remplace le batch rolling — α block-size-dépendant dans updateFeatures)
+    float rmsEma_[kMaxSlots] = {};
+
+    // Référence Kick : peak-hold τ=4 s — stable entre les coups, invalidée si kick absent
+    float kickRmsHeld_  = 0.f;
+    float kickHoldDecay_ = 0.f;  // exp(-0.05 / 4.0) — calculé dans prepare()
 
     // Peak-hold avec release lent (~400 ms) — plus stable que le peak instantané.
     float peakHold_     [kMaxSlots] = {};

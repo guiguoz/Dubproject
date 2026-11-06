@@ -54,6 +54,9 @@ void AutoMixDub::prepare(float sampleRate) noexcept
     kCoeff_[0] = mix::makeHighShelf(1500.f, 4.f, sampleRate);
     kCoeff_[1] = mix::makeHP(100.f, sampleRate);
 
+    kickRmsHeld_   = 0.f;
+    kickHoldDecay_ = std::exp(-0.05f / 4.f);  // τ=4s, appel toutes les 50 ms
+
     for (int s = 0; s < kMaxSlots; ++s) {
         features_[s].rms.store(0.f, std::memory_order_relaxed);
         features_[s].peak.store(0.f, std::memory_order_relaxed);
@@ -61,8 +64,7 @@ void AutoMixDub::prepare(float sampleRate) noexcept
         currentGainLin_[s].store(1.f, std::memory_order_relaxed);
         currentDelaySend_[s]  = 0.f;
         lastDecisionDb_[s]    = 0.f;
-        rmsAccum_[s]          = 0.f;
-        rmsSamples_[s]        = 0;
+        rmsEma_[s]            = 0.f;
         peakHold_[s]          = 0.f;
         dubSendOverride_[s]   = {};
         dubSendActive_[s]     = false;
@@ -102,15 +104,12 @@ void AutoMixDub::updateFeatures(int slot,
         sumSq += km * km;
     }
 
-    // Accumulation rolling RMS sur ~800 ms (plus stable sur contenu dynamique)
-    const int kWindow = static_cast<int>(sampleRate_ * 0.8f);
-    rmsAccum_[slot]   += sumSq;
-    rmsSamples_[slot] += numFrames;
-    if (rmsSamples_[slot] >= kWindow) {
-        features_[slot].rms.store(std::sqrt(rmsAccum_[slot] / static_cast<float>(rmsSamples_[slot])),
-                                  std::memory_order_relaxed);
-        rmsAccum_[slot]   = 0.f;
-        rmsSamples_[slot] = 0;
+    // EMA énergétique τ≈800 ms, α recalculé par bloc (robuste si taille de bloc variable)
+    if (numFrames > 0 && sampleRate_ > 0.f) {
+        const float alpha = std::exp(-static_cast<float>(numFrames) / (0.8f * sampleRate_));
+        const float blockAvgSq = sumSq / static_cast<float>(numFrames);
+        rmsEma_[slot] = alpha * rmsEma_[slot] + (1.f - alpha) * blockAvgSq;
+        features_[slot].rms.store(std::sqrt(rmsEma_[slot]), std::memory_order_relaxed);
     }
     // Peak-hold avec release exponentiel ~400 ms.
     const float decay = (numFrames > 0 && sampleRate_ > 0.f)
@@ -123,13 +122,18 @@ void AutoMixDub::updateFeatures(int slot,
 // ─── computeTargets (thread de mix, 50 ms) ────────────────────────────────
 void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
 {
-    // Chercher le kick pour la référence 0 dB
-    float kickRms = -1.f;
+    // Référence kick : peak-hold τ=4 s — stable entre les coups, invalidée si kick absent
+    float kickRms = 0.f;
+    bool  kickPresent = false;
     for (int s = 0; s < kMaxSlots; ++s) {
-        const float sRms = features_[s].rms.load(std::memory_order_relaxed);
-        if (roles[s] == SlotRole::Kick && sRms > 0.f)
-            kickRms = sRms;
+        const float r = features_[s].rms.load(std::memory_order_relaxed);
+        if (roles[s] == SlotRole::Kick && r > kickRms) { kickRms = r; kickPresent = true; }
     }
+    if (kickPresent && kickRms > 0.f)
+        kickRmsHeld_ = (kickRms > kickRmsHeld_) ? kickRms : kickRmsHeld_ * kickHoldDecay_;
+    else if (!kickPresent)
+        kickRmsHeld_ = 0.f;  // kick muté/absent → invalider la référence
+    const float kickRef = kickRmsHeld_;
 
     SpinLock::ScopedLockType scoped(targetsLock_);
     for (int s = 0; s < kMaxSlots; ++s) {
@@ -137,9 +141,9 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
         float targetDb = roleTargetDb(roles[s]) + globalTrimDb_.load(std::memory_order_relaxed);
 
         const float sRms = features_[s].rms.load(std::memory_order_relaxed);
-        if (kickRms > 0.f && sRms > 0.f) {
+        if (kickRef > 0.f && sRms > 0.f) {
             // Correction pour atteindre la cible relative
-            const float currentRelDb = 20.f * std::log10(sRms / kickRms);
+            const float currentRelDb = 20.f * std::log10(sRms / kickRef);
             const float error        = targetDb - currentRelDb;
             // Borner : coupe jusqu'à −9 dB, boost max +6 dB
             float corrDb = std::clamp(error, -9.f, 6.f);
@@ -154,7 +158,7 @@ void AutoMixDub::computeTargets(const SlotRole roles[kMaxSlots]) noexcept
             }
 
             // Hystérésis 3 dB : ne changer que si l'écart dépasse 3 dB
-            if (std::abs(corrDb - lastDecisionDb_[s]) > 5.f) {
+            if (std::abs(corrDb - lastDecisionDb_[s]) > 2.f) {
                 targets_.gainDb[s]  = corrDb;
                 lastDecisionDb_[s]  = corrDb;
             }
