@@ -294,6 +294,9 @@ MainComponent::MainComponent()
             sc.steps[si][static_cast<std::size_t>(step)] = active;
             sc.slots[si].active = engine::SceneStore::computeSlotActive(sc, si);
             syncMirrorFrom(facade_.currentSceneIdx());
+
+            if (!active && !sc.slots[si].active)
+                facade_.stopSlot(track);
         }
     };
 
