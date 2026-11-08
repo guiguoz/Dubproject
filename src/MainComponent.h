@@ -177,10 +177,7 @@ private:
     juce::ComboBox     dubDelayDivCombo_;
     juce::TextButton   dubDelayFreezeBtn_;
     juce::Label        dubDelayLabel_;
-    juce::ComboBox     dubModeCombo_;
-    juce::Label        dubModeLabel_;
-
-    // ── Scene navigation ──────────────────────────────────────────────────────
+// ── Scene navigation ──────────────────────────────────────────────────────
     juce::TextButton sceneUpBtn_;
     juce::Label      sceneNumLabel_;
     juce::TextButton sceneDownBtn_;
